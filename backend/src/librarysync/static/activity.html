@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Activity - librarySync</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body data-requires-auth="true">
+    <header class="site-header">
+      <h1>Activity</h1>
+      <nav>
+        <a href="/" data-auth-only>Home</a>
+        <a href="/static/integrations.html" data-auth-only>Integrations</a>
+        <a href="/static/settings.html" data-auth-only>Settings</a>
+        <button type="button" data-logout data-auth-only>Log out</button>
+      </nav>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Recent Events</h2>
+        <div id="events">No events yet.</div>
+      </section>
+      <section class="card">
+        <h2>Outbox</h2>
+        <div id="outbox">No jobs yet.</div>
+      </section>
+    </main>
+  </body>
+</html>

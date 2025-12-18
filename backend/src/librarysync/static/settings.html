@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Settings - librarySync</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body data-requires-auth="true">
+    <header class="site-header">
+      <h1>Settings</h1>
+      <nav>
+        <a href="/" data-auth-only>Home</a>
+        <a href="/static/integrations.html" data-auth-only>Integrations</a>
+        <a href="/static/activity.html" data-auth-only>Activity</a>
+        <button type="button" data-logout data-auth-only>Log out</button>
+      </nav>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Polling</h2>
+        <form id="settings-form">
+          <label>
+            Poll interval (seconds)
+            <input type="number" name="poll_interval" min="5" />
+          </label>
+          <label>
+            Completion threshold (%)
+            <input type="number" name="completion_threshold" min="0" max="100" />
+          </label>
+          <button type="submit">Save</button>
+          <p id="settings-message" class="form-message" role="status" hidden></p>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

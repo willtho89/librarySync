@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Integrations - librarySync</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body data-requires-auth="true">
+    <header class="site-header">
+      <h1>Integrations</h1>
+      <nav>
+        <a href="/" data-auth-only>Home</a>
+        <a href="/static/activity.html" data-auth-only>Activity</a>
+        <a href="/static/settings.html" data-auth-only>Settings</a>
+        <button type="button" data-logout data-auth-only>Log out</button>
+      </nav>
+    </header>
+    <main>
+      <section class="card">
+        <h2>AIOStreams</h2>
+        <form id="aiostreams-form">
+          <label>
+            Base URL
+            <input type="url" name="base_url" placeholder="https://..." required />
+          </label>
+          <label>
+            API Key (optional)
+            <input type="text" name="api_key" />
+          </label>
+          <button type="submit">Save</button>
+          <p id="aiostreams-message" class="form-message" role="status" hidden></p>
+        </form>
+      </section>
+      <section class="card">
+        <h2>Trakt</h2>
+        <button type="button">Connect Trakt</button>
+      </section>
+      <section class="card">
+        <h2>SIMKL</h2>
+        <button type="button">Connect SIMKL</button>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,55 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "uv: sync",
+      "type": "shell",
+      "command": "uv",
+      "args": ["sync", "--all"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ruff: lint (backend)",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "ruff", "check", "backend/src"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ruff: lint (worker)",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "ruff", "check", "worker/src"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ruff: format (backend)",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "ruff", "format", "backend/src"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ruff: format (worker)",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "ruff", "format", "worker/src"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

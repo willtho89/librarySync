@@ -1,0 +1,40 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API: Uvicorn",
+      "type": "python",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "librarysync.main:app",
+        "--reload",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ],
+      "cwd": "${workspaceFolder}/backend",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/backend/src"
+      },
+      "justMyCode": true,
+      "subProcess": true,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Worker: Run",
+      "type": "python",
+      "request": "launch",
+      "module": "librarysync_worker.main",
+      "cwd": "${workspaceFolder}/worker",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/backend/src:${workspaceFolder}/worker/src"
+      },
+      "justMyCode": true,
+      "console": "integratedTerminal"
+    }
+  ]
+}

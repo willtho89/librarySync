@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Login - librarySync</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body data-guest-only="true">
+    <header class="site-header">
+      <h1>librarySync</h1>
+      <nav>
+        <a href="/">Home</a>
+      </nav>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Login</h2>
+        <form id="login-form">
+          <label>
+            Username
+            <input type="text" name="username" required />
+          </label>
+          <label>
+            Password
+            <input type="password" name="password" required />
+          </label>
+          <button type="submit">Sign in</button>
+          <p id="login-message" class="form-message" role="status" hidden></p>
+        </form>
+      </section>
+      <section class="card">
+        <h2>Create an account</h2>
+        <form id="register-form">
+          <label>
+            Username
+            <input type="text" name="username" required />
+          </label>
+          <label>
+            Password
+            <input type="password" name="password" required />
+          </label>
+          <button type="submit">Register</button>
+          <p id="register-message" class="form-message" role="status" hidden></p>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

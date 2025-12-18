@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>librarySync</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <h1>librarySync</h1>
+      <nav>
+        <a href="/static/login.html" data-guest-only>Login</a>
+        <a href="/static/integrations.html" data-auth-only>Integrations</a>
+        <a href="/static/activity.html" data-auth-only>Activity</a>
+        <a href="/static/settings.html" data-auth-only>Settings</a>
+        <span class="nav-user" data-auth-only>
+          Signed in as <strong data-user-username></strong>
+        </span>
+        <button type="button" data-logout data-auth-only>Log out</button>
+      </nav>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Status</h2>
+        <p>Backend skeleton is running. Wire up auth and integrations next.</p>
+      </section>
+    </main>
+  </body>
+</html>

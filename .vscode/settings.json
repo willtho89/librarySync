@@ -1,0 +1,19 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.extraPaths": ["backend/src", "worker/src"],
+  "python.envFile": "${workspaceFolder}/.env",
+  "python.terminal.activateEnvironment": true,
+  "ruff.enable": true,
+  "ruff.lint.run": "onSave",
+  "editor.rulers": [100],
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  }
+}

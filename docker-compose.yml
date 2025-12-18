@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-librarysync}
+      POSTGRES_USER: ${POSTGRES_USER:-librarysync}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-librarysync}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: .env
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    env_file: .env
+    depends_on:
+      - db
+    restart: unless-stopped
+
+volumes:
+  pgdata:
