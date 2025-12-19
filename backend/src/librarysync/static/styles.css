@@ -70,13 +70,30 @@ form {
   gap: 1rem;
 }
 
+fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
 label {
   display: grid;
   gap: 0.5rem;
   font-weight: 600;
 }
 
-input {
+.inline-label {
+  grid-auto-flow: column;
+  justify-content: start;
+  align-items: center;
+}
+
+.inline-label span {
+  margin-right: 0.75rem;
+}
+
+input,
+select {
   padding: 0.65rem 0.75rem;
   border-radius: 8px;
   border: 1px solid #cbd5f5;
@@ -107,4 +124,115 @@ button:hover {
 
 .form-message[data-state="success"] {
   color: #15803d;
+}
+
+.helper-text {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #64748b;
+}
+
+.candidate-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.episode-picker {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.episode-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.candidate-option,
+.history-card {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 0.75rem;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.history-card {
+  grid-template-columns: auto 1fr;
+  cursor: default;
+}
+
+.candidate-option input {
+  margin: 0 0.5rem 0 0;
+}
+
+.candidate-poster {
+  width: 64px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #e2e8f0;
+}
+
+.candidate-meta h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.candidate-meta p {
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+  color: #475569;
+}
+
+.history-meta {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.history-edit {
+  display: none;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.history-edit.is-visible {
+  display: flex;
+}
+
+.history-edit input {
+  min-width: 220px;
+}
+
+button.secondary-button {
+  background: #e2e8f0;
+  color: #1f2933;
+  border: 1px solid #cbd5f5;
+}
+
+button.secondary-button:hover {
+  background: #cbd5f5;
+}
+
+button.danger-button {
+  background: #b91c1c;
+}
+
+button.danger-button:hover {
+  background: #991b1b;
 }

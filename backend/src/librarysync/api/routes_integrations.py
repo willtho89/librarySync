@@ -36,7 +36,11 @@ def _integration_to_out(integration: Integration, has_secrets: bool) -> Integrat
     )
 
 
-@router.get("")
+@router.get(
+    "",
+    summary="List integrations",
+    description="Return the current user's integration settings and secret status.",
+)
 async def list_integrations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -63,7 +67,11 @@ async def list_integrations(
     }
 
 
-@router.post("/aiostreams")
+@router.post(
+    "/aiostreams",
+    summary="Save AIOStreams settings",
+    description="Upsert the AIOStreams base URL and optional API key.",
+)
 async def save_aiostreams(
     payload: AIOStreamsConfig,
     current_user: User = Depends(get_current_user),
@@ -122,7 +130,11 @@ async def save_aiostreams(
     return _integration_to_out(integration, has_secrets).model_dump()
 
 
-@router.post("/aiostreams/test")
+@router.post(
+    "/aiostreams/test",
+    summary="Test AIOStreams settings",
+    description="Verify the AIOStreams configuration exists for the current user.",
+)
 async def test_aiostreams(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -142,31 +154,55 @@ async def test_aiostreams(
     return {"status": "ok"}
 
 
-@router.get("/trakt/start")
+@router.get(
+    "/trakt/start",
+    summary="Start Trakt OAuth (stub)",
+    description="Placeholder for initiating the Trakt OAuth flow.",
+)
 async def trakt_start():
     raise HTTPException(status_code=501, detail="Not implemented")
 
 
-@router.get("/trakt/callback")
+@router.get(
+    "/trakt/callback",
+    summary="Trakt OAuth callback (stub)",
+    description="Placeholder for handling the Trakt OAuth callback.",
+)
 async def trakt_callback():
     raise HTTPException(status_code=501, detail="Not implemented")
 
 
-@router.post("/trakt/disconnect")
+@router.post(
+    "/trakt/disconnect",
+    summary="Disconnect Trakt (stub)",
+    description="Placeholder for disconnecting the Trakt integration.",
+)
 async def trakt_disconnect():
     raise HTTPException(status_code=501, detail="Not implemented")
 
 
-@router.get("/simkl/start")
+@router.get(
+    "/simkl/start",
+    summary="Start SIMKL OAuth (stub)",
+    description="Placeholder for initiating the SIMKL OAuth flow.",
+)
 async def simkl_start():
     raise HTTPException(status_code=501, detail="Not implemented")
 
 
-@router.get("/simkl/callback")
+@router.get(
+    "/simkl/callback",
+    summary="SIMKL OAuth callback (stub)",
+    description="Placeholder for handling the SIMKL OAuth callback.",
+)
 async def simkl_callback():
     raise HTTPException(status_code=501, detail="Not implemented")
 
 
-@router.post("/simkl/disconnect")
+@router.post(
+    "/simkl/disconnect",
+    summary="Disconnect SIMKL (stub)",
+    description="Placeholder for disconnecting the SIMKL integration.",
+)
 async def simkl_disconnect():
     raise HTTPException(status_code=501, detail="Not implemented")

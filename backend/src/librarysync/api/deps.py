@@ -1,6 +1,7 @@
 from typing import AsyncIterator
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Security, status
+from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,23 +9,23 @@ from librarysync.core.auth import decode_access_token
 from librarysync.db.models import User
 from librarysync.db.session import get_session
 
+bearer_scheme = HTTPBearer(auto_error=False)
+cookie_scheme = APIKeyCookie(name="access_token", auto_error=False)
+
 
 async def get_db() -> AsyncIterator[AsyncSession]:
     async for session in get_session():
         yield session
 
 
-def _extract_token(request: Request) -> str | None:
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.lower().startswith("bearer "):
-        return auth_header.split(" ", 1)[1].strip()
-    return request.cookies.get("access_token")
-
-
 async def get_current_user(
-    request: Request, db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    bearer_credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    cookie_token: str | None = Security(cookie_scheme),
 ) -> User:
-    token = _extract_token(request)
+    token = bearer_credentials.credentials if bearer_credentials else None
+    if not token:
+        token = cookie_token
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 

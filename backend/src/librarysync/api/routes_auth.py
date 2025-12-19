@@ -26,7 +26,12 @@ def _normalize_username(username: str) -> str:
     return username.strip().lower()
 
 
-@router.post("/register", response_model=UserOut)
+@router.post(
+    "/register",
+    response_model=UserOut,
+    summary="Register a new user",
+    description="Create a local account when registration is enabled.",
+)
 async def register(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> UserOut:
     if not settings.allow_registration:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Registration disabled")
@@ -50,7 +55,14 @@ async def register(payload: LoginRequest, db: AsyncSession = Depends(get_db)) ->
     return UserOut(id=user.id, username=user.username)
 
 
-@router.post("/login")
+@router.post(
+    "/login",
+    summary="Log in",
+    description=(
+        "Validate credentials and return an access token. Also sets the "
+        "`access_token` HttpOnly cookie for browser sessions."
+    ),
+)
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> JSONResponse:
     username = _normalize_username(payload.username)
     result = await db.execute(select(User).where(User.username == username))
@@ -73,13 +85,22 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> JS
     return response
 
 
-@router.post("/logout")
+@router.post(
+    "/logout",
+    summary="Log out",
+    description="Clear the authentication cookie for the current session.",
+)
 async def logout() -> JSONResponse:
     response = JSONResponse({"status": "ok"})
     response.delete_cookie("access_token")
     return response
 
 
-@router.get("/me")
+@router.get(
+    "/me",
+    response_model=UserOut,
+    summary="Get current user",
+    description="Return the authenticated user's profile.",
+)
 async def me(current_user: User = Depends(get_current_user)) -> UserOut:
     return UserOut(id=current_user.id, username=current_user.username)

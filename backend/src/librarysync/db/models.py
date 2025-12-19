@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -31,6 +32,9 @@ class User(Base):
     poll_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_threshold_percent: Mapped[float | None] = mapped_column(
         Float, nullable=True
+    )
+    include_adult_in_search: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -89,6 +93,212 @@ class IntegrationSecret(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class MetadataLookupRequest(Base):
+    __tablename__ = "metadata_lookup_requests"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    query: Mapped[str] = mapped_column(String(255))
+    query_type: Mapped[str] = mapped_column(String(32))
+    search_scope: Mapped[str] = mapped_column(String(16), default="all")
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    providers: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    selected_candidate_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class MetadataLookupCandidate(Base):
+    __tablename__ = "metadata_lookup_candidates"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    lookup_request_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("metadata_lookup_requests.id", ondelete="CASCADE"),
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    provider_item_id: Mapped[str] = mapped_column(String(64))
+    media_type: Mapped[str] = mapped_column(String(32), default="movie")
+    title: Mapped[str] = mapped_column(String(255))
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    poster_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class MediaItem(Base):
+    __tablename__ = "media_items"
+    __table_args__ = (
+        UniqueConstraint("imdb_id", name="uq_media_items_imdb_id"),
+        UniqueConstraint("media_type", "tmdb_id", name="uq_media_items_tmdb_id_type"),
+        UniqueConstraint("media_type", "tvdb_id", name="uq_media_items_tvdb_id_type"),
+        UniqueConstraint("media_type", "kitsu_id", name="uq_media_items_kitsu_id_type"),
+        UniqueConstraint(
+            "media_type", "tvmaze_id", name="uq_media_items_tvmaze_id_type"
+        ),
+        UniqueConstraint(
+            "media_type",
+            "myanimelist_id",
+            name="uq_media_items_myanimelist_id_type",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    media_type: Mapped[str] = mapped_column(String(32), default="movie")
+    title: Mapped[str] = mapped_column(String(255))
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tmdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    tvdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    kitsu_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    tvmaze_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    myanimelist_id: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True
+    )
+    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    poster_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+class EpisodeItem(Base):
+    __tablename__ = "episode_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "show_media_item_id",
+            "season_number",
+            "episode_number",
+            name="uq_episode_items_show_season_episode",
+        ),
+        UniqueConstraint("tmdb_id", name="uq_episode_items_tmdb_id"),
+        UniqueConstraint("tvdb_id", name="uq_episode_items_tvdb_id"),
+        UniqueConstraint("tvmaze_id", name="uq_episode_items_tvmaze_id"),
+        UniqueConstraint("imdb_id", name="uq_episode_items_imdb_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    show_media_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("media_items.id", ondelete="CASCADE"), index=True
+    )
+    season_number: Mapped[int] = mapped_column(Integer)
+    episode_number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tmdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    tvdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    tvmaze_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class WatchedItem(Base):
+    __tablename__ = "watched_items"
+    __table_args__ = (
+        CheckConstraint(
+            "(media_item_id IS NOT NULL AND episode_item_id IS NULL) OR "
+            "(media_item_id IS NULL AND episode_item_id IS NOT NULL)",
+            name="ck_watched_items_one_target",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    media_item_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("media_items.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
+    episode_item_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("episode_items.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
+    watched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    source: Mapped[str] = mapped_column(String(32), default="manual")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class WatchEvent(Base):
+    __tablename__ = "watch_events"
+    __table_args__ = (
+        CheckConstraint(
+            "(media_item_id IS NOT NULL AND episode_item_id IS NULL) OR "
+            "(media_item_id IS NULL AND episode_item_id IS NOT NULL)",
+            name="ck_watch_events_one_target",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    media_item_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("media_items.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
+    episode_item_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("episode_items.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(32))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
 

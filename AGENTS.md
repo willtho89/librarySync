@@ -53,7 +53,7 @@ https://aiostreams.saladprecedestretch123.uk/api/v1/proxy/stats |jq .users.usern
   - `tt1234567` => movie
   - `tt1234567:season:episode` => episode (show/anime treated as episode for MVP)
 - Generate canonical progress events with dedupe/coalescing to avoid spamming downstream APIs.
-- Determine completion using a configurable threshold (default 90%).
+- Determine completion using a configurable threshold (default 85%).
 
 ### Downstream sync (MVP)
 - Trakt OAuth connect + token refresh + push:
@@ -175,7 +175,7 @@ https://aiostreams.saladprecedestretch123.uk/api/v1/proxy/stats |jq .users.usern
 - Never decrease stored progress: `effective_progress = max(previous, current)`.
 
 ### Completion rule
-- When `progress_percent >= completion_threshold` (default 90%):
+- When `progress_percent >= completion_threshold` (default 85%):
   - emit a `completed` event once per item/user
   - enqueue watched marking for Trakt and SIMKL
 - If session disappears:
@@ -206,6 +206,21 @@ MVP player connector: `AIOStreamsConnector`
   - `pull_watched_state(user, since)`
 
 MVP service connectors: `TraktConnector`, `SimklConnector`
+
+---
+
+## 7b) Metadata Providers (Sprint 2)
+
+Add a new connector category: metadata providers.
+
+### MetadataProvider interface (conceptual)
+- `search_movie(query, user) -> list[MovieCandidate]`
+- `find_movie_by_external_id(external_id, user) -> list[MovieCandidate]`
+- `get_movie_details(provider_id, user) -> MovieCandidate`
+- `normalize_candidate(raw) -> MovieCandidate`
+
+MVP metadata provider: `TmdbMetadataProvider`
+Optional stub (no functionality required in Sprint 2): `TvdbMetadataProvider`
 
 ---
 
@@ -246,6 +261,10 @@ librarySync/
           base.py
           trakt.py
           simkl.py
+        metadata/
+          base.py
+          tmdb.py
+          tvdb.py
       jobs/
         poll_aiostreams.py
         process_outbox.py
@@ -328,8 +347,8 @@ MVP env vars (example names; finalize during implementation):
 - `LIBRARYSYNC_BASE_URL` (for OAuth callback URLs)
 - `TRAKT_CLIENT_ID`, `TRAKT_CLIENT_SECRET`
 - `SIMKL_CLIENT_ID`, `SIMKL_CLIENT_SECRET`
-- `POLL_INTERVAL_SECONDS` (default 15)
-- `COMPLETION_THRESHOLD_PERCENT` (default 90)
+- `POLL_INTERVAL_SECONDS` (default 60)
+- `COMPLETION_THRESHOLD_PERCENT` (default 85)
 - `LOG_LEVEL`
 
 Per-user AIOStreams config stored in DB:
@@ -430,3 +449,100 @@ A user can:
 - On completion threshold, librarySync marks the item watched in Trakt and SIMKL.
 - UI shows recent events and whether sync succeeded or failed.
 - Failures are retried and visible; tokens are stored encrypted.
+
+---
+
+## 18) Sprint 2 - Manual Watched Movies + Single Lookup Flow
+
+### Sprint 2 outcome
+Logged-in users can manually add a watched movie through a single, consistent flow:
+
+1. User input: user enters either a title (free text) or a known ID (IMDb `tt...`, TMDB ID).
+2. Get info: system performs an asynchronous metadata lookup against the user's enabled
+   metadata providers (start with TMDB).
+3. User selects + confirms: user picks the correct match from a candidate list and confirms
+   a watch date.
+   - DateTime input optional.
+   - If None: default to "started watching now" (use server time).
+4. System stores the result locally as the user's watched history (future sprint: sync out).
+
+### Scope now vs. later
+Now (Sprint 2):
+- Local source of truth for watched movies inside the app.
+- Metadata lookup pipeline (async, provider-pluggable).
+- UI and API stable enough that future downstream syncing is another consumer.
+
+Later (future sprints):
+- Add Trakt/SIMKL connectors + sync worker that pushes local watched events.
+- Add player ingestion (AIOStreams) as another source of watch events.
+- Add drift detection and reconciliation.
+
+### User-facing features (Sprint 2)
+1) Metadata provider settings (per user)
+- Enable/disable TMDB metadata provider.
+- Provide credentials per user (no instance-wide keys).
+- Optional: provider preferences like language/region (minimal in MVP).
+
+2) Manual "Add watched movie" page
+- Input field: "Title or ID".
+- Search button.
+- Results area: shows candidates (title/year/poster if available).
+- User selects one candidate.
+- Confirmation step:
+  - Watch date input optional.
+  - If empty: default to "now" as started watching time.
+  - Confirm button.
+
+3) History page
+- Shows the user's watched movies added manually (most recent first).
+
+### System behavior (Sprint 2)
+Single flow, multiple query strategies:
+- Looks like IMDb ID (`tt\\d+`) -> use provider "find by external ID" where available (TMDB).
+- Otherwise treat as title query -> use provider search (TMDB movie search).
+
+TMDB workflow (MVP-friendly):
+- Search first, then fetch details for the selected candidate (or top N candidates).
+
+Async lookup (required):
+- Create lookup request -> poll status endpoint until ready -> render candidates.
+- Keep the UI flow consistent across providers.
+
+### Minimal API surface (Sprint 2)
+Settings:
+- List enabled metadata providers for current user.
+- Enable/disable provider + save credentials (per user).
+- Test provider (optional but helpful).
+
+Lookup flow:
+- Create lookup request from user input (title or ID).
+- Get lookup status + candidates.
+- Confirm selection + watch date.
+
+History:
+- List watched movies for the logged-in user.
+
+### Persistence goals (Sprint 2)
+Store:
+- Canonical representation of a movie (with common IDs like IMDb/TMDB).
+- Per-user watched record (including optional watch datetime; default to now).
+- Append-only log/event representing "user marked movie watched manually".
+- Lookup requests + candidate results (for async polling and debugging).
+
+### Worker responsibilities (Sprint 2)
+- Pick up pending lookup requests.
+- Call enabled metadata providers for that user.
+- Store candidates.
+- Mark lookup request as complete or failed.
+
+### Acceptance criteria (Sprint 2)
+- A user can enable TMDB provider and store their credentials (per user).
+- A user can input a movie title, get candidates, pick one, confirm watch datetime (or leave blank).
+- The watched movie appears in the user's history.
+- The lookup flow is asynchronous (request -> poll -> results).
+- Provider design is extensible (adding TVDB later doesn't change the UI flow).
+
+### TMDB notes (Sprint 2)
+- Use TMDB movie search endpoint for title-based searches.
+- Use TMDB external-ID find capability when user supplies an IMDb ID.
+- Prefer the "search then query details" workflow for better confirmation data.

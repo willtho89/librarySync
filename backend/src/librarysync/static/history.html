@@ -3,30 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Activity - librarySync</title>
+    <title>History - librarySync</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/app.js" defer></script>
   </head>
   <body data-requires-auth="true">
     <header class="site-header">
-      <h1>Activity</h1>
+      <h1>Watched History</h1>
       <nav>
         <a href="/" data-auth-only>Home</a>
         <a href="/static/add-watched.html" data-auth-only>Add Watched</a>
-        <a href="/static/history.html" data-auth-only>History</a>
         <a href="/static/integrations.html" data-auth-only>Integrations</a>
+        <a href="/static/activity.html" data-auth-only>Activity</a>
         <a href="/static/settings.html" data-auth-only>Settings</a>
         <button type="button" data-logout data-auth-only>Log out</button>
       </nav>
     </header>
     <main>
       <section class="card">
-        <h2>Recent Events</h2>
-        <div id="events">No events yet.</div>
-      </section>
-      <section class="card">
-        <h2>Outbox</h2>
-        <div id="outbox">No jobs yet.</div>
+        <h2>Watched items</h2>
+        <p id="history-message" class="form-message" hidden></p>
+        <div id="history-list" class="candidate-list">Loading...</div>
       </section>
     </main>
   </body>

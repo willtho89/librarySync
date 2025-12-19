@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Add Watched - librarySync</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body data-requires-auth="true">
+    <header class="site-header">
+      <h1>Add Watched</h1>
+      <nav>
+        <a href="/" data-auth-only>Home</a>
+        <a href="/static/history.html" data-auth-only>History</a>
+        <a href="/static/integrations.html" data-auth-only>Integrations</a>
+        <a href="/static/activity.html" data-auth-only>Activity</a>
+        <a href="/static/settings.html" data-auth-only>Settings</a>
+        <button type="button" data-logout data-auth-only>Log out</button>
+      </nav>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Find a title</h2>
+        <form id="lookup-form">
+          <label>
+            Title or ID
+            <input type="text" name="query" placeholder="The Matrix or tt0133093" required />
+          </label>
+          <label>
+            Search type
+            <select name="search_scope">
+              <option value="all" selected>Movies + TV shows</option>
+              <option value="movie">Movies only</option>
+              <option value="tv">TV shows only</option>
+              <option value="anime">Anime only</option>
+            </select>
+          </label>
+          <button type="submit">Search</button>
+          <p id="lookup-message" class="form-message" role="status" hidden></p>
+        </form>
+      </section>
+      <section class="card" id="lookup-results" hidden>
+        <h2>Results</h2>
+        <form id="confirm-form">
+          <div id="candidate-list" class="candidate-list"></div>
+          <div id="episode-picker" class="episode-picker" hidden>
+            <h3>Episode details</h3>
+            <div class="episode-grid">
+              <label>
+                Season
+                <select name="season_number" id="season-select" disabled></select>
+              </label>
+              <label>
+                Episode
+                <select name="episode_number" id="episode-select" disabled></select>
+              </label>
+            </div>
+            <p id="episode-message" class="form-message" role="status" hidden></p>
+            <p class="helper-text">
+              TV matches require a specific episode. Movies skip this step.
+            </p>
+          </div>
+          <label>
+            Watch date (optional)
+            <input type="datetime-local" name="watched_at" />
+          </label>
+          <p class="helper-text">If left blank, the watch time defaults to now.</p>
+          <button type="submit">Confirm watched</button>
+          <p id="confirm-message" class="form-message" role="status" hidden></p>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

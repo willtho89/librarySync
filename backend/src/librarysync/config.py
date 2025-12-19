@@ -33,9 +33,9 @@ def load_settings() -> Settings:
         trakt_client_secret=_get_env("TRAKT_CLIENT_SECRET"),
         simkl_client_id=_get_env("SIMKL_CLIENT_ID"),
         simkl_client_secret=_get_env("SIMKL_CLIENT_SECRET"),
-        poll_interval_seconds=int(_get_env("POLL_INTERVAL_SECONDS", "15") or "15"),
+        poll_interval_seconds=int(_get_env("POLL_INTERVAL_SECONDS", "60") or "60"),
         completion_threshold_percent=float(
-            _get_env("COMPLETION_THRESHOLD_PERCENT", "90") or "90"
+            _get_env("COMPLETION_THRESHOLD_PERCENT", "85") or "85"
         ),
         log_level=_get_env("LOG_LEVEL", "INFO") or "INFO",
         jwt_access_token_minutes=int(
