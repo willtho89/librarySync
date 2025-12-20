@@ -70,6 +70,12 @@ form {
   gap: 1rem;
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 fieldset {
   border: none;
   padding: 0;
@@ -93,10 +99,16 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   padding: 0.65rem 0.75rem;
   border-radius: 8px;
   border: 1px solid #cbd5f5;
+}
+
+textarea {
+  font-family: inherit;
+  resize: vertical;
 }
 
 button {
@@ -217,6 +229,10 @@ button:hover {
 
 .history-edit input {
   min-width: 220px;
+}
+
+.history-edit select {
+  min-width: 140px;
 }
 
 button.secondary-button {

@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from librarysync.api import (
     routes_activity,
+    routes_admin,
     routes_auth,
     routes_history,
     routes_integrations,
@@ -27,6 +28,7 @@ OPENAPI_TAGS = [
     {"name": "history", "description": "Manual watched history operations."},
     {"name": "activity", "description": "Progress events, outbox, and status feeds."},
     {"name": "settings", "description": "Per-user polling and completion settings."},
+    {"name": "admin", "description": "Administrative operations."},
     {"name": "health", "description": "Service health check."},
 ]
 
@@ -47,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_history.router)
     app.include_router(routes_activity.router)
     app.include_router(routes_settings.router)
+    app.include_router(routes_admin.router)
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

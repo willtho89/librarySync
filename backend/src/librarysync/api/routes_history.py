@@ -1,14 +1,28 @@
+import re
 from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
-from librarysync.db.models import EpisodeItem, MediaItem, User, WatchEvent, WatchedItem
+from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
+from librarysync.connectors.services.trakt import has_required_trakt_fields
+from librarysync.config import settings
+from librarysync.core.integrations import load_integration_with_secrets
+from librarysync.core.ratings import normalize_star_rating
+from librarysync.db.models import (
+    EpisodeItem,
+    MediaItem,
+    OutboxJob,
+    User,
+    WatchEvent,
+    WatchSync,
+    WatchedItem,
+)
 
 router = APIRouter(prefix="/api/history", tags=["history"])
 
@@ -16,6 +30,7 @@ router = APIRouter(prefix="/api/history", tags=["history"])
 class WatchedItemOut(BaseModel):
     id: str
     watched_at: datetime
+    rating: float | None = None
     media_type: str
     title: str
     year: int | None
@@ -33,10 +48,18 @@ class WatchedItemOut(BaseModel):
     episode_tmdb_id: str | None
     episode_tvdb_id: str | None
     episode_tvmaze_id: str | None
+    letterboxd_status: str | None = None
+    letterboxd_external_id: str | None = None
+    letterboxd_rewatch: bool | None = None
+    letterboxd_last_error: str | None = None
+    trakt_status: str | None = None
+    trakt_external_id: str | None = None
+    trakt_last_error: str | None = None
 
 
 class WatchedItemCreateIn(BaseModel):
     watched_at: datetime | None = None
+    rating: float | None = None
     media_type: Literal["movie", "tv", "anime"] = "movie"
     imdb_id: str | None = None
     tmdb_id: str | None = None
@@ -58,6 +81,7 @@ class WatchedItemCreateIn(BaseModel):
 
 class WatchedItemUpdateIn(BaseModel):
     watched_at: datetime | None = None
+    rating: float | None = None
 
 
 @router.post(
@@ -121,6 +145,7 @@ async def add_watched_item(
             media_item.poster_url = payload.poster_url
 
     watched_at = _normalize_datetime(payload.watched_at)
+    rating = _normalize_rating(payload.rating)
     episode_item: EpisodeItem | None = None
     episode_ids: dict[str, str] = {}
 
@@ -179,33 +204,58 @@ async def add_watched_item(
             if value
         }
 
+    is_rewatch = await _is_rewatch(
+        db,
+        current_user.id,
+        media_item.id if not episode_item else None,
+        episode_item.id if episode_item else None,
+    )
     watched = WatchedItem(
         user_id=current_user.id,
         media_item_id=None if episode_item else media_item.id,
         episode_item_id=episode_item.id if episode_item else None,
         watched_at=watched_at,
+        rating=rating,
         source="api",
     )
+    event_raw = {
+        "source": "api",
+        "ids": media_ids,
+        "rewatch": is_rewatch,
+        "episode": {
+            "season_number": episode_item.season_number,
+            "episode_number": episode_item.episode_number,
+            "title": episode_item.title,
+            "ids": episode_ids,
+        }
+        if episode_item
+        else None,
+    }
+    if rating is not None:
+        event_raw["rating"] = rating
     event = WatchEvent(
         user_id=current_user.id,
         media_item_id=media_item.id if not episode_item else None,
         episode_item_id=episode_item.id if episode_item else None,
         event_type="manual_watched",
         occurred_at=watched_at,
-        raw={
-            "source": "api",
-            "ids": media_ids,
-            "episode": {
-                "season_number": episode_item.season_number,
-                "episode_number": episode_item.episode_number,
-                "title": episode_item.title,
-                "ids": episode_ids,
-            }
-            if episode_item
-            else None,
-        },
+        raw=event_raw,
     )
     db.add_all([watched, event])
+    await db.flush()
+    await _enqueue_letterboxd_sync(
+        db, current_user.id, watched, media_item, watched_at, is_rewatch, rating
+    )
+    await _enqueue_trakt_sync(
+        db,
+        current_user.id,
+        watched,
+        media_item,
+        episode_item,
+        watched_at,
+        is_rewatch,
+        rating,
+    )
     await db.commit()
     await db.refresh(watched)
     return {
@@ -226,17 +276,40 @@ async def list_watched_items(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     show_item = aliased(MediaItem)
+    letterboxd_sync = aliased(WatchSync)
+    trakt_sync = aliased(WatchSync)
     result = await db.execute(
-        select(WatchedItem, MediaItem, EpisodeItem, show_item)
+        select(
+            WatchedItem,
+            MediaItem,
+            EpisodeItem,
+            show_item,
+            letterboxd_sync,
+            trakt_sync,
+        )
         .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
         .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
         .outerjoin(show_item, EpisodeItem.show_media_item_id == show_item.id)
+        .outerjoin(
+            letterboxd_sync,
+            and_(
+                letterboxd_sync.watched_item_id == WatchedItem.id,
+                letterboxd_sync.provider == "letterboxd",
+            ),
+        )
+        .outerjoin(
+            trakt_sync,
+            and_(
+                trakt_sync.watched_item_id == WatchedItem.id,
+                trakt_sync.provider == "trakt",
+            ),
+        )
         .where(WatchedItem.user_id == current_user.id)
         .order_by(WatchedItem.watched_at.desc())
         .limit(limit)
     )
     items = []
-    for watched, media_item, episode_item, show in result.all():
+    for watched, media_item, episode_item, show, sync, trakt in result.all():
         base_item = media_item or show
         if not base_item:
             continue
@@ -244,6 +317,7 @@ async def list_watched_items(
             WatchedItemOut(
                 id=watched.id,
                 watched_at=watched.watched_at,
+                rating=watched.rating,
                 media_type=base_item.media_type,
                 title=base_item.title,
                 year=base_item.year,
@@ -261,9 +335,16 @@ async def list_watched_items(
                 episode_tmdb_id=episode_item.tmdb_id if episode_item else None,
                 episode_tvdb_id=episode_item.tvdb_id if episode_item else None,
                 episode_tvmaze_id=episode_item.tvmaze_id if episode_item else None,
+                letterboxd_status=sync.status if sync else None,
+                letterboxd_external_id=sync.external_id if sync else None,
+                letterboxd_rewatch=sync.is_rewatch if sync else None,
+                letterboxd_last_error=sync.last_error if sync else None,
+                trakt_status=trakt.status if trakt else None,
+                trakt_external_id=trakt.external_id if trakt else None,
+                trakt_last_error=trakt.last_error if trakt else None,
             ).model_dump()
         )
-    return {"items": items}
+    return {"items": _merge_history_items(items)}
 
 
 @router.patch(
@@ -288,26 +369,95 @@ async def update_watched_item(
             status_code=status.HTTP_404_NOT_FOUND, detail="Watched entry not found"
         )
 
+    watched_at_updated = False
+    rating_updated = False
     previous_watched_at = watched.watched_at
-    watched_at = _normalize_datetime(payload.watched_at)
-    watched.watched_at = watched_at
+    previous_rating = watched.rating
 
+    if "watched_at" in payload.model_fields_set:
+        watched_at = _normalize_datetime(payload.watched_at)
+        if watched_at != watched.watched_at:
+            watched.watched_at = watched_at
+            watched_at_updated = True
+    if "rating" in payload.model_fields_set:
+        normalized_rating = _normalize_rating(payload.rating)
+        if normalized_rating != watched.rating:
+            watched.rating = normalized_rating
+            rating_updated = True
+
+    if not watched_at_updated and not rating_updated:
+        return {
+            "watched_id": watched.id,
+            "watched_at": watched.watched_at,
+            "rating": watched.rating,
+        }
+
+    event_raw: dict[str, object] = {"watched_id": watched.id}
+    if watched_at_updated:
+        event_raw["previous_watched_at"] = (
+            previous_watched_at.isoformat() if previous_watched_at else None
+        )
+        event_raw["watched_at"] = watched.watched_at.isoformat()
+    if rating_updated:
+        event_raw["previous_rating"] = previous_rating
+        event_raw["rating"] = watched.rating
+
+    event_time = watched.watched_at if watched_at_updated else datetime.now(timezone.utc)
     event = WatchEvent(
         user_id=current_user.id,
         media_item_id=watched.media_item_id,
         episode_item_id=watched.episode_item_id,
         event_type="manual_watched_updated",
-        occurred_at=watched_at,
-        raw={
-            "watched_id": watched.id,
-            "previous_watched_at": previous_watched_at.isoformat()
-            if previous_watched_at
-            else None,
-        },
+        occurred_at=event_time,
+        raw=event_raw,
     )
     db.add_all([watched, event])
+    if watched_at_updated or rating_updated:
+        media_item: MediaItem | None = None
+        episode_item: EpisodeItem | None = None
+        show_item: MediaItem | None = None
+        if watched.media_item_id:
+            result = await db.execute(
+                select(MediaItem).where(MediaItem.id == watched.media_item_id)
+            )
+            media_item = result.scalars().first()
+        if watched.episode_item_id:
+            result = await db.execute(
+                select(EpisodeItem).where(EpisodeItem.id == watched.episode_item_id)
+            )
+            episode_item = result.scalars().first()
+            if episode_item:
+                result = await db.execute(
+                    select(MediaItem).where(
+                        MediaItem.id == episode_item.show_media_item_id
+                    )
+                )
+                show_item = result.scalars().first()
+        if media_item:
+            await _enqueue_letterboxd_update_sync(
+                db,
+                current_user.id,
+                watched,
+                media_item,
+                watched_at_updated,
+                rating_updated,
+            )
+        if media_item or episode_item:
+            await _enqueue_trakt_update_sync(
+                db,
+                current_user.id,
+                watched,
+                media_item or show_item,
+                episode_item,
+                watched_at_updated,
+                rating_updated,
+            )
     await db.commit()
-    return {"watched_id": watched.id, "watched_at": watched.watched_at}
+    return {
+        "watched_id": watched.id,
+        "watched_at": watched.watched_at,
+        "rating": watched.rating,
+    }
 
 
 @router.delete(
@@ -379,6 +529,15 @@ def _normalize_episode_number(value: int | None, label: str) -> int:
             detail=f"{label.title()} number must be 0 or higher",
         )
     return value
+
+
+def _normalize_rating(value: object | None) -> float | None:
+    try:
+        return normalize_star_rating(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
 
 def _has_episode_fields(payload: WatchedItemCreateIn) -> bool:
@@ -476,6 +635,535 @@ def _apply_episode_id_update(item: EpisodeItem, field: str, value: str | None) -
         )
     if not current:
         setattr(item, field, value)
+
+
+async def _is_rewatch(
+    db: AsyncSession,
+    user_id: str,
+    media_item_id: str | None,
+    episode_item_id: str | None,
+) -> bool:
+    if media_item_id:
+        result = await db.execute(
+            select(WatchedItem.id).where(
+                WatchedItem.user_id == user_id,
+                WatchedItem.media_item_id == media_item_id,
+            ).limit(1)
+        )
+        return result.scalars().first() is not None
+    if episode_item_id:
+        result = await db.execute(
+            select(WatchedItem.id).where(
+                WatchedItem.user_id == user_id,
+                WatchedItem.episode_item_id == episode_item_id,
+            ).limit(1)
+        )
+        return result.scalars().first() is not None
+    return False
+
+
+def _merge_history_items(items: list[dict]) -> list[dict]:
+    if not items:
+        return []
+    groups: dict[str, list[dict]] = {}
+    key_map: dict[str, str] = {}
+    for item in items:
+        keys = _history_merge_keys(item)
+        group_id = None
+        for key in keys:
+            group_id = key_map.get(key)
+            if group_id:
+                break
+        if not group_id:
+            group_id = keys[0] if keys else f"id:{item.get('id')}"
+            groups[group_id] = [item]
+            for key in keys:
+                key_map[key] = group_id
+            continue
+        groups[group_id].append(item)
+        for key in keys:
+            key_map.setdefault(key, group_id)
+
+    merged: list[dict] = []
+    for group_items in groups.values():
+        base = max(group_items, key=_history_item_score)
+        merged_item = dict(base)
+        merged_item["watched_at"] = max(
+            item["watched_at"] for item in group_items if item.get("watched_at")
+        )
+        for field in _provider_fields():
+            if merged_item.get(field) is None:
+                for item in group_items:
+                    value = item.get(field)
+                    if value is not None:
+                        merged_item[field] = value
+                        break
+        for field in _metadata_fields():
+            if merged_item.get(field) in (None, ""):
+                for item in group_items:
+                    value = item.get(field)
+                    if value not in (None, ""):
+                        merged_item[field] = value
+                        break
+        for item in group_items:
+            if item.get("rating") is not None and merged_item.get("rating") is None:
+                merged_item["rating"] = item["rating"]
+                break
+        for item in group_items:
+            title = item.get("title")
+            if title and (
+                not merged_item.get("title")
+                or len(title) > len(str(merged_item.get("title")))
+            ):
+                merged_item["title"] = title
+        merged.append(merged_item)
+    merged.sort(key=lambda entry: entry.get("watched_at"), reverse=True)
+    return merged
+
+
+def _history_merge_keys(item: dict) -> list[str]:
+    watched_at = item.get("watched_at")
+    if isinstance(watched_at, datetime):
+        date_key = watched_at.date().isoformat()
+    else:
+        date_key = "unknown"
+    keys: list[str] = []
+    media_type = item.get("media_type")
+    if media_type == "movie":
+        for label in ("imdb_id", "tmdb_id", "tvdb_id"):
+            value = item.get(label)
+            if value:
+                keys.append(f"d:{date_key}:movie:{label}:{value}")
+        title_key = _title_key(item.get("title"), item.get("year"))
+        if title_key:
+            keys.append(f"d:{date_key}:movie:title:{title_key}")
+    elif media_type == "tv":
+        season = item.get("season_number")
+        episode = item.get("episode_number")
+        if season is not None and episode is not None:
+            for label in (
+                "episode_imdb_id",
+                "episode_tmdb_id",
+                "episode_tvdb_id",
+                "episode_tvmaze_id",
+            ):
+                value = item.get(label)
+                if value:
+                    keys.append(
+                        f"d:{date_key}:episode:{label}:{value}:s{season}e{episode}"
+                    )
+            for label in ("imdb_id", "tmdb_id", "tvdb_id", "tvmaze_id"):
+                value = item.get(label)
+                if value:
+                    keys.append(
+                        f"d:{date_key}:show:{label}:{value}:s{season}e{episode}"
+                    )
+            title_key = _title_key(item.get("title"), item.get("year"))
+            if title_key:
+                keys.append(
+                    f"d:{date_key}:show:title:{title_key}:s{season}e{episode}"
+                )
+    if not keys:
+        fallback_id = item.get("id") or "unknown"
+        keys.append(f"d:{date_key}:id:{fallback_id}")
+    return keys
+
+
+def _history_item_score(item: dict) -> int:
+    score = 0
+    for field in (
+        "imdb_id",
+        "tmdb_id",
+        "tvdb_id",
+        "tvmaze_id",
+        "kitsu_id",
+        "myanimelist_id",
+        "episode_imdb_id",
+        "episode_tmdb_id",
+        "episode_tvdb_id",
+        "episode_tvmaze_id",
+    ):
+        if item.get(field):
+            score += 2
+    if item.get("poster_url"):
+        score += 1
+    if item.get("year"):
+        score += 1
+    if item.get("title"):
+        score += 1
+    return score
+
+
+def _title_key(title: object, year: object) -> str | None:
+    if not isinstance(title, str):
+        return None
+    cleaned = re.sub(r"[^a-z0-9]+", " ", title.strip().lower())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return None
+    year_value = str(year) if isinstance(year, int) else ""
+    return f"{cleaned}:{year_value}" if year_value else cleaned
+
+
+def _provider_fields() -> tuple[str, ...]:
+    return (
+        "letterboxd_status",
+        "letterboxd_external_id",
+        "letterboxd_rewatch",
+        "letterboxd_last_error",
+        "trakt_status",
+        "trakt_external_id",
+        "trakt_last_error",
+    )
+
+
+def _metadata_fields() -> tuple[str, ...]:
+    return (
+        "imdb_id",
+        "tmdb_id",
+        "tvdb_id",
+        "tvmaze_id",
+        "kitsu_id",
+        "myanimelist_id",
+        "poster_url",
+        "season_number",
+        "episode_number",
+        "episode_title",
+        "episode_imdb_id",
+        "episode_tmdb_id",
+        "episode_tvdb_id",
+        "episode_tvmaze_id",
+    )
+
+
+async def _has_same_day_watch(
+    db: AsyncSession,
+    user_id: str,
+    media_item_id: str | None,
+    episode_item_id: str | None,
+    watched_at: datetime,
+    exclude_watched_id: str | None = None,
+) -> bool:
+    if not media_item_id and not episode_item_id:
+        return False
+    target_date = watched_at.date()
+    query = select(WatchedItem.id).where(
+        WatchedItem.user_id == user_id,
+        func.date(WatchedItem.watched_at) == target_date,
+    )
+    if media_item_id:
+        query = query.where(WatchedItem.media_item_id == media_item_id)
+    if episode_item_id:
+        query = query.where(WatchedItem.episode_item_id == episode_item_id)
+    if exclude_watched_id:
+        query = query.where(WatchedItem.id != exclude_watched_id)
+    query = query.limit(1)
+    result = await db.execute(query)
+    return result.scalars().first() is not None
+
+
+async def _enqueue_letterboxd_sync(
+    db: AsyncSession,
+    user_id: str,
+    watched: WatchedItem,
+    media_item: MediaItem,
+    watched_at: datetime,
+    is_rewatch: bool,
+    rating: float | None,
+) -> None:
+    if media_item.media_type != "movie":
+        return
+    if not media_item.imdb_id and not media_item.tmdb_id:
+        return
+    integration, secret_data = await load_integration_with_secrets(
+        db, user_id, "letterboxd"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_letterboxd_fields(secret_data):
+        return
+    watch_sync = WatchSync(
+        user_id=user_id,
+        watched_item_id=watched.id,
+        provider="letterboxd",
+        status="pending",
+        is_rewatch=is_rewatch,
+    )
+    db.add(watch_sync)
+    await db.flush()
+    imdb_id = media_item.imdb_id.lower() if media_item.imdb_id else None
+    tmdb_id = media_item.tmdb_id if media_item.tmdb_id else None
+    job = OutboxJob(
+        user_id=user_id,
+        target_provider="letterboxd",
+        job_type="push_watched",
+        payload={
+            "watch_sync_id": watch_sync.id,
+            "watched_item_id": watched.id,
+            "media_item_id": media_item.id,
+            "imdb_id": imdb_id,
+            "tmdb_id": tmdb_id,
+            "watched_at": watched_at.isoformat(),
+            "is_rewatch": is_rewatch,
+            "rating": rating,
+        },
+        status="pending",
+    )
+    db.add(job)
+
+
+async def _enqueue_letterboxd_update_sync(
+    db: AsyncSession,
+    user_id: str,
+    watched: WatchedItem,
+    media_item: MediaItem,
+    watched_at_updated: bool,
+    rating_updated: bool,
+) -> None:
+    if media_item.media_type != "movie":
+        return
+    integration, secret_data = await load_integration_with_secrets(
+        db, user_id, "letterboxd"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_letterboxd_fields(secret_data):
+        return
+    result = await db.execute(
+        select(WatchSync).where(
+            WatchSync.watched_item_id == watched.id, WatchSync.provider == "letterboxd"
+        )
+    )
+    watch_sync = result.scalars().first()
+    if not watch_sync or not watch_sync.external_id:
+        return
+    payload: dict[str, object] = {
+        "watch_sync_id": watch_sync.id,
+        "watched_item_id": watched.id,
+        "media_item_id": media_item.id,
+        "entry_id": watch_sync.external_id,
+    }
+    if watched_at_updated:
+        payload["watched_at"] = watched.watched_at.isoformat()
+    if rating_updated and watched.rating is not None:
+        payload["rating"] = watched.rating
+    if not {"watched_at", "rating"} & payload.keys():
+        return
+
+    watch_sync.status = "pending"
+    watch_sync.last_error = None
+
+    job = OutboxJob(
+        user_id=user_id,
+        target_provider="letterboxd",
+        job_type="update_log_entry",
+        payload=payload,
+        status="pending",
+    )
+    db.add(job)
+
+
+async def _enqueue_trakt_sync(
+    db: AsyncSession,
+    user_id: str,
+    watched: WatchedItem,
+    media_item: MediaItem,
+    episode_item: EpisodeItem | None,
+    watched_at: datetime,
+    is_rewatch: bool,
+    rating: float | None,
+) -> None:
+    if not settings.trakt_client_id or not settings.trakt_client_secret:
+        return
+    payload = _build_trakt_payload(media_item, episode_item, watched_at, rating)
+    if not payload:
+        return
+    integration, secret_data = await load_integration_with_secrets(
+        db, user_id, "trakt"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_trakt_fields(secret_data):
+        return
+
+    same_day_duplicate = await _has_same_day_watch(
+        db,
+        user_id,
+        media_item.id if not episode_item else None,
+        episode_item.id if episode_item else None,
+        watched_at,
+        watched.id,
+    )
+    now = datetime.now(timezone.utc)
+    watch_status = "pending"
+    if same_day_duplicate and rating is None:
+        watch_status = "assumed_tracked"
+
+    watch_sync = WatchSync(
+        user_id=user_id,
+        watched_item_id=watched.id,
+        provider="trakt",
+        status=watch_status,
+        is_rewatch=is_rewatch,
+    )
+    if watch_status == "assumed_tracked":
+        watch_sync.last_synced_at = now
+    db.add(watch_sync)
+    await db.flush()
+
+    payload["watch_sync_id"] = watch_sync.id
+    payload["watched_item_id"] = watched.id
+    if watch_status != "assumed_tracked" and not same_day_duplicate:
+        job = OutboxJob(
+            user_id=user_id,
+            target_provider="trakt",
+            job_type="push_watched",
+            payload=payload,
+            status="pending",
+        )
+        db.add(job)
+
+    if rating is not None:
+        rating_payload = dict(payload)
+        rating_payload["rating"] = rating
+        rating_job = OutboxJob(
+            user_id=user_id,
+            target_provider="trakt",
+            job_type="push_rating",
+            payload=rating_payload,
+            status="pending",
+        )
+        db.add(rating_job)
+
+
+async def _enqueue_trakt_update_sync(
+    db: AsyncSession,
+    user_id: str,
+    watched: WatchedItem,
+    media_item: MediaItem | None,
+    episode_item: EpisodeItem | None,
+    watched_at_updated: bool,
+    rating_updated: bool,
+) -> None:
+    if not media_item:
+        return
+    if not settings.trakt_client_id or not settings.trakt_client_secret:
+        return
+    integration, secret_data = await load_integration_with_secrets(
+        db, user_id, "trakt"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_trakt_fields(secret_data):
+        return
+    result = await db.execute(
+        select(WatchSync).where(
+            WatchSync.watched_item_id == watched.id, WatchSync.provider == "trakt"
+        )
+    )
+    watch_sync = result.scalars().first()
+    if not watch_sync:
+        return
+    payload = _build_trakt_payload(
+        media_item,
+        episode_item,
+        watched.watched_at,
+        watched.rating,
+    )
+    if not payload:
+        return
+    payload["watch_sync_id"] = watch_sync.id
+    payload["watched_item_id"] = watched.id
+    if watch_sync.external_id:
+        payload["history_id"] = watch_sync.external_id
+    if watched_at_updated:
+        payload["watched_at"] = watched.watched_at.isoformat()
+    if rating_updated and watched.rating is not None:
+        payload["rating"] = watched.rating
+
+    watch_sync.status = "pending"
+    watch_sync.last_error = None
+    db.add(watch_sync)
+
+    if watched_at_updated:
+        job = OutboxJob(
+            user_id=user_id,
+            target_provider="trakt",
+            job_type="update_history",
+            payload=payload,
+            status="pending",
+        )
+        db.add(job)
+    if rating_updated and watched.rating is not None:
+        rating_payload = dict(payload)
+        rating_payload["rating"] = watched.rating
+        job = OutboxJob(
+            user_id=user_id,
+            target_provider="trakt",
+            job_type="push_rating",
+            payload=rating_payload,
+            status="pending",
+        )
+        db.add(job)
+
+
+def _build_trakt_payload(
+    media_item: MediaItem,
+    episode_item: EpisodeItem | None,
+    watched_at: datetime,
+    rating: float | None,
+) -> dict[str, object] | None:
+    if episode_item:
+        show_ids = _collect_trakt_ids(
+            media_item.imdb_id, media_item.tmdb_id, media_item.tvdb_id
+        )
+        episode_ids = _collect_trakt_ids(
+            episode_item.imdb_id, episode_item.tmdb_id, episode_item.tvdb_id
+        )
+        if not show_ids and not episode_ids:
+            return None
+        payload: dict[str, object] = {
+            "media_type": "tv",
+            "season_number": episode_item.season_number,
+            "episode_number": episode_item.episode_number,
+            "watched_at": watched_at.isoformat(),
+        }
+        if show_ids:
+            payload["show_ids"] = show_ids
+        if episode_ids:
+            payload["episode_ids"] = episode_ids
+        if rating is not None:
+            payload["rating"] = rating
+        return payload
+
+    if media_item.media_type != "movie":
+        return None
+    movie_ids = _collect_trakt_ids(
+        media_item.imdb_id, media_item.tmdb_id, media_item.tvdb_id
+    )
+    if not movie_ids:
+        return None
+    payload = {
+        "media_type": "movie",
+        "movie_ids": movie_ids,
+        "watched_at": watched_at.isoformat(),
+    }
+    if rating is not None:
+        payload["rating"] = rating
+    return payload
+
+
+def _collect_trakt_ids(
+    imdb_id: str | None, tmdb_id: str | None, tvdb_id: str | None
+) -> dict[str, object]:
+    ids: dict[str, object] = {}
+    if imdb_id:
+        ids["imdb"] = imdb_id.lower()
+    if tmdb_id:
+        ids["tmdb"] = tmdb_id
+    if tvdb_id:
+        ids["tvdb"] = tvdb_id
+    return ids
 
 
 async def _find_media_item_by_ids(

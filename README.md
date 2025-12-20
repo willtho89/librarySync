@@ -3,10 +3,33 @@
 Self-hosted, Docker-compose-deployable multi-user sync hub for watch progress. MVP target: ingest from Stremio (AIOStreams) and sync to Trakt + SIMKL.
 
 ## Goals (MVP)
-- Ingest playback progress from AIOStreams.
-- Normalize into canonical progress/watched events.
-- Sync progress and completion to Trakt and SIMKL.
-- Provide a minimal web UI (plain JS + static HTML).
+- [x] Integrate MetaData Provider (TVDB, TMDB, IMDB)
+- [x] Add Items to Watch History
+- [x] Show Watch History
+- [x] Ratings
+- [x] Trakt movie/tv sync (incl ratings)
+- [x] Trakt movie/tv import
+- [ ] Simkl movie/tv sync
+- [ ] Simkl movie/tv import
+- [x] Letterbox movie sync (incl ratings)
+- [x] Letterbox movie import
+- [ ] Merge History Items and sync to all upstream integrations
+- [ ] Metadata update for imported Items (TV Shows Episode Poster)
+- [x] Add Watch API
+- [ ] Ingest playback progress from AIOStreams proxy.
+- [ ] minimal web UI (plain JS + static HTML).
+- [ ] worker logs
+
+## TODOs (Not MVP)
+- [ ] Anime integrations
+- [ ] Delete history -> delete in integrations.
+- [ ] Setup wizard after register.
+- [ ] scalable & configurable worker system
+- [ ] Overhaul UI/UX (PWA, Mobile Friendly)
+- [ ] Stremio API (Watch History; see Stremthru/dash)
+
+## Ideas
+- [ ] Catalogs (most watched movies/TV this <intervall>).
 
 ## Repository Layout
 ```
@@ -111,3 +134,5 @@ The following are required for the MVP (see `.env.example` for defaults):
 - Outbox and canonical models are the backbone for syncing.
 - Ruff handles linting and import sorting with a 100-character line length.
 - The root `pyproject.toml` defines the uv workspace.
+- Letterboxd credentials: thanks to https://github.com/dado3212/letterboxd-scripts/tree/main
+  for guidance on retrieving the `client_id` and `client_secret`.

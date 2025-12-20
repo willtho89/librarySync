@@ -152,6 +152,61 @@ async function loadIntegrations() {
   if (aiostreams && aiostreams.has_secrets && messageEl && !messageEl.textContent) {
     setMessage("aiostreams-message", "API key is stored securely.");
   }
+
+  const letterboxdForm = document.getElementById("letterboxd-form");
+  if (!letterboxdForm) {
+    return;
+  }
+  const letterboxd = integrations.find((item) => item.provider === "letterboxd");
+  const apiBaseInput = letterboxdForm.querySelector(
+    "input[name='api_base_url']"
+  );
+  if (
+    letterboxd &&
+    letterboxd.config &&
+    letterboxd.config.api_base_url &&
+    apiBaseInput
+  ) {
+    apiBaseInput.value = letterboxd.config.api_base_url;
+  }
+  const letterboxdMessage = document.getElementById("letterboxd-message");
+  if (
+    letterboxd &&
+    letterboxd.has_secrets &&
+    letterboxdMessage &&
+    !letterboxdMessage.textContent
+  ) {
+    setMessage("letterboxd-message", "Credentials are stored securely.");
+  }
+
+  const trakt = integrations.find((item) => item.provider === "trakt");
+  const traktMessage = document.getElementById("trakt-message");
+  const traktConnect = document.getElementById("trakt-connect");
+  const traktDisconnect = document.getElementById("trakt-disconnect");
+  if (trakt && trakt.has_secrets) {
+    const username =
+      trakt.config && trakt.config.trakt_username
+        ? trakt.config.trakt_username
+        : null;
+    const label = username
+      ? `Connected as ${username}.`
+      : "Trakt connection is active.";
+    setMessage("trakt-message", label);
+    if (traktConnect) {
+      traktConnect.hidden = true;
+    }
+    if (traktDisconnect) {
+      traktDisconnect.hidden = false;
+    }
+  } else {
+    setMessage("trakt-message", "");
+    if (traktConnect) {
+      traktConnect.hidden = false;
+    }
+    if (traktDisconnect) {
+      traktDisconnect.hidden = true;
+    }
+  }
 }
 
 async function handleAIOStreamsSave(data, form) {
@@ -179,6 +234,302 @@ async function handleAIOStreamsSave(data, form) {
     await loadIntegrations();
   } catch (error) {
     setMessage("aiostreams-message", error.message, true);
+  }
+}
+
+function parseCookieString(cookieHeader) {
+  const cookies = {};
+  if (!cookieHeader) {
+    return cookies;
+  }
+  cookieHeader.split(";").forEach((part) => {
+    const trimmed = part.trim();
+    if (!trimmed) {
+      return;
+    }
+    const idx = trimmed.indexOf("=");
+    if (idx === -1) {
+      return;
+    }
+    const name = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 1).trim();
+    if (name && value) {
+      cookies[name] = value;
+    }
+  });
+  return cookies;
+}
+
+function extractCookieHeaders(command) {
+  const cookies = {};
+  const headerRegex = /(?:-H|--header)\s+(['"])(Cookie:\s*[^'"]+)\1/gi;
+  let match = null;
+  while ((match = headerRegex.exec(command)) !== null) {
+    const headerValue = match[2];
+    const cookiePart = headerValue.replace(/^Cookie:\s*/i, "");
+    Object.assign(cookies, parseCookieString(cookiePart));
+  }
+  const cookieRegex = /(?:-b|--cookie)\s+(['"])([^'"]+)\1/gi;
+  while ((match = cookieRegex.exec(command)) !== null) {
+    const cookieValue = match[2];
+    if (cookieValue.startsWith("@")) {
+      continue;
+    }
+    Object.assign(cookies, parseCookieString(cookieValue));
+  }
+  const inlineCookieRegex = /Cookie:\s*([^'"\n\r]+)/gi;
+  while ((match = inlineCookieRegex.exec(command)) !== null) {
+    Object.assign(cookies, parseCookieString(match[1]));
+  }
+  return cookies;
+}
+
+function extractDataSegments(command) {
+  const segments = [];
+  const dataRegex =
+    /(?:-d|--data(?:-raw|-urlencode)?|--raw)\s+(['"])(.*?)\1/gi;
+  let match = null;
+  while ((match = dataRegex.exec(command)) !== null) {
+    segments.push(match[2]);
+  }
+  const dataBareRegex =
+    /(?:-d|--data(?:-raw|-urlencode)?|--raw)\s+([^\s]+)/gi;
+  while ((match = dataBareRegex.exec(command)) !== null) {
+    const value = match[1];
+    if (!value.startsWith("-")) {
+      segments.push(value);
+    }
+  }
+  return segments;
+}
+
+function parseKeyValues(segment) {
+  const values = {};
+  if (!segment) {
+    return values;
+  }
+  const parts = segment.split("&");
+  parts.forEach((part) => {
+    const idx = part.indexOf("=");
+    if (idx === -1) {
+      return;
+    }
+    const rawKey = part.slice(0, idx);
+    const rawValue = part.slice(idx + 1);
+    const key = decodeURIComponent(rawKey.replace(/\+/g, " ")).trim();
+    const value = decodeURIComponent(rawValue.replace(/\+/g, " ")).trim();
+    if (key && value && values[key] === undefined) {
+      values[key] = value;
+    }
+  });
+  return values;
+}
+
+function extractUrlParams(command) {
+  const values = {};
+  const urlMatch = command.match(/https?:\/\/[^\s'"]+/i);
+  if (!urlMatch) {
+    return values;
+  }
+  try {
+    const url = new URL(urlMatch[0]);
+    url.searchParams.forEach((value, key) => {
+      if (value && values[key] === undefined) {
+        values[key] = value;
+      }
+    });
+  } catch (error) {
+    return values;
+  }
+  return values;
+}
+
+function extractCredential(command, key) {
+  const segments = extractDataSegments(command);
+  for (const segment of segments) {
+    const trimmed = segment.trim();
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === "object" && parsed[key]) {
+          return String(parsed[key]);
+        }
+      } catch (error) {
+        // ignore json errors
+      }
+    }
+    const params = parseKeyValues(trimmed);
+    if (params[key]) {
+      return String(params[key]);
+    }
+  }
+  const urlParams = extractUrlParams(command);
+  if (urlParams[key]) {
+    return String(urlParams[key]);
+  }
+  const keyRegex = new RegExp(
+    `${key}\\s*(?:==|=|:=)\\s*('[^']*'|"[^"]*"|[^\\s&]+)`,
+    "i"
+  );
+  const match = command.match(keyRegex);
+  if (match) {
+    return match[1].replace(/^['"]|['"]$/g, "");
+  }
+  return null;
+}
+
+function parseLetterboxdCommand(command) {
+  const cookies = extractCookieHeaders(command);
+  return {
+    client_id: extractCredential(command, "client_id"),
+    client_secret: extractCredential(command, "client_secret"),
+    refresh_token: extractCredential(command, "refresh_token"),
+    cookies: Object.keys(cookies).length ? cookies : null,
+  };
+}
+
+function handleLetterboxdParse() {
+  const commandInput = document.getElementById("letterboxd-command");
+  if (!commandInput) {
+    return;
+  }
+  const command = commandInput.value || "";
+  if (!command.trim()) {
+    setMessage("letterboxd-message", "Paste a curl/httpie command first.", true);
+    return;
+  }
+  const parsed = parseLetterboxdCommand(command);
+  const form = document.getElementById("letterboxd-form");
+  if (!form) {
+    return;
+  }
+  const fields = [];
+  if (parsed.client_id) {
+    const input = form.querySelector("input[name='client_id']");
+    if (input) {
+      input.value = parsed.client_id;
+      fields.push("client_id");
+    }
+  }
+  if (parsed.client_secret) {
+    const input = form.querySelector("input[name='client_secret']");
+    if (input) {
+      input.value = parsed.client_secret;
+      fields.push("client_secret");
+    }
+  }
+  if (parsed.refresh_token) {
+    const input = form.querySelector("input[name='refresh_token']");
+    if (input) {
+      input.value = parsed.refresh_token;
+      fields.push("refresh_token");
+    }
+  }
+  if (parsed.cookies) {
+    const input = form.querySelector("textarea[name='cookies']");
+    if (input) {
+      input.value = JSON.stringify(parsed.cookies, null, 2);
+      fields.push("cookies");
+    }
+  }
+  if (!fields.length) {
+    setMessage("letterboxd-message", "No Letterboxd fields found.", true);
+  } else {
+    setMessage(
+      "letterboxd-message",
+      `Parsed: ${fields.join(", ")}. Review and save.`
+    );
+  }
+}
+
+async function handleLetterboxdSave(data, form) {
+  setMessage("letterboxd-message", "");
+  const apiBaseUrl = (data.get("api_base_url") || "").trim();
+  const clientId = (data.get("client_id") || "").trim();
+  const clientSecret = (data.get("client_secret") || "").trim();
+  const refreshToken = (data.get("refresh_token") || "").trim();
+  const cookiesRaw = (data.get("cookies") || "").trim();
+  const payload = {};
+  if (apiBaseUrl) {
+    payload.api_base_url = apiBaseUrl;
+  }
+  if (clientId) {
+    payload.client_id = clientId;
+  }
+  if (clientSecret) {
+    payload.client_secret = clientSecret;
+  }
+  if (refreshToken) {
+    payload.refresh_token = refreshToken;
+  }
+  if (cookiesRaw) {
+    try {
+      const parsed = JSON.parse(cookiesRaw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Cookies JSON must be an object.");
+      }
+      payload.cookies = parsed;
+    } catch (error) {
+      setMessage("letterboxd-message", "Invalid cookies JSON.", true);
+      return;
+    }
+  }
+  if (!Object.keys(payload).length) {
+    setMessage("letterboxd-message", "Enter credentials to save.", true);
+    return;
+  }
+  try {
+    await requestJSON("/api/integrations/letterboxd", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const secretInputs = ["client_id", "client_secret", "refresh_token"];
+    secretInputs.forEach((name) => {
+      const input = form.querySelector(`input[name='${name}']`);
+      if (input) {
+        input.value = "";
+      }
+    });
+    const cookiesInput = form.querySelector("textarea[name='cookies']");
+    if (cookiesInput) {
+      cookiesInput.value = "";
+    }
+    setMessage("letterboxd-message", "Saved.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("letterboxd-message", error.message, true);
+  }
+}
+
+async function handleLetterboxdTest() {
+  setMessage("letterboxd-message", "");
+  try {
+    await requestJSON("/api/integrations/letterboxd/test", {
+      method: "POST",
+    });
+    setMessage("letterboxd-message", "Connection verified.");
+  } catch (error) {
+    setMessage("letterboxd-message", error.message, true);
+  }
+}
+
+function handleTraktConnect() {
+  window.location.href = "/api/integrations/trakt/start";
+}
+
+async function handleTraktDisconnect() {
+  setMessage("trakt-message", "");
+  try {
+    await requestJSON("/api/integrations/trakt/disconnect", {
+      method: "POST",
+    });
+    setMessage("trakt-message", "Trakt disconnected.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("trakt-message", error.message, true);
   }
 }
 
@@ -859,6 +1210,10 @@ async function handleLookupConfirm(data) {
       payload.watched_at = watchedDate.toISOString();
     }
   }
+  const ratingValue = parseRatingValue(data.get("rating"));
+  if (ratingValue !== null) {
+    payload.rating = ratingValue;
+  }
   try {
     await requestJSON("/api/history/items", {
       method: "POST",
@@ -948,6 +1303,21 @@ function parseDateTimeInput(value) {
   return date.toISOString();
 }
 
+function parseRatingValue(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const raw = String(value).trim();
+  if (!raw) {
+    return null;
+  }
+  const rating = Number(raw);
+  if (!Number.isFinite(rating)) {
+    return null;
+  }
+  return rating;
+}
+
 function formatMediaType(value) {
   if (value === "tv") {
     return "TV";
@@ -967,6 +1337,38 @@ function formatSeasonEpisode(seasonNumber, episodeNumber) {
   }
   const pad = (value) => String(value).padStart(2, "0");
   return `S${pad(seasonNumber)}E${pad(episodeNumber)}`;
+}
+
+function formatRating(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  const rating = Number(value);
+  if (!Number.isFinite(rating)) {
+    return "";
+  }
+  return rating === 1 ? "1 star" : `${rating} stars`;
+}
+
+function buildRatingSelect(currentValue) {
+  const select = document.createElement("select");
+  select.className = "rating-select";
+  select.setAttribute("aria-label", "Rating");
+  const emptyOption = document.createElement("option");
+  emptyOption.value = "";
+  emptyOption.textContent = "No rating";
+  select.appendChild(emptyOption);
+  const options = [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5];
+  options.forEach((value) => {
+    const option = document.createElement("option");
+    option.value = String(value);
+    option.textContent = value === 1 ? "1 star" : `${value} stars`;
+    select.appendChild(option);
+  });
+  if (currentValue !== null && currentValue !== undefined) {
+    select.value = String(currentValue);
+  }
+  return select;
 }
 
 function formatProviderLabel(value) {
@@ -1051,6 +1453,36 @@ async function loadHistory() {
     if (watchedLabel) {
       detailParts.push(`Watched ${watchedLabel}`);
     }
+    if (item.rating !== null && item.rating !== undefined) {
+      const ratingLabel = formatRating(item.rating);
+      if (ratingLabel) {
+        detailParts.push(`Rated ${ratingLabel}`);
+      }
+    }
+    const letterboxdStatus = item.letterboxd_status;
+    const letterboxdSucceeded = letterboxdStatus === "succeeded";
+    if (letterboxdStatus) {
+      const statusLabel = letterboxdStatus.replace(/_/g, " ");
+      detailParts.push(`Letterboxd ${statusLabel}`);
+    }
+    if (!letterboxdSucceeded && item.letterboxd_last_error) {
+      const rawError = String(item.letterboxd_last_error);
+      const shortError =
+        rawError.length > 120 ? `${rawError.slice(0, 120)}...` : rawError;
+      detailParts.push(`Letterboxd error: ${shortError}`);
+    }
+    const traktStatus = item.trakt_status;
+    const traktSucceeded = traktStatus === "succeeded";
+    if (traktStatus) {
+      const statusLabel = traktStatus.replace(/_/g, " ");
+      detailParts.push(`Trakt ${statusLabel}`);
+    }
+    if (!traktSucceeded && item.trakt_last_error) {
+      const rawError = String(item.trakt_last_error);
+      const shortError =
+        rawError.length > 120 ? `${rawError.slice(0, 120)}...` : rawError;
+      detailParts.push(`Trakt error: ${shortError}`);
+    }
     detail.textContent = detailParts.join(" · ");
 
     const actions = document.createElement("div");
@@ -1076,6 +1508,10 @@ async function loadHistory() {
     editInput.type = "datetime-local";
     editInput.value = formatDateTimeInput(item.watched_at);
 
+    const ratingSelect = buildRatingSelect(item.rating);
+    const initialRatingValue =
+      item.rating !== null && item.rating !== undefined ? String(item.rating) : "";
+
     const saveButton = document.createElement("button");
     saveButton.type = "button";
     saveButton.textContent = "Save";
@@ -1086,6 +1522,7 @@ async function loadHistory() {
     cancelButton.textContent = "Cancel";
 
     editRow.appendChild(editInput);
+    editRow.appendChild(ratingSelect);
     editRow.appendChild(saveButton);
     editRow.appendChild(cancelButton);
 
@@ -1096,24 +1533,39 @@ async function loadHistory() {
 
     cancelButton.addEventListener("click", () => {
       editInput.value = formatDateTimeInput(item.watched_at);
+      ratingSelect.value = initialRatingValue;
       editRow.classList.remove("is-visible");
     });
 
     saveButton.addEventListener("click", async () => {
       setMessage("history-message", "");
+      const payload = {};
       const rawValue = editInput.value;
-      const watchedAt = parseDateTimeInput(rawValue);
-      if (rawValue && !watchedAt) {
-        setMessage("history-message", "Enter a valid watch date/time.", true);
+      const initialWatchValue = formatDateTimeInput(item.watched_at);
+      if (rawValue !== initialWatchValue) {
+        const watchedAt = parseDateTimeInput(rawValue);
+        if (rawValue && !watchedAt) {
+          setMessage("history-message", "Enter a valid watch date/time.", true);
+          return;
+        }
+        payload.watched_at = watchedAt;
+      }
+      if (ratingSelect.value !== initialRatingValue) {
+        payload.rating = ratingSelect.value
+          ? Number(ratingSelect.value)
+          : null;
+      }
+      if (!Object.keys(payload).length) {
+        setMessage("history-message", "No changes to save.", true);
         return;
       }
       try {
         setMessage("history-message", "Saving...");
         await requestJSON(`/api/history/items/${item.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ watched_at: watchedAt }),
+          body: JSON.stringify(payload),
         });
-        setMessage("history-message", "Watch date updated.");
+        setMessage("history-message", "Update saved.");
         await loadHistory();
       } catch (error) {
         setMessage("history-message", error.message, true);
@@ -1169,6 +1621,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindForm("login-form", handleLogin);
   bindForm("register-form", handleRegister);
   bindForm("aiostreams-form", handleAIOStreamsSave);
+  bindForm("letterboxd-form", handleLetterboxdSave);
   bindForm("settings-form", handleSettingsSave);
   bindForm("tmdb-form", handleTmdbSave);
   bindForm("tvdb-form", handleTvdbSave);
@@ -1201,6 +1654,23 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.querySelectorAll("[data-logout]").forEach((button) => {
     button.addEventListener("click", handleLogout);
   });
+
+  const letterboxdTest = document.getElementById("letterboxd-test");
+  if (letterboxdTest) {
+    letterboxdTest.addEventListener("click", handleLetterboxdTest);
+  }
+  const letterboxdParse = document.getElementById("letterboxd-parse");
+  if (letterboxdParse) {
+    letterboxdParse.addEventListener("click", handleLetterboxdParse);
+  }
+  const traktConnect = document.getElementById("trakt-connect");
+  if (traktConnect) {
+    traktConnect.addEventListener("click", handleTraktConnect);
+  }
+  const traktDisconnect = document.getElementById("trakt-disconnect");
+  if (traktDisconnect) {
+    traktDisconnect.addEventListener("click", handleTraktDisconnect);
+  }
 
   if (user) {
     try {

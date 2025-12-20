@@ -36,8 +36,63 @@
         </form>
       </section>
       <section class="card">
+        <h2>Letterboxd</h2>
+        <form id="letterboxd-form">
+          <label>
+            Paste curl/httpie command
+            <textarea
+              name="command"
+              id="letterboxd-command"
+              rows="6"
+              placeholder="curl -H 'Cookie: ...' -d 'client_id=...&client_secret=...&refresh_token=...' https://api.letterboxd.com/api/v0/oauth/token"
+            ></textarea>
+          </label>
+          <button type="button" id="letterboxd-parse">Parse Command</button>
+          <label>
+            API Base URL
+            <input
+              type="url"
+              name="api_base_url"
+              placeholder="https://api.letterboxd.com/api/v0"
+            />
+          </label>
+          <label>
+            Client ID
+            <input type="text" name="client_id" autocomplete="off" />
+          </label>
+          <label>
+            Client Secret
+            <input type="password" name="client_secret" autocomplete="off" />
+          </label>
+          <label>
+            Refresh Token
+            <input type="password" name="refresh_token" autocomplete="off" />
+          </label>
+          <label>
+            Cookies (JSON)
+            <textarea
+              name="cookies"
+              rows="6"
+              placeholder='{"letterboxd.signed.in.as":"..."}'
+            ></textarea>
+          </label>
+          <p class="helper-text">
+            Paste a JSON object of cookie names to values from your captured session.
+          </p>
+          <button type="submit">Save</button>
+          <button type="button" id="letterboxd-test">Test</button>
+          <p id="letterboxd-message" class="form-message" role="status" hidden></p>
+        </form>
+      </section>
+      <section class="card">
         <h2>Trakt</h2>
-        <button type="button">Connect Trakt</button>
+        <p id="trakt-message" class="form-message" role="status" hidden></p>
+        <div class="button-row">
+          <button type="button" id="trakt-connect">Connect Trakt</button>
+          <button type="button" id="trakt-disconnect" class="secondary-button" hidden>
+            Disconnect
+          </button>
+        </div>
       </section>
       <section class="card">
         <h2>SIMKL</h2>

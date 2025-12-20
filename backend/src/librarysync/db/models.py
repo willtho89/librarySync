@@ -239,6 +239,10 @@ class WatchedItem(Base):
             "(media_item_id IS NULL AND episode_item_id IS NOT NULL)",
             name="ck_watched_items_one_target",
         ),
+        CheckConstraint(
+            "rating IS NULL OR (rating >= 0.5 AND rating <= 5.0)",
+            name="ck_watched_items_rating_range",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -260,6 +264,7 @@ class WatchedItem(Base):
         nullable=True,
     )
     watched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    rating: Mapped[float | None] = mapped_column(Float, nullable=True)
     source: Mapped[str] = mapped_column(String(32), default="manual")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -299,6 +304,41 @@ class WatchEvent(Base):
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class WatchSync(Base):
+    __tablename__ = "watch_syncs"
+    __table_args__ = (
+        UniqueConstraint(
+            "watched_item_id", "provider", name="uq_watch_syncs_watched_provider"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    watched_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("watched_items.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    is_rewatch: Mapped[bool] = mapped_column(Boolean, default=False)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
 

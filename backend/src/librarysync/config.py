@@ -16,6 +16,7 @@ class Settings:
     trakt_client_secret: str | None
     simkl_client_id: str | None
     simkl_client_secret: str | None
+    admin_api_key: str | None
     poll_interval_seconds: int
     completion_threshold_percent: float
     log_level: str
@@ -33,18 +34,16 @@ def load_settings() -> Settings:
         trakt_client_secret=_get_env("TRAKT_CLIENT_SECRET"),
         simkl_client_id=_get_env("SIMKL_CLIENT_ID"),
         simkl_client_secret=_get_env("SIMKL_CLIENT_SECRET"),
+        admin_api_key=_get_env("LIBRARYSYNC_ADMIN_API_KEY"),
         poll_interval_seconds=int(_get_env("POLL_INTERVAL_SECONDS", "60") or "60"),
-        completion_threshold_percent=float(
-            _get_env("COMPLETION_THRESHOLD_PERCENT", "85") or "85"
-        ),
+        completion_threshold_percent=float(_get_env("COMPLETION_THRESHOLD_PERCENT", "85") or "85"),
         log_level=_get_env("LOG_LEVEL", "INFO") or "INFO",
         jwt_access_token_minutes=int(
             _get_env("LIBRARYSYNC_JWT_ACCESS_TOKEN_MINUTES", "60") or "60"
         ),
         jwt_algorithm=_get_env("LIBRARYSYNC_JWT_ALGORITHM", "HS256") or "HS256",
         allow_registration=(
-            (_get_env("LIBRARYSYNC_ALLOW_REGISTRATION", "true") or "true").lower()
-            == "true"
+            (_get_env("LIBRARYSYNC_ALLOW_REGISTRATION", "true") or "true").lower() == "true"
         ),
     )
 

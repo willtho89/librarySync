@@ -65,6 +65,23 @@
             Watch date (optional)
             <input type="datetime-local" name="watched_at" />
           </label>
+          <label>
+            Rating (optional)
+            <select name="rating" id="rating-select">
+              <option value="">No rating</option>
+              <option value="0.5">0.5 stars</option>
+              <option value="1">1 star</option>
+              <option value="1.5">1.5 stars</option>
+              <option value="2">2 stars</option>
+              <option value="2.5">2.5 stars</option>
+              <option value="3">3 stars</option>
+              <option value="3.5">3.5 stars</option>
+              <option value="4">4 stars</option>
+              <option value="4.5">4.5 stars</option>
+              <option value="5">5 stars</option>
+            </select>
+          </label>
+          <p class="helper-text">Ratings use 0.5 star increments.</p>
           <p class="helper-text">If left blank, the watch time defaults to now.</p>
           <button type="submit">Confirm watched</button>
           <p id="confirm-message" class="form-message" role="status" hidden></p>
