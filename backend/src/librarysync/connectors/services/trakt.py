@@ -12,7 +12,6 @@ import httpx
 from librarysync.connectors.services.base import ServiceConnector
 from librarysync.core.canonical import ProgressEvent
 
-
 DEFAULT_TRAKT_API_BASE_URL = "https://api.trakt.tv"
 TRAKT_OAUTH_AUTHORIZE_URL = "https://api.trakt.tv/oauth/authorize"
 TRAKT_OAUTH_TOKEN_URL = "https://api.trakt.tv/oauth/token"

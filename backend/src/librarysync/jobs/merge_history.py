@@ -1,0 +1,305 @@
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from librarysync.db.models import MediaItem, OutboxJob, WatchedItem, WatchSync
+from librarysync.db.session import SessionLocal, init_session_factory
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class WatchedRow:
+    watched: WatchedItem
+    media: MediaItem
+
+
+async def process_history_merges_once() -> int:
+    init_session_factory()
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(WatchedItem, MediaItem)
+            .join(MediaItem, WatchedItem.media_item_id == MediaItem.id)
+            .where(MediaItem.media_type == "movie")
+            .order_by(WatchedItem.user_id, WatchedItem.watched_at)
+        )
+        rows = [WatchedRow(watched, media) for watched, media in result.all()]
+        if not rows:
+            return 0
+        merged_count = await _merge_movie_history(db, rows)
+        if merged_count:
+            logger.info("Merged %s watched entries", merged_count)
+        return merged_count
+
+
+async def _merge_movie_history(
+    db: AsyncSession, rows: list[WatchedRow]
+) -> int:
+    grouped: dict[tuple[str, date], list[WatchedRow]] = {}
+    for row in rows:
+        watched_date = row.watched.watched_at.date()
+        key = (row.watched.user_id, watched_date)
+        grouped.setdefault(key, []).append(row)
+
+    merged = 0
+    for (user_id, watched_date), day_rows in grouped.items():
+        clusters = _cluster_rows(day_rows)
+        for cluster in clusters:
+            if len(cluster) < 2:
+                continue
+            merged += await _merge_cluster(db, user_id, watched_date, cluster)
+    return merged
+
+
+def _cluster_rows(rows: list[WatchedRow]) -> list[list[WatchedRow]]:
+    key_map: dict[str, str] = {}
+    groups: dict[str, list[WatchedRow]] = {}
+    for row in rows:
+        keys = _merge_keys(row)
+        group_id = None
+        for key in keys:
+            group_id = key_map.get(key)
+            if group_id:
+                break
+        if not group_id:
+            group_id = keys[0] if keys else f"id:{row.watched.id}"
+            groups[group_id] = [row]
+            for key in keys:
+                key_map[key] = group_id
+            continue
+        groups[group_id].append(row)
+        for key in keys:
+            key_map.setdefault(key, group_id)
+    return list(groups.values())
+
+
+async def _merge_cluster(
+    db: AsyncSession,
+    user_id: str,
+    watched_date: date,
+    cluster: list[WatchedRow],
+) -> int:
+    primary = max(cluster, key=_row_score)
+    if primary.watched.source == "letterboxd":
+        logger.debug(
+            "Merging letterboxd item on %s for user %s", watched_date, user_id
+        )
+    primary_media = primary.media
+    primary_watched = primary.watched
+
+    duplicate_rows = [row for row in cluster if row.watched.id != primary_watched.id]
+    if not duplicate_rows:
+        return 0
+
+    _merge_media(primary_media, [row.media for row in duplicate_rows])
+    _merge_watched(primary_watched, [row.watched for row in duplicate_rows])
+
+    duplicate_ids = [row.watched.id for row in duplicate_rows]
+    syncs = await _load_syncs(db, duplicate_ids + [primary_watched.id])
+    sync_map, delete_syncs = _select_syncs(syncs, primary_watched.id)
+    await _repoint_outbox_jobs(db, sync_map, primary_watched.id)
+    for sync in delete_syncs:
+        await db.delete(sync)
+
+    for row in duplicate_rows:
+        await db.delete(row.watched)
+
+    await db.commit()
+    return len(duplicate_rows)
+
+
+def _merge_keys(row: WatchedRow) -> list[str]:
+    media = row.media
+    keys: list[str] = []
+    for label in ("imdb_id", "tmdb_id", "tvdb_id"):
+        value = getattr(media, label)
+        if value:
+            keys.append(f"id:{label}:{value}")
+    title_key = _title_key(media.title, media.year)
+    if title_key:
+        keys.append(f"title:{title_key}")
+    if not keys:
+        keys.append(f"id:{row.watched.id}")
+    return keys
+
+
+def _row_score(row: WatchedRow) -> int:
+    score = 0
+    media = row.media
+    if media.imdb_id:
+        score += 6
+    if media.tmdb_id:
+        score += 5
+    if media.tvdb_id:
+        score += 4
+    if row.watched.source in {"trakt", "simkl"}:
+        score += 4
+    elif row.watched.source == "manual":
+        score += 2
+    if media.poster_url:
+        score += 1
+    if media.title:
+        score += 1
+    return score
+
+
+def _merge_media(primary: MediaItem, others: list[MediaItem]) -> None:
+    for other in others:
+        if not primary.imdb_id and other.imdb_id:
+            primary.imdb_id = other.imdb_id
+        if not primary.tmdb_id and other.tmdb_id:
+            primary.tmdb_id = other.tmdb_id
+        if not primary.tvdb_id and other.tvdb_id:
+            primary.tvdb_id = other.tvdb_id
+        if primary.year is None and other.year is not None:
+            primary.year = other.year
+        if not primary.poster_url and other.poster_url:
+            primary.poster_url = other.poster_url
+        if other.title and (
+            not primary.title or len(other.title) > len(primary.title)
+        ):
+            primary.title = other.title
+        if isinstance(primary.raw, dict) and isinstance(other.raw, dict):
+            for key, value in other.raw.items():
+                primary.raw.setdefault(key, value)
+        elif primary.raw is None and other.raw is not None:
+            primary.raw = dict(other.raw)
+
+
+def _merge_watched(primary: WatchedItem, others: list[WatchedItem]) -> None:
+    for other in others:
+        if primary.rating is None and other.rating is not None:
+            primary.rating = other.rating
+        primary.watched_at = _prefer_precise_time(primary.watched_at, other.watched_at)
+
+
+def _prefer_precise_time(current: datetime, candidate: datetime) -> datetime:
+    if candidate is None:
+        return current
+    if current is None:
+        return candidate
+    if _is_midnight(current) and not _is_midnight(candidate):
+        return candidate
+    if not _is_midnight(current) and _is_midnight(candidate):
+        return current
+    return max(current, candidate)
+
+
+def _is_midnight(value: datetime) -> bool:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.time().hour == 0 and value.time().minute == 0 and value.time().second == 0
+
+
+async def _load_syncs(
+    db: AsyncSession, watched_ids: list[str]
+) -> list[WatchSync]:
+    result = await db.execute(
+        select(WatchSync).where(WatchSync.watched_item_id.in_(watched_ids))
+    )
+    return result.scalars().all()
+
+
+def _select_syncs(
+    syncs: list[WatchSync], primary_watched_id: str
+) -> tuple[dict[str, str], list[WatchSync]]:
+    by_provider: dict[str, list[WatchSync]] = {}
+    for sync in syncs:
+        by_provider.setdefault(sync.provider, []).append(sync)
+
+    mapping: dict[str, str] = {}
+    to_delete: list[WatchSync] = []
+    for provider, provider_syncs in by_provider.items():
+        primary_sync = next(
+            (
+                sync
+                for sync in provider_syncs
+                if sync.watched_item_id == primary_watched_id
+            ),
+            None,
+        )
+        if primary_sync:
+            keep = primary_sync
+            others = [sync for sync in provider_syncs if sync.id != keep.id]
+        else:
+            provider_syncs.sort(key=_sync_score, reverse=True)
+            keep = provider_syncs[0]
+            others = provider_syncs[1:]
+        for sync in others:
+            _merge_sync_fields(keep, sync)
+            mapping[sync.id] = keep.id
+            to_delete.append(sync)
+        if keep.watched_item_id != primary_watched_id:
+            keep.watched_item_id = primary_watched_id
+    return mapping, to_delete
+
+
+def _sync_score(sync: WatchSync) -> int:
+    status_rank = {
+        "succeeded": 5,
+        "synced_from_trakt": 5,
+        "synced_from_letterboxd": 5,
+        "assumed_tracked": 4,
+        "pending": 3,
+        "in_progress": 2,
+        "failed_retryable": 1,
+        "failed_permanent": 0,
+    }
+    score = status_rank.get(sync.status, 0)
+    if sync.external_id:
+        score += 2
+    if sync.last_error:
+        score -= 1
+    return score
+
+
+def _merge_sync_fields(primary: WatchSync, other: WatchSync) -> None:
+    if not primary.external_id and other.external_id:
+        primary.external_id = other.external_id
+    if primary.last_error and not other.last_error:
+        primary.last_error = None
+    if other.status and _sync_score(other) > _sync_score(primary):
+        primary.status = other.status
+    if other.last_synced_at and not primary.last_synced_at:
+        primary.last_synced_at = other.last_synced_at
+    if other.is_rewatch and not primary.is_rewatch:
+        primary.is_rewatch = other.is_rewatch
+
+
+async def _repoint_outbox_jobs(
+    db: AsyncSession, sync_map: dict[str, str], primary_watched_id: str
+) -> None:
+    if not sync_map:
+        return
+    result = await db.execute(
+        select(OutboxJob).where(
+            OutboxJob.payload["watch_sync_id"]
+            .as_string()
+            .in_(list(sync_map.keys()))
+        )
+    )
+    jobs = result.scalars().all()
+    for job in jobs:
+        payload = dict(job.payload or {})
+        old_sync_id = payload.get("watch_sync_id")
+        if old_sync_id in sync_map:
+            payload["watch_sync_id"] = sync_map[old_sync_id]
+        payload["watched_item_id"] = primary_watched_id
+        job.payload = payload
+
+
+def _title_key(title: object, year: object) -> str | None:
+    if not isinstance(title, str):
+        return None
+    cleaned = re.sub(r"[^a-z0-9]+", " ", title.strip().lower())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return None
+    year_value = str(year) if isinstance(year, int) else ""
+    return f"{cleaned}:{year_value}" if year_value else cleaned

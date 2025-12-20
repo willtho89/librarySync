@@ -1,2 +1,9 @@
 [tool.uv.workspace]
 members = ["backend", "worker"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["**/db/migrations/**"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

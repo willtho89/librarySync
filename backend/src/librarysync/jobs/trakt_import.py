@@ -18,19 +18,26 @@ from librarysync.connectors.services.trakt import (
     parse_expires_at,
     token_to_secret_payload,
 )
+from librarysync.core.import_schedule import (
+    DEFAULT_IMPORT_INTERVAL_SECONDS,
+    IMPORT_REQUESTED_KEY,
+    parse_datetime,
+    record_import_run,
+    should_run_import,
+)
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.security import encrypt_value
+from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
+    EpisodeItem,
     Integration,
     IntegrationSecret,
-    EpisodeItem,
     MediaItem,
     WatchedItem,
     WatchEvent,
     WatchSync,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
-
 
 LOOKBACK_HOURS = 24 * 7
 MAX_PAGES = 8
@@ -71,6 +78,12 @@ class EpisodeSummary:
     raw: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ImportResult:
+    imported: int
+    attempted: bool
+
+
 async def process_trakt_imports_once(
     lookback_hours: int = LOOKBACK_HOURS,
     per_page: int = PER_PAGE,
@@ -84,11 +97,26 @@ async def process_trakt_imports_once(
         integrations = result.scalars().all()
         if not integrations:
             return 0
+        now = datetime.now(timezone.utc)
         total_imported = 0
         for integration in integrations:
-            total_imported += await _import_for_integration(
+            if not should_run_import(
+                integration.config,
+                now,
+                default_interval_seconds=DEFAULT_IMPORT_INTERVAL_SECONDS,
+            ):
+                continue
+            requested_at = parse_datetime(
+                (integration.config or {}).get(IMPORT_REQUESTED_KEY)
+            )
+            import_result = await _import_for_integration(
                 db, integration, lookback_hours, per_page, max_pages
             )
+            total_imported += import_result.imported
+            if import_result.attempted or requested_at is None:
+                integration.config = record_import_run(integration.config, now)
+                db.add(integration)
+                await db.commit()
         return total_imported
 
 
@@ -98,16 +126,16 @@ async def _import_for_integration(
     lookback_hours: int,
     per_page: int,
     max_pages: int,
-) -> int:
+) -> ImportResult:
     if not settings.trakt_client_id or not settings.trakt_client_secret:
-        return 0
+        return ImportResult(imported=0, attempted=False)
     integration, secret_data = await load_integration_with_secrets(
         db, integration.user_id, "trakt"
     )
     if not integration or not secret_data:
-        return 0
+        return ImportResult(imported=0, attempted=False)
     if not has_required_trakt_fields(secret_data):
-        return 0
+        return ImportResult(imported=0, attempted=False)
     client = TraktClient(
         client_id=settings.trakt_client_id,
         client_secret=settings.trakt_client_secret,
@@ -122,7 +150,7 @@ async def _import_for_integration(
             integration.user_id,
             exc,
         )
-        return 0
+        return ImportResult(imported=0, attempted=True)
 
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=lookback_hours)
@@ -160,7 +188,7 @@ async def _import_for_integration(
             imported,
             integration.user_id,
         )
-    return imported
+    return ImportResult(imported=imported, attempted=True)
 
 
 async def _fetch_history_entries(
@@ -251,6 +279,13 @@ async def _import_movie_entry(
         last_synced_at=datetime.now(timezone.utc),
     )
     db.add(watch_sync)
+    await enqueue_new_item_job(
+        db,
+        user_id,
+        watched.id,
+        is_rewatch=False,
+        source="trakt_import",
+    )
     await db.commit()
     return True
 
@@ -309,6 +344,13 @@ async def _import_episode_entry(
         last_synced_at=datetime.now(timezone.utc),
     )
     db.add(watch_sync)
+    await enqueue_new_item_job(
+        db,
+        user_id,
+        watched.id,
+        is_rewatch=False,
+        source="trakt_import",
+    )
     await db.commit()
     return True
 

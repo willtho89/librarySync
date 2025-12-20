@@ -83,6 +83,33 @@
           <button type="button" id="letterboxd-test">Test</button>
           <p id="letterboxd-message" class="form-message" role="status" hidden></p>
         </form>
+        <h3>History import</h3>
+        <form id="letterboxd-import-form">
+          <label>
+            Import schedule
+            <select name="import_interval">
+              <option value="">Manual only</option>
+              <option value="21600">Every 6 hours</option>
+              <option value="43200">Every 12 hours</option>
+              <option value="86400">Every day</option>
+              <option value="259200">Every 3 days</option>
+              <option value="604800">Every 7 days</option>
+            </select>
+          </label>
+          <div class="button-row">
+            <button type="submit">Save schedule</button>
+            <button type="button" id="letterboxd-import-now" class="secondary-button">
+              Import now
+            </button>
+          </div>
+          <p id="letterboxd-import-last" class="helper-text"></p>
+          <p
+            id="letterboxd-import-message"
+            class="form-message"
+            role="status"
+            hidden
+          ></p>
+        </form>
       </section>
       <section class="card">
         <h2>Trakt</h2>
@@ -93,6 +120,28 @@
             Disconnect
           </button>
         </div>
+        <h3>History import</h3>
+        <form id="trakt-import-form">
+          <label>
+            Import schedule
+            <select name="import_interval">
+              <option value="">Manual only</option>
+              <option value="21600">Every 6 hours</option>
+              <option value="43200">Every 12 hours</option>
+              <option value="86400">Every day</option>
+              <option value="259200">Every 3 days</option>
+              <option value="604800">Every 7 days</option>
+            </select>
+          </label>
+          <div class="button-row">
+            <button type="submit">Save schedule</button>
+            <button type="button" id="trakt-import-now" class="secondary-button">
+              Import now
+            </button>
+          </div>
+          <p id="trakt-import-last" class="helper-text"></p>
+          <p id="trakt-import-message" class="form-message" role="status" hidden></p>
+        </form>
       </section>
       <section class="card">
         <h2>SIMKL</h2>

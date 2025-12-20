@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from librarysync.config import settings
 from librarysync.connectors.services.letterboxd import (
     DEFAULT_LETTERBOXD_API_BASE_URL,
     LetterboxdClient,
@@ -24,13 +25,18 @@ from librarysync.connectors.services.trakt import (
     parse_expires_at,
     token_to_secret_payload,
 )
-from librarysync.config import settings
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.security import encrypt_value
-from librarysync.db.models import IntegrationSecret, OutboxJob, SyncAttempt, WatchSync
+from librarysync.core.watch_pipeline import process_new_item_job
+from librarysync.db.models import (
+    IntegrationSecret,
+    OutboxJob,
+    SyncAttempt,
+    WatchedItem,
+    WatchSync,
+)
 from librarysync.db.session import SessionLocal, init_session_factory
-
 
 RETRYABLE_STATUSES = ("pending", "failed_retryable")
 logger = logging.getLogger(__name__)
@@ -104,6 +110,8 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
                 response_code, external_id = await _deliver_trakt_update(db, job)
             else:
                 response_code, external_id = await _deliver_trakt_watch(db, job)
+        elif job.target_provider == "internal" and job.job_type == "new_item_added":
+            await process_new_item_job(db, job)
         else:
             raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
     except LetterboxdError as exc:
@@ -293,6 +301,20 @@ async def _deliver_trakt_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | 
         client_secret=settings.trakt_client_secret,
     )
     access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
+    existing_history_id = None
+    existing_watched_at = None
+    try:
+        existing = await _find_trakt_history_for_day(
+            client, access_token, payload, watched_at
+        )
+        if existing:
+            existing_history_id, existing_watched_at = existing
+    except TraktError as exc:
+        logger.info("Trakt history precheck failed: %s", exc)
+    if existing_history_id:
+        if existing_watched_at:
+            await _sync_local_watched_at(db, payload, existing_watched_at)
+        return 200, existing_history_id
     history_payload = _build_trakt_history_payload(payload, watched_at)
     response, response_code = await client.add_history(history_payload, access_token)
     external_id = _extract_trakt_history_id(response, _coerce_str(payload.get("media_type")))
@@ -463,6 +485,174 @@ def _normalize_trakt_rating(value: object) -> int:
     if normalized < 1 or normalized > 10:
         raise ValueError("Trakt rating must be between 1 and 10")
     return normalized
+
+
+async def _find_trakt_history_for_day(
+    client: TraktClient,
+    access_token: str,
+    payload: dict[str, object],
+    watched_at: datetime,
+) -> tuple[str, datetime] | None:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    history_type = "movies" if media_type == "movie" else "episodes"
+    start_at, end_at = _day_bounds(watched_at)
+    page = 1
+    limit = 50
+    target_date = watched_at.date()
+    while True:
+        items, headers = await client.fetch_history(
+            access_token,
+            history_type=history_type,
+            start_at=start_at,
+            end_at=end_at,
+            page=page,
+            limit=limit,
+        )
+        if not items:
+            return None
+        for entry in items:
+            matched_watched_at = _match_trakt_entry_for_payload(
+                entry, payload, media_type, target_date
+            )
+            if matched_watched_at:
+                history_id = _coerce_str(entry.get("id"))
+                if history_id:
+                    return history_id, matched_watched_at
+        page_count = _parse_trakt_page_count(headers)
+        if page_count is not None and page >= page_count:
+            break
+        if len(items) < limit:
+            break
+        page += 1
+    return None
+
+
+def _day_bounds(value: datetime) -> tuple[datetime, datetime]:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    start_at = value.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_at = start_at + timedelta(days=1)
+    return start_at, end_at
+
+
+def _match_trakt_entry_for_payload(
+    entry: object,
+    payload: dict[str, object],
+    media_type: str,
+    target_date: date,
+) -> datetime | None:
+    if not isinstance(entry, dict):
+        return None
+    entry_watched_at = _parse_trakt_datetime(entry.get("watched_at"))
+    if not entry_watched_at or entry_watched_at.date() != target_date:
+        return None
+    if media_type == "movie":
+        movie_ids = _normalize_trakt_ids(payload.get("movie_ids"))
+        entry_movie_ids = _extract_trakt_entry_ids(entry.get("movie"))
+        if _ids_match(movie_ids, entry_movie_ids):
+            return entry_watched_at
+        return None
+
+    episode_ids = _normalize_trakt_ids(payload.get("episode_ids"))
+    show_ids = _normalize_trakt_ids(payload.get("show_ids"))
+    entry_episode = entry.get("episode") if isinstance(entry.get("episode"), dict) else {}
+    entry_show = entry.get("show") if isinstance(entry.get("show"), dict) else {}
+    if episode_ids:
+        if _ids_match(episode_ids, _extract_trakt_entry_ids(entry_episode)):
+            return entry_watched_at
+    if show_ids and _ids_match(show_ids, _extract_trakt_entry_ids(entry_show)):
+        season_number = _coerce_int(payload.get("season_number"))
+        episode_number = _coerce_int(payload.get("episode_number"))
+        if season_number is None and episode_number is None:
+            return entry_watched_at
+        entry_season = _coerce_int(entry_episode.get("season"))
+        entry_number = _coerce_int(entry_episode.get("number"))
+        if season_number is not None and entry_season != season_number:
+            return None
+        if episode_number is not None and entry_number != episode_number:
+            return None
+        return entry_watched_at
+    return None
+
+
+def _extract_trakt_entry_ids(entry: object) -> dict[str, object]:
+    if not isinstance(entry, dict):
+        return {}
+    ids = entry.get("ids")
+    if not isinstance(ids, dict):
+        return {}
+    normalized: dict[str, object] = {}
+    for key in ("imdb", "tmdb", "tvdb", "trakt"):
+        value = ids.get(key)
+        if value is None or value == "":
+            continue
+        if key == "imdb":
+            normalized[key] = str(value).lower()
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def _ids_match(left: dict[str, object], right: dict[str, object]) -> bool:
+    if not left or not right:
+        return False
+    for key in ("trakt", "imdb", "tmdb", "tvdb"):
+        if key not in left or key not in right:
+            continue
+        left_value = left[key]
+        right_value = right[key]
+        if key == "imdb":
+            if str(left_value).lower() == str(right_value).lower():
+                return True
+        else:
+            if str(left_value) == str(right_value):
+                return True
+    return False
+
+
+def _parse_trakt_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if cleaned.endswith("Z"):
+        cleaned = f"{cleaned[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _parse_trakt_page_count(headers: dict[str, str]) -> int | None:
+    value = headers.get("x-pagination-page-count") or headers.get(
+        "X-Pagination-Page-Count"
+    )
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+async def _sync_local_watched_at(
+    db: AsyncSession, payload: dict[str, object], watched_at: datetime
+) -> None:
+    watched_item_id = _coerce_str(payload.get("watched_item_id"))
+    if not watched_item_id:
+        return
+    watched = await db.get(WatchedItem, watched_item_id)
+    if not watched:
+        return
+    if watched_at.tzinfo is None:
+        watched_at = watched_at.replace(tzinfo=timezone.utc)
+    if watched.watched_at != watched_at:
+        watched.watched_at = watched_at
+        db.add(watched)
 
 
 async def _ensure_trakt_access_token(

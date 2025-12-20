@@ -7,7 +7,6 @@ from jose import JWTError, jwt
 from librarysync.config import settings
 
 MIN_PASSWORD_LENGTH = 8
-MAX_PASSWORD_BYTES = 72
 
 
 def _password_byte_length(password: str) -> int:
@@ -17,10 +16,6 @@ def _password_byte_length(password: str) -> int:
 def validate_password(password: str) -> None:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
-    if _password_byte_length(password) > MAX_PASSWORD_BYTES:
-        raise ValueError(
-            f"Password must be {MAX_PASSWORD_BYTES} bytes or fewer when UTF-8 encoded. '{password}' is {_password_byte_length(password)} bytes."
-        )
 
 
 def hash_password(password: str) -> str:

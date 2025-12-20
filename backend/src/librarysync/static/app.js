@@ -12,6 +12,7 @@ const episodeState = {
   tmdbId: null,
   seasonNumber: null,
 };
+const DEFAULT_IMPORT_INTERVAL_SECONDS = 86400;
 
 function bindForm(id, handler) {
   const form = document.getElementById(id);
@@ -32,6 +33,71 @@ function setMessage(id, message, isError = false) {
   el.textContent = message;
   el.dataset.state = isError ? "error" : "success";
   el.hidden = !message;
+}
+
+function parseIntervalSeconds(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return null;
+  }
+  if (numeric === 0) {
+    return 0;
+  }
+  return Math.trunc(numeric);
+}
+
+function formatImportTimestamp(value) {
+  if (!value) {
+    return "Last import: Never";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return "Last import: Unknown";
+  }
+  return `Last import: ${date.toLocaleString()}`;
+}
+
+function applyImportControls(provider, integration) {
+  const form = document.getElementById(`${provider}-import-form`);
+  if (!form) {
+    return;
+  }
+  const select = form.querySelector("select[name='import_interval']");
+  const lastEl = document.getElementById(`${provider}-import-last`);
+  const importNow = document.getElementById(`${provider}-import-now`);
+  const hasSecrets = integration && integration.has_secrets;
+  if (select) {
+    const rawInterval =
+      integration && integration.config
+        ? integration.config.import_interval_seconds
+        : null;
+    let intervalValue = parseIntervalSeconds(rawInterval);
+    if (intervalValue === null && hasSecrets) {
+      intervalValue = DEFAULT_IMPORT_INTERVAL_SECONDS;
+    }
+    select.value = intervalValue ? String(intervalValue) : "";
+    select.disabled = !hasSecrets;
+  }
+  if (importNow) {
+    importNow.disabled = !hasSecrets;
+  }
+  if (!hasSecrets) {
+    if (lastEl) {
+      lastEl.textContent = "Connect to enable history import.";
+    }
+    setMessage(`${provider}-import-message`, "");
+    return;
+  }
+  if (lastEl) {
+    const lastRun =
+      integration && integration.config
+        ? integration.config.import_last_run_at
+        : null;
+    lastEl.textContent = formatImportTimestamp(lastRun);
+  }
 }
 
 async function requestJSON(path, options = {}) {
@@ -178,6 +244,7 @@ async function loadIntegrations() {
   ) {
     setMessage("letterboxd-message", "Credentials are stored securely.");
   }
+  applyImportControls("letterboxd", letterboxd);
 
   const trakt = integrations.find((item) => item.provider === "trakt");
   const traktMessage = document.getElementById("trakt-message");
@@ -207,6 +274,7 @@ async function loadIntegrations() {
       traktDisconnect.hidden = true;
     }
   }
+  applyImportControls("trakt", trakt);
 }
 
 async function handleAIOStreamsSave(data, form) {
@@ -530,6 +598,43 @@ async function handleTraktDisconnect() {
     await loadIntegrations();
   } catch (error) {
     setMessage("trakt-message", error.message, true);
+  }
+}
+
+async function handleImportScheduleSave(provider, data) {
+  setMessage(`${provider}-import-message`, "");
+  const rawInterval = data.get("import_interval");
+  const intervalSeconds = parseIntervalSeconds(rawInterval);
+  if (rawInterval && intervalSeconds === null) {
+    setMessage(
+      `${provider}-import-message`,
+      "Select a valid import schedule.",
+      true
+    );
+    return;
+  }
+  try {
+    await requestJSON(`/api/integrations/${provider}/import/schedule`, {
+      method: "POST",
+      body: JSON.stringify({ interval_seconds: intervalSeconds }),
+    });
+    setMessage(`${provider}-import-message`, "Schedule saved.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage(`${provider}-import-message`, error.message, true);
+  }
+}
+
+async function handleImportNow(provider) {
+  setMessage(`${provider}-import-message`, "Requesting import...");
+  try {
+    await requestJSON(`/api/integrations/${provider}/import/now`, {
+      method: "POST",
+    });
+    setMessage(`${provider}-import-message`, "Import requested.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage(`${provider}-import-message`, error.message, true);
   }
 }
 
@@ -1409,8 +1514,12 @@ async function loadHistory() {
   if (!container) {
     return;
   }
+  const clearButton = document.getElementById("history-clear");
   const data = await requestJSON("/api/history/items");
   const items = data && data.items ? data.items : [];
+  if (clearButton) {
+    clearButton.disabled = !items.length;
+  }
   if (!items.length) {
     container.textContent = "No watched titles yet.";
     return;
@@ -1601,6 +1710,29 @@ async function loadHistory() {
   });
 }
 
+function bindHistoryClear() {
+  const clearButton = document.getElementById("history-clear");
+  if (!clearButton) {
+    return;
+  }
+  clearButton.addEventListener("click", async () => {
+    const confirmed = window.confirm(
+      "Clear your entire watch history? This cannot be undone."
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      setMessage("history-message", "Clearing history...");
+      await requestJSON("/api/history/items", { method: "DELETE" });
+      setMessage("history-message", "History cleared.");
+      await loadHistory();
+    } catch (error) {
+      setMessage("history-message", error.message, true);
+    }
+  });
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   const body = document.body;
   const requiresAuth = body && body.dataset.requiresAuth === "true";
@@ -1622,11 +1754,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindForm("register-form", handleRegister);
   bindForm("aiostreams-form", handleAIOStreamsSave);
   bindForm("letterboxd-form", handleLetterboxdSave);
+  bindForm("letterboxd-import-form", (data) =>
+    handleImportScheduleSave("letterboxd", data)
+  );
+  bindForm("trakt-import-form", (data) =>
+    handleImportScheduleSave("trakt", data)
+  );
   bindForm("settings-form", handleSettingsSave);
   bindForm("tmdb-form", handleTmdbSave);
   bindForm("tvdb-form", handleTvdbSave);
   bindForm("tvmaze-form", handleTvmazeSave);
   bindForm("imdb-form", handleImdbSave);
+  bindHistoryClear();
   bindForm("kitsu-form", handleKitsuSave);
   bindForm("myanimelist-form", handleMyAnimeListSave);
   bindForm("lookup-form", handleLookupSubmit);
@@ -1659,6 +1798,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (letterboxdTest) {
     letterboxdTest.addEventListener("click", handleLetterboxdTest);
   }
+  const letterboxdImportNow = document.getElementById("letterboxd-import-now");
+  if (letterboxdImportNow) {
+    letterboxdImportNow.addEventListener("click", () =>
+      handleImportNow("letterboxd")
+    );
+  }
   const letterboxdParse = document.getElementById("letterboxd-parse");
   if (letterboxdParse) {
     letterboxdParse.addEventListener("click", handleLetterboxdParse);
@@ -1670,6 +1815,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const traktDisconnect = document.getElementById("trakt-disconnect");
   if (traktDisconnect) {
     traktDisconnect.addEventListener("click", handleTraktDisconnect);
+  }
+  const traktImportNow = document.getElementById("trakt-import-now");
+  if (traktImportNow) {
+    traktImportNow.addEventListener("click", () =>
+      handleImportNow("trakt")
+    );
   }
 
   if (user) {

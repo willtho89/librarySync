@@ -7,7 +7,6 @@ from typing import Any
 
 import httpx
 
-
 DEFAULT_LETTERBOXD_API_BASE_URL = "https://api.letterboxd.com/api/v0"
 LETTERBOXD_REQUIRED_FIELDS = ("client_id", "client_secret", "refresh_token")
 logger = logging.getLogger(__name__)

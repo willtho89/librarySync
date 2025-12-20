@@ -13,12 +13,15 @@ Self-hosted, Docker-compose-deployable multi-user sync hub for watch progress. M
 - [ ] Simkl movie/tv import
 - [x] Letterbox movie sync (incl ratings)
 - [x] Letterbox movie import
-- [ ] Merge History Items and sync to all upstream integrations
-- [ ] Metadata update for imported Items (TV Shows Episode Poster)
+- [x] Merge History Items and sync to all upstream integrations
+- [x] Metadata update for imported Items (TV Shows Episode Poster)
 - [x] Add Watch API
 - [ ] Ingest playback progress from AIOStreams proxy.
 - [ ] minimal web UI (plain JS + static HTML).
 - [ ] worker logs
+- [ ] Docker as Non Root User
+- [ ] CI/CD Pipelines
+- [ ] 
 
 ## TODOs (Not MVP)
 - [ ] Anime integrations

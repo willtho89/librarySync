@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.services.letterboxd import (
@@ -17,20 +17,24 @@ from librarysync.connectors.services.letterboxd import (
     extract_member_id,
     has_required_letterboxd_fields,
 )
-from librarysync.connectors.services.trakt import has_required_trakt_fields
-from librarysync.config import settings
+from librarysync.core.import_schedule import (
+    DEFAULT_IMPORT_INTERVAL_SECONDS,
+    IMPORT_REQUESTED_KEY,
+    parse_datetime,
+    record_import_run,
+    should_run_import,
+)
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import coerce_star_rating
+from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
     Integration,
     MediaItem,
-    OutboxJob,
     WatchedItem,
     WatchEvent,
     WatchSync,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
-
 
 LOOKBACK_HOURS = 24 * 7
 MAX_PAGES = 6
@@ -51,6 +55,12 @@ class FilmSummary:
     raw: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ImportResult:
+    imported: int
+    attempted: bool
+
+
 async def process_letterboxd_imports_once(
     lookback_hours: int = LOOKBACK_HOURS,
     per_page: int = PER_PAGE,
@@ -64,11 +74,26 @@ async def process_letterboxd_imports_once(
         integrations = result.scalars().all()
         if not integrations:
             return 0
+        now = datetime.now(timezone.utc)
         total_imported = 0
         for integration in integrations:
-            total_imported += await _import_for_integration(
+            if not should_run_import(
+                integration.config,
+                now,
+                default_interval_seconds=DEFAULT_IMPORT_INTERVAL_SECONDS,
+            ):
+                continue
+            requested_at = parse_datetime(
+                (integration.config or {}).get(IMPORT_REQUESTED_KEY)
+            )
+            import_result = await _import_for_integration(
                 db, integration, lookback_hours, per_page, max_pages
             )
+            total_imported += import_result.imported
+            if import_result.attempted or requested_at is None:
+                integration.config = record_import_run(integration.config, now)
+                db.add(integration)
+                await db.commit()
         return total_imported
 
 
@@ -78,14 +103,14 @@ async def _import_for_integration(
     lookback_hours: int,
     per_page: int,
     max_pages: int,
-) -> int:
+) -> ImportResult:
     integration, secret_data = await load_integration_with_secrets(
         db, integration.user_id, "letterboxd"
     )
     if not integration or not secret_data:
-        return 0
+        return ImportResult(imported=0, attempted=False)
     if not has_required_letterboxd_fields(secret_data):
-        return 0
+        return ImportResult(imported=0, attempted=False)
     api_base_url = DEFAULT_LETTERBOXD_API_BASE_URL
     if integration.config and integration.config.get("api_base_url"):
         api_base_url = str(integration.config["api_base_url"])
@@ -141,7 +166,7 @@ async def _import_for_integration(
         logger.warning(
             "Letterboxd import failed for user %s: %s", integration.user_id, exc
         )
-        return 0
+        return ImportResult(imported=0, attempted=True)
 
     imported = 0
     for entry in entries:
@@ -159,7 +184,7 @@ async def _import_for_integration(
             imported,
             integration.user_id,
         )
-    return imported
+    return ImportResult(imported=imported, attempted=True)
 
 
 async def _import_entry(db: AsyncSession, user_id: str, entry: dict[str, Any]) -> bool:
@@ -174,10 +199,6 @@ async def _import_entry(db: AsyncSession, user_id: str, entry: dict[str, Any]) -
     if not entry_key:
         return False
     if await _entry_already_imported(db, user_id, entry_key):
-        if await _enqueue_trakt_sync_for_existing_import(
-            db, user_id, entry_key, watched_at
-        ):
-            await db.commit()
         return False
 
     media_item = await _get_or_create_media_item(db, film)
@@ -213,14 +234,12 @@ async def _import_entry(db: AsyncSession, user_id: str, entry: dict[str, Any]) -
         last_synced_at=datetime.now(timezone.utc),
     )
     db.add(watch_sync)
-    await _enqueue_trakt_sync_from_import(
+    await enqueue_new_item_job(
         db,
         user_id,
-        watched,
-        media_item,
-        watched_at,
-        is_rewatch,
-        rating,
+        watched.id,
+        is_rewatch=is_rewatch,
+        source="letterboxd_import",
     )
     await db.commit()
     return True
@@ -237,68 +256,6 @@ async def _entry_already_imported(
         )
     )
     return result.scalars().first() is not None
-
-
-async def _enqueue_trakt_sync_for_existing_import(
-    db: AsyncSession,
-    user_id: str,
-    entry_key: str,
-    watched_at: datetime,
-) -> bool:
-    result = await db.execute(
-        select(WatchEvent).where(
-            WatchEvent.user_id == user_id,
-            WatchEvent.event_type == "letterboxd_imported",
-            WatchEvent.raw["entry_key"].as_string() == entry_key,
-        )
-    )
-    event = result.scalars().first()
-    if not event or not event.media_item_id:
-        return False
-    result = await db.execute(
-        select(WatchedItem).where(
-            WatchedItem.user_id == user_id,
-            WatchedItem.media_item_id == event.media_item_id,
-            WatchedItem.watched_at == watched_at,
-        )
-    )
-    watched = result.scalars().first()
-    if not watched:
-        result = await db.execute(
-            select(WatchedItem).where(
-                WatchedItem.user_id == user_id,
-                WatchedItem.media_item_id == event.media_item_id,
-                func.date(WatchedItem.watched_at) == watched_at.date(),
-            )
-        )
-        watched = result.scalars().first()
-    if not watched:
-        return False
-    result = await db.execute(
-        select(WatchSync).where(
-            WatchSync.watched_item_id == watched.id,
-            WatchSync.provider == "trakt",
-        )
-    )
-    if result.scalars().first():
-        return False
-    result = await db.execute(
-        select(MediaItem).where(MediaItem.id == event.media_item_id)
-    )
-    media_item = result.scalars().first()
-    if not media_item:
-        return False
-    raw = event.raw if isinstance(event.raw, dict) else {}
-    is_rewatch = bool(raw.get("rewatch"))
-    return await _enqueue_trakt_sync_from_import(
-        db,
-        user_id,
-        watched,
-        media_item,
-        watched.watched_at,
-        is_rewatch,
-        watched.rating,
-    )
 
 
 async def _get_or_create_media_item(
@@ -536,6 +493,15 @@ def _extract_imdb_id(payload: dict[str, Any]) -> str | None:
             imdb_id = _normalize_imdb_id(entry)
             if imdb_id:
                 return imdb_id
+    if isinstance(links, list):
+        for entry in links:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("type") != "imdb":
+                continue
+            imdb_id = _normalize_imdb_id(entry.get("id") or entry.get("url"))
+            if imdb_id:
+                return imdb_id
     external_ids = payload.get("externalIds") or payload.get("external_ids")
     if isinstance(external_ids, list):
         for entry in external_ids:
@@ -763,137 +729,3 @@ def _month_range(start: date, end: date) -> list[tuple[int, int]]:
         else:
             month += 1
     return months
-
-
-async def _enqueue_trakt_sync_from_import(
-    db: AsyncSession,
-    user_id: str,
-    watched: WatchedItem,
-    media_item: MediaItem,
-    watched_at: datetime,
-    is_rewatch: bool,
-    rating: float | None,
-) -> bool:
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        return False
-    payload = _build_trakt_payload(media_item, watched_at, rating)
-    if not payload:
-        return False
-    integration, secret_data = await load_integration_with_secrets(
-        db, user_id, "trakt"
-    )
-    if not integration or not secret_data:
-        return False
-    if not has_required_trakt_fields(secret_data):
-        return False
-    result = await db.execute(
-        select(WatchSync).where(
-            WatchSync.watched_item_id == watched.id,
-            WatchSync.provider == "trakt",
-        )
-    )
-    if result.scalars().first():
-        return False
-
-    same_day_duplicate = await _has_same_day_watch(
-        db,
-        user_id,
-        media_item.id,
-        watched_at,
-        watched.id,
-    )
-    now = datetime.now(timezone.utc)
-    watch_status = "pending"
-    if same_day_duplicate and rating is None:
-        watch_status = "assumed_tracked"
-
-    watch_sync = WatchSync(
-        user_id=user_id,
-        watched_item_id=watched.id,
-        provider="trakt",
-        status=watch_status,
-        is_rewatch=is_rewatch,
-    )
-    if watch_status == "assumed_tracked":
-        watch_sync.last_synced_at = now
-    db.add(watch_sync)
-    await db.flush()
-
-    payload["watch_sync_id"] = watch_sync.id
-    payload["watched_item_id"] = watched.id
-    if watch_status != "assumed_tracked" and not same_day_duplicate:
-        job = OutboxJob(
-            user_id=user_id,
-            target_provider="trakt",
-            job_type="push_watched",
-            payload=payload,
-            status="pending",
-        )
-        db.add(job)
-    if rating is not None:
-        rating_payload = dict(payload)
-        rating_payload["rating"] = rating
-        rating_job = OutboxJob(
-            user_id=user_id,
-            target_provider="trakt",
-            job_type="push_rating",
-            payload=rating_payload,
-            status="pending",
-        )
-        db.add(rating_job)
-    return True
-
-
-async def _has_same_day_watch(
-    db: AsyncSession,
-    user_id: str,
-    media_item_id: str,
-    watched_at: datetime,
-    exclude_watched_id: str | None = None,
-) -> bool:
-    target_date = watched_at.date()
-    query = select(WatchedItem.id).where(
-        WatchedItem.user_id == user_id,
-        WatchedItem.media_item_id == media_item_id,
-        func.date(WatchedItem.watched_at) == target_date,
-    )
-    if exclude_watched_id:
-        query = query.where(WatchedItem.id != exclude_watched_id)
-    query = query.limit(1)
-    result = await db.execute(query)
-    return result.scalars().first() is not None
-
-
-def _build_trakt_payload(
-    media_item: MediaItem,
-    watched_at: datetime,
-    rating: float | None,
-) -> dict[str, object] | None:
-    if media_item.media_type != "movie":
-        return None
-    movie_ids = _collect_trakt_ids(
-        media_item.imdb_id, media_item.tmdb_id, media_item.tvdb_id
-    )
-    if not movie_ids:
-        return None
-    payload: dict[str, object] = {
-        "media_type": "movie",
-        "movie_ids": movie_ids,
-        "watched_at": watched_at.isoformat(),
-    }
-    if rating is not None:
-        payload["rating"] = rating
-    return payload
-
-
-def _collect_trakt_ids(
-    imdb_id: str | None, tmdb_id: str | None, tvdb_id: str | None
-) -> dict[str, object]:
-    ids: dict[str, object] = {}
-    if imdb_id:
-        ids["imdb"] = imdb_id.lower()
-    if tmdb_id:
-        ids["tmdb"] = tmdb_id
-    if tvdb_id:
-        ids["tvdb"] = tvdb_id
-    return ids

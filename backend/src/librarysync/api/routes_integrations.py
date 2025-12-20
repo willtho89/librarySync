@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
+from librarysync.config import settings
 from librarysync.connectors.services.letterboxd import (
     DEFAULT_LETTERBOXD_API_BASE_URL,
     LetterboxdClient,
@@ -20,10 +21,15 @@ from librarysync.connectors.services.trakt import (
     TRAKT_OAUTH_AUTHORIZE_URL,
     TraktClient,
     TraktError,
+    has_required_trakt_fields,
     parse_expires_at,
     token_to_secret_payload,
 )
-from librarysync.config import settings
+from librarysync.core.import_schedule import (
+    normalize_interval_seconds,
+    set_import_interval,
+    set_import_requested,
+)
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.security import decrypt_value, encrypt_value
 from librarysync.db.models import Integration, IntegrationSecret, User
@@ -32,6 +38,8 @@ router = APIRouter(
     prefix="/api/integrations",
     tags=["integrations"],
 )
+
+IMPORTABLE_PROVIDERS = {"letterboxd", "trakt"}
 
 
 class AIOStreamsConfig(BaseModel):
@@ -61,6 +69,10 @@ class LetterboxdConfig(BaseModel):
     client_secret: str | None = None
     refresh_token: str | None = None
     cookies: dict[str, str] | None = None
+
+
+class ImportScheduleIn(BaseModel):
+    interval_seconds: int | None = None
 
 
 def _normalize_optional(value: str | None) -> str | None:
@@ -388,6 +400,93 @@ async def test_letterboxd(
             await db.commit()
 
     return {"status": "ok"}
+
+
+@router.post(
+    "/{provider}/import/schedule",
+    summary="Configure history import schedule",
+    description="Update the history import interval for the selected integration.",
+)
+async def update_import_schedule(
+    provider: str,
+    payload: ImportScheduleIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if provider not in IMPORTABLE_PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Unknown provider",
+        )
+    if payload.interval_seconds is not None and payload.interval_seconds < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Interval must be a positive number of seconds",
+        )
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == provider,
+        )
+    )
+    integration = result.scalars().first()
+    if not integration:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Integration is not configured",
+        )
+    interval_seconds = normalize_interval_seconds(payload.interval_seconds)
+    integration.config = set_import_interval(integration.config, interval_seconds)
+    db.add(integration)
+    await db.commit()
+
+    result = await db.execute(
+        select(IntegrationSecret.integration_id).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    has_secrets = result.scalar_one_or_none() is not None
+    return _integration_to_out(integration, has_secrets).model_dump()
+
+
+@router.post(
+    "/{provider}/import/now",
+    summary="Trigger an immediate history import",
+    description="Queue an on-demand import for the selected integration.",
+)
+async def trigger_import_now(
+    provider: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if provider not in IMPORTABLE_PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Unknown provider",
+        )
+    integration, secret_data = await load_integration_with_secrets(
+        db, current_user.id, provider
+    )
+    if not integration or not secret_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Integration credentials are missing",
+        )
+    if provider == "letterboxd" and not has_required_letterboxd_fields(secret_data):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Letterboxd credentials are incomplete",
+        )
+    if provider == "trakt" and not has_required_trakt_fields(secret_data):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trakt credentials are incomplete",
+        )
+    config = set_import_requested(integration.config, datetime.now(timezone.utc))
+    integration.config = config
+    db.add(integration)
+    await db.commit()
+    return {"status": "queued"}
 
 
 @router.get(

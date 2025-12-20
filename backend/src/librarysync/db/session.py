@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import (
 
 from librarysync.config import settings
 
-
 SessionLocal = async_sessionmaker(autoflush=False, expire_on_commit=False)
 _ENGINE: AsyncEngine | None = None
 

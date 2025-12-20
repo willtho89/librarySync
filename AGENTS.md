@@ -412,6 +412,7 @@ Per-user AIOStreams config stored in DB:
   - canonical session -> canonical event
   - canonical event -> outbox jobs
 - Use Ruff for linting/import sorting with a 100-character line length.
+- Always run `ruff check .` after changes and report results.
 - Prefer deterministic keys:
   - `item_key` format:
     - movie: `imdb:tt1234567`
