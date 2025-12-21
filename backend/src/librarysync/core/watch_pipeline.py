@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.config import settings
 from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
+from librarysync.connectors.services.simkl import has_required_simkl_fields
 from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
@@ -29,6 +30,7 @@ SUCCESS_STATUSES = {
     "assumed_tracked",
     "synced_from_trakt",
     "synced_from_letterboxd",
+    "synced_from_simkl",
 }
 
 
@@ -246,6 +248,94 @@ async def _sync_trakt(
         db.add(rating_job)
 
 
+async def _sync_simkl(
+    db: AsyncSession,
+    watched: WatchedItem,
+    media_item: MediaItem | None,
+    episode_item: EpisodeItem | None,
+    is_rewatch: bool,
+) -> None:
+    if not media_item:
+        return
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        return
+    payload = build_simkl_payload(
+        media_item,
+        episode_item,
+        watched.watched_at,
+        watched.rating,
+    )
+    if not payload:
+        return
+    integration, secret_data = await load_integration_with_secrets(
+        db, watched.user_id, "simkl"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_simkl_fields(secret_data):
+        return
+
+    watch_sync = await _get_watch_sync(db, watched.id, "simkl")
+    if watch_sync and is_synced_status(watch_sync.status):
+        return
+    if watch_sync and watch_sync.status in {"pending", "in_progress"}:
+        return
+
+    same_day_duplicate = await _has_same_day_watch(
+        db,
+        watched.user_id,
+        media_item.id if not episode_item else None,
+        episode_item.id if episode_item else None,
+        watched.watched_at,
+        watched.id,
+    )
+    now = datetime.now(timezone.utc)
+    watch_status = "pending"
+    if same_day_duplicate and watched.rating is None:
+        watch_status = "assumed_tracked"
+
+    if not watch_sync:
+        watch_sync = WatchSync(
+            user_id=watched.user_id,
+            watched_item_id=watched.id,
+            provider="simkl",
+            status=watch_status,
+            is_rewatch=is_rewatch,
+        )
+        if watch_status == "assumed_tracked":
+            watch_sync.last_synced_at = now
+        db.add(watch_sync)
+        await db.flush()
+    else:
+        watch_sync.status = watch_status
+        watch_sync.last_error = None
+        if watch_status == "assumed_tracked":
+            watch_sync.last_synced_at = now
+
+    payload["watch_sync_id"] = watch_sync.id
+    payload["watched_item_id"] = watched.id
+    if watch_status != "assumed_tracked" and not same_day_duplicate:
+        job = OutboxJob(
+            user_id=watched.user_id,
+            target_provider="simkl",
+            job_type="push_watched",
+            payload=payload,
+            status="pending",
+        )
+        db.add(job)
+    if watched.rating is not None:
+        rating_payload = dict(payload)
+        rating_payload["rating"] = watched.rating
+        rating_job = OutboxJob(
+            user_id=watched.user_id,
+            target_provider="simkl",
+            job_type="push_rating",
+            payload=rating_payload,
+            status="pending",
+        )
+        db.add(rating_job)
+
+
 async def _get_watch_sync(
     db: AsyncSession, watched_id: str, provider: str
 ) -> WatchSync | None:
@@ -343,7 +433,67 @@ def collect_trakt_ids(
     return ids
 
 
+def build_simkl_payload(
+    media_item: MediaItem,
+    episode_item: EpisodeItem | None,
+    watched_at: datetime,
+    rating: float | None,
+) -> dict[str, object] | None:
+    if episode_item:
+        show_ids = collect_simkl_ids(
+            media_item.imdb_id, media_item.tmdb_id, media_item.tvdb_id
+        )
+        episode_ids = collect_simkl_ids(
+            episode_item.imdb_id, episode_item.tmdb_id, episode_item.tvdb_id
+        )
+        if not show_ids and not episode_ids:
+            return None
+        payload: dict[str, object] = {
+            "media_type": "tv",
+            "season_number": episode_item.season_number,
+            "episode_number": episode_item.episode_number,
+            "watched_at": watched_at.isoformat(),
+        }
+        if show_ids:
+            payload["show_ids"] = show_ids
+        if episode_ids:
+            payload["episode_ids"] = episode_ids
+        if rating is not None:
+            payload["rating"] = rating
+        return payload
+
+    if media_item.media_type != "movie":
+        return None
+    movie_ids = collect_simkl_ids(
+        media_item.imdb_id, media_item.tmdb_id, media_item.tvdb_id
+    )
+    if not movie_ids:
+        return None
+    payload: dict[str, object] = {
+        "media_type": "movie",
+        "movie_ids": movie_ids,
+        "watched_at": watched_at.isoformat(),
+    }
+    if rating is not None:
+        payload["rating"] = rating
+    return payload
+
+
+def collect_simkl_ids(
+    imdb_id: str | None, tmdb_id: str | None, tvdb_id: str | None
+) -> dict[str, object]:
+    ids: dict[str, object] = {}
+    if imdb_id:
+        ids["imdb"] = imdb_id.lower()
+    if tmdb_id:
+        ids["tmdb"] = tmdb_id
+    if tvdb_id:
+        ids["tvdb"] = tvdb_id
+    return ids
+
+
 SYNC_STRATEGIES: dict[str, SyncStrategy] = {
     "letterboxd": _sync_letterboxd,
     "trakt": _sync_trakt,
+    "simkl": _sync_simkl,
 }

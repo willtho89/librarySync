@@ -9,8 +9,8 @@ Self-hosted, Docker-compose-deployable multi-user sync hub for watch progress. M
 - [x] Ratings
 - [x] Trakt movie/tv sync (incl ratings)
 - [x] Trakt movie/tv import
-- [ ] Simkl movie/tv sync
-- [ ] Simkl movie/tv import
+- [x] Simkl movie/tv sync
+- [x] Simkl movie/tv import
 - [x] Letterbox movie sync (incl ratings)
 - [x] Letterbox movie import
 - [x] Merge History Items and sync to all upstream integrations
@@ -21,6 +21,7 @@ Self-hosted, Docker-compose-deployable multi-user sync hub for watch progress. M
 - [ ] worker logs
 - [ ] Docker as Non Root User
 - [ ] CI/CD Pipelines
+- [ ] Delete history -> delete in integrations.
 - [ ] 
 
 ## TODOs (Not MVP)

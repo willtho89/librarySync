@@ -11,10 +11,12 @@ from sqlalchemy.orm import aliased
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.config import settings
 from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
+from librarysync.connectors.services.simkl import has_required_simkl_fields
 from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_star_rating
 from librarysync.core.watch_pipeline import (
+    build_simkl_payload,
     build_trakt_payload,
     enqueue_new_item_job,
 )
@@ -59,6 +61,9 @@ class WatchedItemOut(BaseModel):
     trakt_status: str | None = None
     trakt_external_id: str | None = None
     trakt_last_error: str | None = None
+    simkl_status: str | None = None
+    simkl_external_id: str | None = None
+    simkl_last_error: str | None = None
 
 
 class WatchedItemCreateIn(BaseModel):
@@ -276,6 +281,7 @@ async def list_watched_items(
     show_item = aliased(MediaItem)
     letterboxd_sync = aliased(WatchSync)
     trakt_sync = aliased(WatchSync)
+    simkl_sync = aliased(WatchSync)
     result = await db.execute(
         select(
             WatchedItem,
@@ -284,6 +290,7 @@ async def list_watched_items(
             show_item,
             letterboxd_sync,
             trakt_sync,
+            simkl_sync,
         )
         .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
         .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
@@ -302,12 +309,19 @@ async def list_watched_items(
                 trakt_sync.provider == "trakt",
             ),
         )
+        .outerjoin(
+            simkl_sync,
+            and_(
+                simkl_sync.watched_item_id == WatchedItem.id,
+                simkl_sync.provider == "simkl",
+            ),
+        )
         .where(WatchedItem.user_id == current_user.id)
         .order_by(WatchedItem.watched_at.desc())
         .limit(limit)
     )
     items = []
-    for watched, media_item, episode_item, show, sync, trakt in result.all():
+    for watched, media_item, episode_item, show, sync, trakt, simkl in result.all():
         base_item = media_item or show
         if not base_item:
             continue
@@ -340,6 +354,9 @@ async def list_watched_items(
                 trakt_status=trakt.status if trakt else None,
                 trakt_external_id=trakt.external_id if trakt else None,
                 trakt_last_error=trakt.last_error if trakt else None,
+                simkl_status=simkl.status if simkl else None,
+                simkl_external_id=simkl.external_id if simkl else None,
+                simkl_last_error=simkl.last_error if simkl else None,
             ).model_dump()
         )
     return {"items": _merge_history_items(items)}
@@ -389,7 +406,9 @@ async def clear_watched_items(
     await db.execute(
         delete(WatchEvent).where(
             WatchEvent.user_id == current_user.id,
-            WatchEvent.event_type.in_(("trakt_imported", "letterboxd_imported")),
+            WatchEvent.event_type.in_(
+                ("trakt_imported", "letterboxd_imported", "simkl_imported")
+            ),
         )
     )
     await db.commit()
@@ -493,6 +512,15 @@ async def update_watched_item(
             )
         if media_item or episode_item:
             await _enqueue_trakt_update_sync(
+                db,
+                current_user.id,
+                watched,
+                media_item or show_item,
+                episode_item,
+                watched_at_updated,
+                rating_updated,
+            )
+            await _enqueue_simkl_update_sync(
                 db,
                 current_user.id,
                 watched,
@@ -863,6 +891,9 @@ def _provider_fields() -> tuple[str, ...]:
         "trakt_status",
         "trakt_external_id",
         "trakt_last_error",
+        "simkl_status",
+        "simkl_external_id",
+        "simkl_last_error",
     )
 
 
@@ -1000,6 +1031,77 @@ async def _enqueue_trakt_update_sync(
         job = OutboxJob(
             user_id=user_id,
             target_provider="trakt",
+            job_type="push_rating",
+            payload=rating_payload,
+            status="pending",
+        )
+        db.add(job)
+
+
+async def _enqueue_simkl_update_sync(
+    db: AsyncSession,
+    user_id: str,
+    watched: WatchedItem,
+    media_item: MediaItem | None,
+    episode_item: EpisodeItem | None,
+    watched_at_updated: bool,
+    rating_updated: bool,
+) -> None:
+    if not media_item:
+        return
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        return
+    integration, secret_data = await load_integration_with_secrets(
+        db, user_id, "simkl"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_simkl_fields(secret_data):
+        return
+    result = await db.execute(
+        select(WatchSync).where(
+            WatchSync.watched_item_id == watched.id, WatchSync.provider == "simkl"
+        )
+    )
+    watch_sync = result.scalars().first()
+    if not watch_sync:
+        return
+    payload = build_simkl_payload(
+        media_item,
+        episode_item,
+        watched.watched_at,
+        watched.rating,
+    )
+    if not payload:
+        return
+    payload["watch_sync_id"] = watch_sync.id
+    payload["watched_item_id"] = watched.id
+    if watch_sync.external_id:
+        payload["history_id"] = watch_sync.external_id
+    if watched_at_updated:
+        payload["watched_at"] = watched.watched_at.isoformat()
+    if rating_updated and watched.rating is not None:
+        payload["rating"] = watched.rating
+
+    watch_sync.status = "pending"
+    watch_sync.last_error = None
+    db.add(watch_sync)
+
+    if watched_at_updated:
+        job = OutboxJob(
+            user_id=user_id,
+            target_provider="simkl",
+            job_type="update_history",
+            payload=payload,
+            status="pending",
+        )
+        db.add(job)
+    if rating_updated and watched.rating is not None:
+        rating_payload = dict(payload)
+        rating_payload["rating"] = watched.rating
+        job = OutboxJob(
+            user_id=user_id,
+            target_provider="simkl",
             job_type="push_rating",
             payload=rating_payload,
             status="pending",

@@ -275,6 +275,34 @@ async function loadIntegrations() {
     }
   }
   applyImportControls("trakt", trakt);
+
+  const simkl = integrations.find((item) => item.provider === "simkl");
+  const simklMessage = document.getElementById("simkl-message");
+  const simklConnect = document.getElementById("simkl-connect");
+  const simklDisconnect = document.getElementById("simkl-disconnect");
+  if (simkl && simkl.has_secrets) {
+    const username =
+      simkl.config && simkl.config.simkl_username ? simkl.config.simkl_username : null;
+    const label = username
+      ? `Connected as ${username}.`
+      : "SIMKL connection is active.";
+    setMessage("simkl-message", label);
+    if (simklConnect) {
+      simklConnect.hidden = true;
+    }
+    if (simklDisconnect) {
+      simklDisconnect.hidden = false;
+    }
+  } else {
+    setMessage("simkl-message", "");
+    if (simklConnect) {
+      simklConnect.hidden = false;
+    }
+    if (simklDisconnect) {
+      simklDisconnect.hidden = true;
+    }
+  }
+  applyImportControls("simkl", simkl);
 }
 
 async function handleAIOStreamsSave(data, form) {
@@ -598,6 +626,23 @@ async function handleTraktDisconnect() {
     await loadIntegrations();
   } catch (error) {
     setMessage("trakt-message", error.message, true);
+  }
+}
+
+function handleSimklConnect() {
+  window.location.href = "/api/integrations/simkl/start";
+}
+
+async function handleSimklDisconnect() {
+  setMessage("simkl-message", "");
+  try {
+    await requestJSON("/api/integrations/simkl/disconnect", {
+      method: "POST",
+    });
+    setMessage("simkl-message", "SIMKL disconnected.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("simkl-message", error.message, true);
   }
 }
 
@@ -1592,6 +1637,18 @@ async function loadHistory() {
         rawError.length > 120 ? `${rawError.slice(0, 120)}...` : rawError;
       detailParts.push(`Trakt error: ${shortError}`);
     }
+    const simklStatus = item.simkl_status;
+    const simklSucceeded = simklStatus === "succeeded";
+    if (simklStatus) {
+      const statusLabel = simklStatus.replace(/_/g, " ");
+      detailParts.push(`SIMKL ${statusLabel}`);
+    }
+    if (!simklSucceeded && item.simkl_last_error) {
+      const rawError = String(item.simkl_last_error);
+      const shortError =
+        rawError.length > 120 ? `${rawError.slice(0, 120)}...` : rawError;
+      detailParts.push(`SIMKL error: ${shortError}`);
+    }
     detail.textContent = detailParts.join(" · ");
 
     const actions = document.createElement("div");
@@ -1760,6 +1817,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindForm("trakt-import-form", (data) =>
     handleImportScheduleSave("trakt", data)
   );
+  bindForm("simkl-import-form", (data) =>
+    handleImportScheduleSave("simkl", data)
+  );
   bindForm("settings-form", handleSettingsSave);
   bindForm("tmdb-form", handleTmdbSave);
   bindForm("tvdb-form", handleTvdbSave);
@@ -1821,6 +1881,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     traktImportNow.addEventListener("click", () =>
       handleImportNow("trakt")
     );
+  }
+  const simklImportNow = document.getElementById("simkl-import-now");
+  if (simklImportNow) {
+    simklImportNow.addEventListener("click", () =>
+      handleImportNow("simkl")
+    );
+  }
+
+  const simklConnect = document.getElementById("simkl-connect");
+  if (simklConnect) {
+    simklConnect.addEventListener("click", handleSimklConnect);
+  }
+  const simklDisconnect = document.getElementById("simkl-disconnect");
+  if (simklDisconnect) {
+    simklDisconnect.addEventListener("click", handleSimklDisconnect);
   }
 
   if (user) {

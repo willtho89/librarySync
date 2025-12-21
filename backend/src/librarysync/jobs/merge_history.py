@@ -245,6 +245,7 @@ def _sync_score(sync: WatchSync) -> int:
         "succeeded": 5,
         "synced_from_trakt": 5,
         "synced_from_letterboxd": 5,
+        "synced_from_simkl": 5,
         "assumed_tracked": 4,
         "pending": 3,
         "in_progress": 2,

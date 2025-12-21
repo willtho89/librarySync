@@ -17,6 +17,20 @@ from librarysync.connectors.services.letterboxd import (
     LetterboxdError,
     has_required_letterboxd_fields,
 )
+from librarysync.connectors.services.simkl import (
+    SimklClient,
+    SimklError,
+    has_required_simkl_fields,
+)
+from librarysync.connectors.services.simkl import (
+    is_token_expired as is_simkl_token_expired,
+)
+from librarysync.connectors.services.simkl import (
+    parse_expires_at as parse_simkl_expires_at,
+)
+from librarysync.connectors.services.simkl import (
+    token_to_secret_payload as simkl_token_to_secret_payload,
+)
 from librarysync.connectors.services.trakt import (
     TraktClient,
     TraktError,
@@ -110,6 +124,17 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
                 response_code, external_id = await _deliver_trakt_update(db, job)
             else:
                 response_code, external_id = await _deliver_trakt_watch(db, job)
+        elif job.target_provider == "simkl" and job.job_type in {
+            "push_watched",
+            "push_rating",
+            "update_history",
+        }:
+            if job.job_type == "push_rating":
+                response_code, external_id = await _deliver_simkl_rating(db, job)
+            elif job.job_type == "update_history":
+                response_code, external_id = await _deliver_simkl_update(db, job)
+            else:
+                response_code, external_id = await _deliver_simkl_watch(db, job)
         elif job.target_provider == "internal" and job.job_type == "new_item_added":
             await process_new_item_job(db, job)
         else:
@@ -121,6 +146,10 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     except TraktError as exc:
         response_code = exc.status_code
         error_message = _format_trakt_error(exc)
+        status = _classify_failure(exc.status_code, error_message)
+    except SimklError as exc:
+        response_code = exc.status_code
+        error_message = _format_simkl_error(exc)
         status = _classify_failure(exc.status_code, error_message)
     except ValueError as exc:
         error_message = str(exc)
@@ -376,6 +405,54 @@ async def _deliver_trakt_update(db: AsyncSession, job: OutboxJob) -> tuple[int |
         raise
 
 
+async def _deliver_simkl_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    watched_at = _parse_datetime(payload.get("watched_at"))
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
+    if not integration or not secret_data:
+        raise SimklError("SIMKL credentials are missing", status_code=401)
+    if not has_required_simkl_fields(secret_data):
+        raise SimklError("SIMKL credentials are incomplete", status_code=401)
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise ValueError("SIMKL client ID/secret are not configured")
+
+    client = SimklClient(
+        client_id=settings.simkl_client_id,
+        client_secret=settings.simkl_client_secret,
+    )
+    access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
+    history_payload = _build_simkl_history_payload(payload, watched_at)
+    response, response_code = await client.add_history(history_payload, access_token)
+    external_id = _extract_simkl_history_id(response)
+    return response_code, external_id
+
+
+async def _deliver_simkl_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    rating = _normalize_simkl_rating(payload.get("rating"))
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
+    if not integration or not secret_data:
+        raise SimklError("SIMKL credentials are missing", status_code=401)
+    if not has_required_simkl_fields(secret_data):
+        raise SimklError("SIMKL credentials are incomplete", status_code=401)
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise ValueError("SIMKL client ID/secret are not configured")
+
+    client = SimklClient(
+        client_id=settings.simkl_client_id,
+        client_secret=settings.simkl_client_secret,
+    )
+    access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
+    ratings_payload = _build_simkl_rating_payload(payload, rating)
+    response, response_code = await client.add_ratings(ratings_payload, access_token)
+    external_id = _extract_simkl_history_id(response)
+    return response_code, external_id
+
+
+async def _deliver_simkl_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
+    return await _deliver_simkl_watch(db, job)
+
+
 def _build_trakt_history_payload(
     payload: dict[str, object], watched_at: datetime
 ) -> dict[str, Any]:
@@ -429,6 +506,59 @@ def _build_trakt_history_payload(
     raise ValueError("Trakt sync requires show or episode ids")
 
 
+def _build_simkl_history_payload(
+    payload: dict[str, object], watched_at: datetime
+) -> dict[str, Any]:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    watched_at_value = watched_at.isoformat()
+    if media_type == "movie":
+        movie_ids = _normalize_simkl_ids(payload.get("movie_ids"))
+        if not movie_ids:
+            raise ValueError("SIMKL sync requires movie ids")
+        return {
+            "movies": [
+                {
+                    "ids": movie_ids,
+                    "watched_at": watched_at_value,
+                }
+            ]
+        }
+
+    show_ids = _normalize_simkl_ids(payload.get("show_ids"))
+    episode_ids = _normalize_simkl_ids(payload.get("episode_ids"))
+    season_number = _coerce_int(payload.get("season_number"))
+    episode_number = _coerce_int(payload.get("episode_number"))
+    if show_ids and season_number is not None and episode_number is not None:
+        return {
+            "shows": [
+                {
+                    "ids": show_ids,
+                    "seasons": [
+                        {
+                            "number": season_number,
+                            "episodes": [
+                                {
+                                    "number": episode_number,
+                                    "watched_at": watched_at_value,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+    if episode_ids:
+        return {
+            "episodes": [
+                {
+                    "ids": episode_ids,
+                    "watched_at": watched_at_value,
+                }
+            ]
+        }
+    raise ValueError("SIMKL sync requires show or episode ids")
+
+
 def _build_trakt_rating_payload(payload: dict[str, object], rating: int) -> dict[str, Any]:
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     if media_type == "movie":
@@ -460,11 +590,59 @@ def _build_trakt_rating_payload(payload: dict[str, object], rating: int) -> dict
     raise ValueError("Trakt rating requires show or episode ids")
 
 
+def _build_simkl_rating_payload(payload: dict[str, object], rating: int) -> dict[str, Any]:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    if media_type == "movie":
+        movie_ids = _normalize_simkl_ids(payload.get("movie_ids"))
+        if not movie_ids:
+            raise ValueError("SIMKL rating requires movie ids")
+        return {"movies": [{"ids": movie_ids, "rating": rating}]}
+
+    show_ids = _normalize_simkl_ids(payload.get("show_ids"))
+    episode_ids = _normalize_simkl_ids(payload.get("episode_ids"))
+    season_number = _coerce_int(payload.get("season_number"))
+    episode_number = _coerce_int(payload.get("episode_number"))
+    if episode_ids:
+        return {"episodes": [{"ids": episode_ids, "rating": rating}]}
+    if show_ids and season_number is not None and episode_number is not None:
+        return {
+            "shows": [
+                {
+                    "ids": show_ids,
+                    "seasons": [
+                        {
+                            "number": season_number,
+                            "episodes": [{"number": episode_number, "rating": rating}],
+                        }
+                    ],
+                }
+            ]
+        }
+    raise ValueError("SIMKL rating requires show or episode ids")
+
+
 def _normalize_trakt_ids(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
     ids: dict[str, object] = {}
     for key in ("imdb", "tmdb", "tvdb", "trakt"):
+        if key not in value:
+            continue
+        entry = value.get(key)
+        if entry is None or entry == "":
+            continue
+        if key == "imdb":
+            ids[key] = str(entry).lower()
+        else:
+            ids[key] = entry
+    return ids
+
+
+def _normalize_simkl_ids(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    ids: dict[str, object] = {}
+    for key in ("imdb", "tmdb", "tvdb", "simkl"):
         if key not in value:
             continue
         entry = value.get(key)
@@ -484,6 +662,16 @@ def _normalize_trakt_rating(value: object) -> int:
     normalized = int(round(rating * 2))
     if normalized < 1 or normalized > 10:
         raise ValueError("Trakt rating must be between 1 and 10")
+    return normalized
+
+
+def _normalize_simkl_rating(value: object) -> int:
+    rating = coerce_star_rating(value)
+    if rating is None:
+        raise ValueError("SIMKL rating must be between 0.5 and 5.0 stars")
+    normalized = int(round(rating * 2))
+    if normalized < 1 or normalized > 10:
+        raise ValueError("SIMKL rating must be between 1 and 10")
     return normalized
 
 
@@ -677,6 +865,28 @@ async def _ensure_trakt_access_token(
     return token.access_token
 
 
+async def _ensure_simkl_access_token(
+    db: AsyncSession,
+    integration_id: str,
+    secret_data: dict[str, object],
+    client: SimklClient,
+) -> str:
+    access_token = secret_data.get("access_token")
+    refresh_token = secret_data.get("refresh_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise SimklError("SIMKL access token is missing", status_code=401)
+    if not isinstance(refresh_token, str) or not refresh_token:
+        return access_token
+    expires_at = parse_simkl_expires_at(secret_data.get("expires_at"))
+    if not is_simkl_token_expired(expires_at):
+        return access_token
+    token = await client.refresh_access_token(refresh_token)
+    updated = dict(secret_data)
+    updated.update(simkl_token_to_secret_payload(token))
+    await _save_integration_secret(db, integration_id, updated)
+    return token.access_token
+
+
 async def _save_integration_secret(
     db: AsyncSession, integration_id: str, secret_data: dict[str, object]
 ) -> None:
@@ -711,6 +921,22 @@ def _extract_trakt_history_id(payload: object, media_type: str | None) -> str | 
         value = payload.get(key)
         if isinstance(value, (str, int)):
             return str(value)
+    return None
+
+
+def _extract_simkl_history_id(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("history", "id", "history_id", "historyId"):
+        value = payload.get(key)
+        if isinstance(value, (str, int)):
+            return str(value)
+    ids = payload.get("ids")
+    if isinstance(ids, dict):
+        for key in ("simkl", "imdb", "tmdb", "tvdb"):
+            value = ids.get(key)
+            if isinstance(value, (str, int)):
+                return str(value)
     return None
 
 
@@ -858,6 +1084,21 @@ def _format_letterboxd_error(error: LetterboxdError) -> str:
 
 
 def _format_trakt_error(error: TraktError) -> str:
+    message = str(error)
+    status_code = error.status_code
+    response_body = error.response_body
+    if response_body:
+        response_body = _shorten(response_body)
+    if status_code and response_body:
+        return f"{message} (status={status_code}, body={response_body})"
+    if status_code:
+        return f"{message} (status={status_code})"
+    if response_body:
+        return f"{message} (body={response_body})"
+    return message
+
+
+def _format_simkl_error(error: SimklError) -> str:
     message = str(error)
     status_code = error.status_code
     response_body = error.response_body

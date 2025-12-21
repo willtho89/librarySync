@@ -17,6 +17,18 @@ from librarysync.connectors.services.letterboxd import (
     extract_member_id,
     has_required_letterboxd_fields,
 )
+from librarysync.connectors.services.simkl import (
+    SIMKL_OAUTH_AUTHORIZE_URL,
+    SimklClient,
+    SimklError,
+    has_required_simkl_fields,
+)
+from librarysync.connectors.services.simkl import (
+    parse_expires_at as parse_simkl_expires_at,
+)
+from librarysync.connectors.services.simkl import (
+    token_to_secret_payload as simkl_token_to_secret_payload,
+)
 from librarysync.connectors.services.trakt import (
     TRAKT_OAUTH_AUTHORIZE_URL,
     TraktClient,
@@ -39,7 +51,7 @@ router = APIRouter(
     tags=["integrations"],
 )
 
-IMPORTABLE_PROVIDERS = {"letterboxd", "trakt"}
+IMPORTABLE_PROVIDERS = {"letterboxd", "trakt", "simkl"}
 
 
 class AIOStreamsConfig(BaseModel):
@@ -106,6 +118,12 @@ async def _load_trakt_integration(
     return await load_integration_with_secrets(db, user_id, "trakt")
 
 
+async def _load_simkl_integration(
+    db: AsyncSession, user_id: str
+) -> tuple[Integration | None, dict[str, object] | None]:
+    return await load_integration_with_secrets(db, user_id, "simkl")
+
+
 def _require_trakt_settings() -> tuple[str, str, str]:
     if not settings.trakt_client_id or not settings.trakt_client_secret:
         raise HTTPException(
@@ -120,6 +138,22 @@ def _require_trakt_settings() -> tuple[str, str, str]:
     base_url = settings.base_url.rstrip("/")
     redirect_uri = f"{base_url}/api/integrations/trakt/callback"
     return settings.trakt_client_id, settings.trakt_client_secret, redirect_uri
+
+
+def _require_simkl_settings() -> tuple[str, str, str]:
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SIMKL client ID/secret are not configured",
+        )
+    if not settings.base_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="LIBRARYSYNC_BASE_URL must be set for SIMKL OAuth",
+        )
+    base_url = settings.base_url.rstrip("/")
+    redirect_uri = f"{base_url}/api/integrations/simkl/callback"
+    return settings.simkl_client_id, settings.simkl_client_secret, redirect_uri
 
 
 @router.get(
@@ -482,6 +516,11 @@ async def trigger_import_now(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Trakt credentials are incomplete",
         )
+    if provider == "simkl" and not has_required_simkl_fields(secret_data):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SIMKL credentials are incomplete",
+        )
     config = set_import_requested(integration.config, datetime.now(timezone.utc))
     integration.config = config
     db.add(integration)
@@ -649,26 +688,194 @@ async def trakt_disconnect(
 
 @router.get(
     "/simkl/start",
-    summary="Start SIMKL OAuth (stub)",
-    description="Placeholder for initiating the SIMKL OAuth flow.",
+    summary="Start SIMKL OAuth",
+    description="Initiate the SIMKL OAuth flow for the current user.",
 )
-async def simkl_start():
-    raise HTTPException(status_code=501, detail="Not implemented")
+async def simkl_start(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    client_id, client_secret, redirect_uri = _require_simkl_settings()
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == "simkl",
+        )
+    )
+    integration = result.scalars().first()
+    if not integration:
+        integration = Integration(
+            user_id=current_user.id,
+            provider="simkl",
+            status="pending",
+        )
+    state = secrets.token_urlsafe(16)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    config = dict(integration.config or {})
+    config["oauth_state"] = state
+    config["oauth_state_expires_at"] = expires_at.isoformat()
+    integration.config = config
+    integration.status = "pending"
+    db.add(integration)
+    await db.commit()
+    client = SimklClient(
+        client_id=client_id,
+        client_secret=client_secret,
+        authorize_url=SIMKL_OAUTH_AUTHORIZE_URL,
+    )
+    redirect_url = client.build_authorize_url(redirect_uri, state)
+    return RedirectResponse(url=redirect_url)
 
 
 @router.get(
     "/simkl/callback",
-    summary="SIMKL OAuth callback (stub)",
-    description="Placeholder for handling the SIMKL OAuth callback.",
+    summary="SIMKL OAuth callback",
+    description="Handle the SIMKL OAuth callback and store tokens.",
 )
-async def simkl_callback():
-    raise HTTPException(status_code=501, detail="Not implemented")
+async def simkl_callback(
+    code: str | None = None,
+    state: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not code or not state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing OAuth code or state",
+        )
+    client_id, client_secret, redirect_uri = _require_simkl_settings()
+    integration, _ = await _load_simkl_integration(db, current_user.id)
+    if not integration:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SIMKL integration not initialized",
+        )
+    config = dict(integration.config or {})
+    stored_state = config.get("oauth_state")
+    stored_expires = parse_simkl_expires_at(config.get("oauth_state_expires_at"))
+    if stored_state is None or stored_state != state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid OAuth state",
+        )
+    if stored_expires and stored_expires < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth state expired",
+        )
+    client = SimklClient(client_id=client_id, client_secret=client_secret)
+    try:
+        token = await client.exchange_code(code, redirect_uri)
+    except SimklError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_format_simkl_error(exc)
+        ) from exc
+
+    secret_payload = simkl_token_to_secret_payload(token)
+    encrypted = encrypt_value(json.dumps(secret_payload))
+    result = await db.execute(
+        select(IntegrationSecret).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    secret = result.scalars().first()
+    if not secret:
+        secret = IntegrationSecret(
+            integration_id=integration.id,
+            secret_data=encrypted,
+        )
+    else:
+        secret.secret_data = encrypted
+    db.add(secret)
+
+    config.pop("oauth_state", None)
+    config.pop("oauth_state_expires_at", None)
+    integration.status = "connected"
+    integration.config = config
+
+    try:
+        me_payload = await client.fetch_me(token.access_token)
+    except SimklError:
+        me_payload = None
+    username = _extract_simkl_username(me_payload)
+    if username:
+        config["simkl_username"] = username
+        integration.config = config
+    db.add(integration)
+    await db.commit()
+    return RedirectResponse(url="/static/integrations.html")
 
 
 @router.post(
     "/simkl/disconnect",
-    summary="Disconnect SIMKL (stub)",
-    description="Placeholder for disconnecting the SIMKL integration.",
+    summary="Disconnect SIMKL",
+    description="Remove stored SIMKL tokens for the current user.",
 )
-async def simkl_disconnect():
-    raise HTTPException(status_code=501, detail="Not implemented")
+async def simkl_disconnect(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == "simkl",
+        )
+    )
+    integration = result.scalars().first()
+    if not integration:
+        return {"status": "ok"}
+    result = await db.execute(
+        select(IntegrationSecret).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    secret = result.scalars().first()
+    if secret:
+        await db.delete(secret)
+    integration.status = "disconnected"
+    config = dict(integration.config or {})
+    config.pop("simkl_username", None)
+    config.pop("oauth_state", None)
+    config.pop("oauth_state_expires_at", None)
+    integration.config = config
+    db.add(integration)
+    await db.commit()
+    return {"status": "ok"}
+
+
+def _extract_simkl_username(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("username", "login", "name"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    user = payload.get("user")
+    if isinstance(user, dict):
+        for key in ("username", "login", "name"):
+            value = user.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _format_simkl_error(error: SimklError) -> str:
+    message = str(error)
+    status_code = error.status_code
+    response_body = error.response_body
+    if response_body:
+        response_body = _shorten_text(response_body)
+    if status_code and response_body:
+        return f"{message} (status={status_code}, body={response_body})"
+    if status_code:
+        return f"{message} (status={status_code})"
+    if response_body:
+        return f"{message} (body={response_body})"
+    return message
+
+
+def _shorten_text(value: str, limit: int = 300) -> str:
+    trimmed = value.strip()
+    if len(trimmed) > limit:
+        return f"{trimmed[:limit]}..."
+    return trimmed

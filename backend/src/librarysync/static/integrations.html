@@ -145,7 +145,35 @@
       </section>
       <section class="card">
         <h2>SIMKL</h2>
-        <button type="button">Connect SIMKL</button>
+        <p id="simkl-message" class="form-message" role="status" hidden></p>
+        <div class="button-row">
+          <button type="button" id="simkl-connect">Connect SIMKL</button>
+          <button type="button" id="simkl-disconnect" class="secondary-button" hidden>
+            Disconnect
+          </button>
+        </div>
+        <h3>History import</h3>
+        <form id="simkl-import-form">
+          <label>
+            Import schedule
+            <select name="import_interval">
+              <option value="">Manual only</option>
+              <option value="21600">Every 6 hours</option>
+              <option value="43200">Every 12 hours</option>
+              <option value="86400">Every day</option>
+              <option value="259200">Every 3 days</option>
+              <option value="604800">Every 7 days</option>
+            </select>
+          </label>
+          <div class="button-row">
+            <button type="submit">Save schedule</button>
+            <button type="button" id="simkl-import-now" class="secondary-button">
+              Import now
+            </button>
+          </div>
+          <p id="simkl-import-last" class="helper-text"></p>
+          <p id="simkl-import-message" class="form-message" role="status" hidden></p>
+        </form>
       </section>
     </main>
   </body>
