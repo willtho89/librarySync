@@ -31,6 +31,12 @@ from librarysync.connectors.services.simkl import (
 from librarysync.connectors.services.simkl import (
     token_to_secret_payload as simkl_token_to_secret_payload,
 )
+from librarysync.connectors.services.stremio import (
+    DEFAULT_STREMIO_API_BASE_URL,
+    StremioClient,
+    StremioError,
+    has_required_stremio_fields,
+)
 from librarysync.connectors.services.trakt import (
     TraktClient,
     TraktError,
@@ -102,9 +108,12 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
             "push_watched",
             "push_rating",
             "update_log_entry",
+            "delete_log_entry",
         }:
             if job.job_type == "update_log_entry":
                 response_code, external_id = await _deliver_letterboxd_log_update(db, job)
+            elif job.job_type == "delete_log_entry":
+                response_code, external_id = await _deliver_letterboxd_delete(db, job)
             else:
                 (
                     response_code,
@@ -117,24 +126,38 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
             "push_watched",
             "push_rating",
             "update_history",
+            "remove_history",
         }:
             if job.job_type == "push_rating":
                 response_code, external_id = await _deliver_trakt_rating(db, job)
             elif job.job_type == "update_history":
                 response_code, external_id = await _deliver_trakt_update(db, job)
+            elif job.job_type == "remove_history":
+                response_code, external_id = await _deliver_trakt_remove(db, job)
             else:
                 response_code, external_id = await _deliver_trakt_watch(db, job)
         elif job.target_provider == "simkl" and job.job_type in {
             "push_watched",
             "push_rating",
             "update_history",
+            "remove_history",
         }:
             if job.job_type == "push_rating":
                 response_code, external_id = await _deliver_simkl_rating(db, job)
             elif job.job_type == "update_history":
                 response_code, external_id = await _deliver_simkl_update(db, job)
+            elif job.job_type == "remove_history":
+                response_code, external_id = await _deliver_simkl_remove(db, job)
             else:
                 response_code, external_id = await _deliver_simkl_watch(db, job)
+        elif job.target_provider == "stremio" and job.job_type in {
+            "push_watched",
+            "remove_watched",
+        }:
+            if job.job_type == "remove_watched":
+                response_code, external_id = await _deliver_stremio_remove(db, job)
+            else:
+                response_code, external_id = await _deliver_stremio_watch(db, job)
         elif job.target_provider == "internal" and job.job_type == "new_item_added":
             await process_new_item_job(db, job)
         else:
@@ -150,6 +173,10 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     except SimklError as exc:
         response_code = exc.status_code
         error_message = _format_simkl_error(exc)
+        status = _classify_failure(exc.status_code, error_message)
+    except StremioError as exc:
+        response_code = exc.status_code
+        error_message = _format_stremio_error(exc)
         status = _classify_failure(exc.status_code, error_message)
     except ValueError as exc:
         error_message = str(exc)
@@ -314,6 +341,34 @@ async def _deliver_letterboxd_log_update(
     return response_code, str(entry_id)
 
 
+async def _deliver_letterboxd_delete(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    entry_id = payload.get("entry_id")
+    if not entry_id:
+        raise ValueError("Letterboxd delete requires a log entry id")
+
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "letterboxd")
+    if not integration or not secret_data:
+        raise LetterboxdError("Letterboxd credentials are missing", status_code=401)
+    if not has_required_letterboxd_fields(secret_data):
+        raise LetterboxdError("Letterboxd credentials are incomplete", status_code=401)
+    api_base_url = DEFAULT_LETTERBOXD_API_BASE_URL
+    if integration.config and integration.config.get("api_base_url"):
+        api_base_url = str(integration.config["api_base_url"])
+    client = LetterboxdClient(
+        api_base_url=api_base_url,
+        client_id=str(secret_data.get("client_id")),
+        client_secret=str(secret_data.get("client_secret")),
+        refresh_token=str(secret_data.get("refresh_token")),
+        cookies=_safe_cookies(secret_data.get("cookies")),
+    )
+    access_token = await client.refresh_access_token()
+    _, response_code = await client.delete_log_entry(str(entry_id), access_token=access_token)
+    return response_code, str(entry_id)
+
+
 async def _deliver_trakt_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     watched_at = _parse_datetime(payload.get("watched_at"))
@@ -405,6 +460,41 @@ async def _deliver_trakt_update(db: AsyncSession, job: OutboxJob) -> tuple[int |
         raise
 
 
+async def _deliver_trakt_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
+    if not integration or not secret_data:
+        raise TraktError("Trakt credentials are missing", status_code=401)
+    if not has_required_trakt_fields(secret_data):
+        raise TraktError("Trakt credentials are incomplete", status_code=401)
+    if not settings.trakt_client_id or not settings.trakt_client_secret:
+        raise ValueError("Trakt client ID/secret are not configured")
+
+    client = TraktClient(
+        client_id=settings.trakt_client_id,
+        client_secret=settings.trakt_client_secret,
+    )
+    access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
+
+    history_id = payload.get("history_id") or payload.get("external_id")
+    history_ids: list[int | str] = []
+    if history_id:
+        values = history_id if isinstance(history_id, list) else [history_id]
+        for value in values:
+            if isinstance(value, (int, float)) and int(value) == value:
+                history_ids.append(int(value))
+            elif isinstance(value, str):
+                cleaned = value.strip()
+                if cleaned:
+                    history_ids.append(int(cleaned) if cleaned.isdigit() else cleaned)
+    if history_ids:
+        remove_payload = {"ids": history_ids}
+    else:
+        remove_payload = _build_trakt_remove_payload(payload)
+    _, response_code = await client.remove_history(remove_payload, access_token)
+    return response_code, None
+
+
 async def _deliver_simkl_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     watched_at = _parse_datetime(payload.get("watched_at"))
@@ -451,6 +541,150 @@ async def _deliver_simkl_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
 
 async def _deliver_simkl_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     return await _deliver_simkl_watch(db, job)
+
+
+async def _deliver_simkl_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
+    if not integration or not secret_data:
+        raise SimklError("SIMKL credentials are missing", status_code=401)
+    if not has_required_simkl_fields(secret_data):
+        raise SimklError("SIMKL credentials are incomplete", status_code=401)
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise ValueError("SIMKL client ID/secret are not configured")
+
+    client = SimklClient(
+        client_id=settings.simkl_client_id,
+        client_secret=settings.simkl_client_secret,
+    )
+    access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
+    remove_payload = _build_simkl_remove_payload(payload)
+    _, response_code = await client.remove_history(remove_payload, access_token)
+    return response_code, None
+
+
+async def _deliver_stremio_watch(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    watched_at = _parse_datetime(payload.get("watched_at"))
+    item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
+    if not item_id:
+        raise ValueError("Stremio sync requires item_id")
+
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "stremio")
+    if not integration or not secret_data:
+        raise StremioError("Stremio credentials are missing", status_code=401)
+    if not has_required_stremio_fields(secret_data):
+        raise StremioError("Stremio credentials are incomplete", status_code=401)
+    auth_key = _coerce_str(secret_data.get("auth_key"))
+    if not auth_key:
+        raise StremioError("Stremio auth key is missing", status_code=401)
+
+    api_base_url = DEFAULT_STREMIO_API_BASE_URL
+    if integration.config and integration.config.get("api_base_url"):
+        api_base_url = str(integration.config["api_base_url"])
+    client = StremioClient(api_base_url=api_base_url)
+    change = _build_stremio_library_change(payload, watched_at)
+    await client.update_library_items(auth_key, [change])
+    return 200, item_id
+
+
+async def _deliver_stremio_remove(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
+    if not item_id:
+        raise ValueError("Stremio sync requires item_id")
+
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "stremio")
+    if not integration or not secret_data:
+        raise StremioError("Stremio credentials are missing", status_code=401)
+    if not has_required_stremio_fields(secret_data):
+        raise StremioError("Stremio credentials are incomplete", status_code=401)
+    auth_key = _coerce_str(secret_data.get("auth_key"))
+    if not auth_key:
+        raise StremioError("Stremio auth key is missing", status_code=401)
+
+    api_base_url = DEFAULT_STREMIO_API_BASE_URL
+    if integration.config and integration.config.get("api_base_url"):
+        api_base_url = str(integration.config["api_base_url"])
+    client = StremioClient(api_base_url=api_base_url)
+    change = _build_stremio_remove_change(payload)
+    await client.update_library_items(auth_key, [change])
+    return 200, item_id
+
+
+def _build_stremio_library_change(
+    payload: dict[str, object], watched_at: datetime
+) -> dict[str, object]:
+    item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
+    if not item_id:
+        raise ValueError("Stremio sync requires item_id")
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    stremio_type = "series" if media_type in {"tv", "series"} else "movie"
+    timestamp = _format_stremio_datetime(watched_at)
+    state: dict[str, object] = {"lastWatched": timestamp}
+
+    times_watched = _coerce_int(payload.get("times_watched"))
+    flagged_watched = _coerce_int(payload.get("flagged_watched"))
+    if times_watched is not None:
+        state["timesWatched"] = max(times_watched, 1)
+    else:
+        state["timesWatched"] = 1
+    if flagged_watched is not None:
+        state["flaggedWatched"] = max(flagged_watched, 1)
+    else:
+        state["flaggedWatched"] = 1
+
+    video_id = _coerce_str(payload.get("video_id"))
+    if video_id:
+        state["video_id"] = video_id
+    season_number = _coerce_int(payload.get("season_number"))
+    if season_number is not None:
+        state["season"] = season_number
+    episode_number = _coerce_int(payload.get("episode_number"))
+    if episode_number is not None:
+        state["episode"] = episode_number
+
+    change: dict[str, object] = {
+        "_id": item_id,
+        "type": stremio_type,
+        "state": state,
+        "_ctime": timestamp,
+        "_mtime": timestamp,
+    }
+    title = _coerce_str(payload.get("title"))
+    if title:
+        change["name"] = title
+    year = payload.get("year")
+    if isinstance(year, int):
+        change["year"] = str(year)
+    elif isinstance(year, str):
+        cleaned = year.strip()
+        if cleaned:
+            change["year"] = cleaned
+    poster = _coerce_str(payload.get("poster"))
+    if poster:
+        change["poster"] = poster
+    return change
+
+
+def _build_stremio_remove_change(payload: dict[str, object]) -> dict[str, object]:
+    item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
+    if not item_id:
+        raise ValueError("Stremio sync requires item_id")
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    stremio_type = "series" if media_type in {"tv", "series"} else "movie"
+    timestamp = _format_stremio_datetime(datetime.now(timezone.utc))
+    return {
+        "_id": item_id,
+        "type": stremio_type,
+        "removed": True,
+        "_ctime": timestamp,
+        "_mtime": timestamp,
+    }
 
 
 def _build_trakt_history_payload(
@@ -506,6 +740,37 @@ def _build_trakt_history_payload(
     raise ValueError("Trakt sync requires show or episode ids")
 
 
+def _build_trakt_remove_payload(payload: dict[str, object]) -> dict[str, Any]:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    if media_type == "movie":
+        movie_ids = _normalize_trakt_ids(payload.get("movie_ids"))
+        if not movie_ids:
+            raise ValueError("Trakt remove requires movie ids")
+        return {"movies": [{"ids": movie_ids}]}
+
+    show_ids = _normalize_trakt_ids(payload.get("show_ids"))
+    episode_ids = _normalize_trakt_ids(payload.get("episode_ids"))
+    season_number = _coerce_int(payload.get("season_number"))
+    episode_number = _coerce_int(payload.get("episode_number"))
+    if episode_ids:
+        return {"episodes": [{"ids": episode_ids}]}
+    if show_ids and season_number is not None and episode_number is not None:
+        return {
+            "shows": [
+                {
+                    "ids": show_ids,
+                    "seasons": [
+                        {
+                            "number": season_number,
+                            "episodes": [{"number": episode_number}],
+                        }
+                    ],
+                }
+            ]
+        }
+    raise ValueError("Trakt remove requires show or episode ids")
+
+
 def _build_simkl_history_payload(
     payload: dict[str, object], watched_at: datetime
 ) -> dict[str, Any]:
@@ -557,6 +822,37 @@ def _build_simkl_history_payload(
             ]
         }
     raise ValueError("SIMKL sync requires show or episode ids")
+
+
+def _build_simkl_remove_payload(payload: dict[str, object]) -> dict[str, Any]:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    if media_type == "movie":
+        movie_ids = _normalize_simkl_ids(payload.get("movie_ids"))
+        if not movie_ids:
+            raise ValueError("SIMKL remove requires movie ids")
+        return {"movies": [{"ids": movie_ids}]}
+
+    show_ids = _normalize_simkl_ids(payload.get("show_ids"))
+    episode_ids = _normalize_simkl_ids(payload.get("episode_ids"))
+    season_number = _coerce_int(payload.get("season_number"))
+    episode_number = _coerce_int(payload.get("episode_number"))
+    if episode_ids:
+        return {"episodes": [{"ids": episode_ids}]}
+    if show_ids and season_number is not None and episode_number is not None:
+        return {
+            "shows": [
+                {
+                    "ids": show_ids,
+                    "seasons": [
+                        {
+                            "number": season_number,
+                            "episodes": [{"number": episode_number}],
+                        }
+                    ],
+                }
+            ]
+        }
+    raise ValueError("SIMKL remove requires show or episode ids")
 
 
 def _build_trakt_rating_payload(payload: dict[str, object], rating: int) -> dict[str, Any]:
@@ -994,6 +1290,13 @@ def _parse_datetime(value: object) -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _format_stremio_datetime(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    utc_value = value.astimezone(timezone.utc)
+    return utc_value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def _coerce_str(value: object) -> str | None:
     if value is None:
         return None
@@ -1099,6 +1402,21 @@ def _format_trakt_error(error: TraktError) -> str:
 
 
 def _format_simkl_error(error: SimklError) -> str:
+    message = str(error)
+    status_code = error.status_code
+    response_body = error.response_body
+    if response_body:
+        response_body = _shorten(response_body)
+    if status_code and response_body:
+        return f"{message} (status={status_code}, body={response_body})"
+    if status_code:
+        return f"{message} (status={status_code})"
+    if response_body:
+        return f"{message} (body={response_body})"
+    return message
+
+
+def _format_stremio_error(error: StremioError) -> str:
     message = str(error)
     status_code = error.status_code
     response_body = error.response_body

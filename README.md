@@ -7,26 +7,26 @@ Self-hosted, Docker-compose-deployable multi-user sync hub for watch progress. M
 - [x] Add Items to Watch History
 - [x] Show Watch History
 - [x] Ratings
-- [x] Trakt movie/tv sync (incl ratings)
+- [x] Trakt movie/tv sync
 - [x] Trakt movie/tv import
 - [x] Simkl movie/tv sync
 - [x] Simkl movie/tv import
-- [x] Letterbox movie sync (incl ratings)
-- [x] Letterbox movie import
+- [x] Letterbox movie sync (based on @dado3212 https://github.com/dado3212/letterboxd-scripts)
+- [x] Letterbox movie import (based on @dado3212 https://github.com/dado3212/letterboxd-scripts)
 - [x] Merge History Items and sync to all upstream integrations
 - [x] Metadata update for imported Items (TV Shows Episode Poster)
 - [x] Add Watch API
+- [x] Sttremio movie/tv sync (based on @MunifTanjim in StremThru)
+- [x] Stremio movie/tv import (based on @MunifTanjim in StremThru)
 - [ ] Ingest playback progress from AIOStreams proxy.
-- [ ] minimal web UI (plain JS + static HTML).
-- [ ] worker logs
+- [x] minimal web UI (plain JS + static HTML).
+- [ ] worker/activity logs
 - [ ] Docker as Non Root User
 - [ ] CI/CD Pipelines
-- [ ] Delete history -> delete in integrations.
-- [ ] 
+- [x] Delete history -> delete in integrations.
 
 ## TODOs (Not MVP)
 - [ ] Anime integrations
-- [ ] Delete history -> delete in integrations.
 - [ ] Setup wizard after register.
 - [ ] scalable & configurable worker system
 - [ ] Overhaul UI/UX (PWA, Mobile Friendly)

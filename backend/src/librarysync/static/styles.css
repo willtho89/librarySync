@@ -184,6 +184,7 @@ button:disabled {
 
 .history-card {
   grid-template-columns: auto 1fr;
+  align-items: start;
   cursor: default;
 }
 
@@ -215,10 +216,17 @@ button:disabled {
   gap: 0.5rem;
 }
 
-.history-actions {
+.history-header {
   display: flex;
-  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
   gap: 0.5rem;
+}
+
+.history-actions {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .history-edit {
@@ -256,4 +264,143 @@ button.danger-button {
 
 button.danger-button:hover {
   background: #991b1b;
+}
+
+.menu-button {
+  border: 1px solid #cbd5f5;
+  background: #ffffff;
+  padding: 0.35rem;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+}
+
+.menu-button:hover {
+  background: #f1f5f9;
+}
+
+.menu-dots {
+  display: grid;
+  gap: 3px;
+}
+
+.menu-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: #1f2933;
+}
+
+.menu-panel {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  min-width: 160px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+  padding: 0.35rem;
+  display: none;
+  z-index: 20;
+}
+
+.menu-panel.is-open {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.menu-panel button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-radius: 8px;
+  padding: 0.45rem 0.75rem;
+  font-weight: 600;
+  color: #1f2933;
+}
+
+.menu-panel button:hover {
+  background: #f1f5f9;
+}
+
+.menu-panel button.danger-button {
+  background: transparent;
+  color: #b91c1c;
+  border: none;
+}
+
+.menu-panel button.danger-button:hover {
+  background: #fee2e2;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 40;
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.modal-panel {
+  position: relative;
+  width: min(90vw, 640px);
+  max-height: min(85vh, 720px);
+  overflow: auto;
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 1.5rem;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2);
+  display: grid;
+  gap: 1rem;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.modal-body {
+  display: grid;
+  gap: 1rem;
+}
+
+.metadata-section {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.metadata-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #1f2933;
+}
+
+.metadata-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 2fr;
+  gap: 0.5rem 1rem;
+}
+
+.metadata-grid dt {
+  font-weight: 600;
+  color: #1f2933;
+}
+
+.metadata-grid dd {
+  margin: 0;
+  color: #475569;
+  word-break: break-word;
 }

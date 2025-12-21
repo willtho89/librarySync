@@ -194,6 +194,23 @@ class LetterboxdClient:
         path = f"/log-entry/{entry_id}"
         return await self._update_json(path, access_token, payload)
 
+    async def delete_log_entry(
+        self,
+        entry_id: str,
+        access_token: str | None = None,
+    ) -> tuple[dict[str, Any], int]:
+        if not access_token:
+            access_token = await self.refresh_access_token()
+        path = f"/log-entry/{entry_id}"
+        response = await self._request("DELETE", path, access_token)
+        if not response.content:
+            return {}, response.status_code
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise LetterboxdError("Letterboxd response was not JSON") from exc
+        return payload if isinstance(payload, dict) else {}, response.status_code
+
     async def resolve_film_id(
         self,
         access_token: str,

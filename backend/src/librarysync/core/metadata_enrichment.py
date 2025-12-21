@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import MediaCandidate
@@ -33,6 +33,10 @@ async def enrich_watched_metadata(
     if not _needs_media_enrichment(media_item, episode_item):
         return
 
+    if await _apply_local_metadata(db, media_item):
+        if not _needs_media_enrichment(media_item, episode_item):
+            return
+
     tmdb = await _load_tmdb_provider(db, user_id)
     tvdb = await _load_tvdb_provider(db, user_id)
     if not tmdb and not tvdb:
@@ -51,20 +55,96 @@ async def enrich_watched_metadata(
             await _apply_candidate_to_media_item(db, media_item, candidate)
 
 
-def _needs_media_enrichment(
-    media_item: MediaItem, episode_item: EpisodeItem | None
-) -> bool:
+def _needs_media_enrichment(media_item: MediaItem, episode_item: EpisodeItem | None) -> bool:
     missing_ids = not media_item.imdb_id or not media_item.tmdb_id or not media_item.tvdb_id
-    poster_missing = not media_item.poster_url or not _is_preferred_poster(
-        media_item.poster_url
-    )
+    poster_missing = not media_item.poster_url or not _is_preferred_poster(media_item.poster_url)
+    missing_year = media_item.year is None
     episode_needs_tmdb = (
         episode_item is not None
         and media_item.media_type == "tv"
         and bool(media_item.tmdb_id)
         and not episode_item.tmdb_id
     )
-    return missing_ids or poster_missing or episode_needs_tmdb
+    return missing_ids or poster_missing or missing_year or episode_needs_tmdb
+
+
+async def _apply_local_metadata(db: AsyncSession, media_item: MediaItem) -> bool:
+    candidate = await _find_local_metadata_candidate(db, media_item)
+    if not candidate:
+        return False
+    updated = False
+    before_ids = (media_item.imdb_id, media_item.tmdb_id, media_item.tvdb_id)
+    if candidate.imdb_id:
+        await _set_media_id(db, media_item, "imdb_id", candidate.imdb_id, normalize=True)
+    if candidate.tmdb_id:
+        await _set_media_id(db, media_item, "tmdb_id", candidate.tmdb_id)
+    if candidate.tvdb_id:
+        await _set_media_id(db, media_item, "tvdb_id", candidate.tvdb_id)
+    if before_ids != (media_item.imdb_id, media_item.tmdb_id, media_item.tvdb_id):
+        updated = True
+    if not media_item.poster_url and candidate.poster_url:
+        media_item.poster_url = candidate.poster_url
+        updated = True
+    if (not media_item.title or media_item.title.startswith("Stremio ")) and candidate.title:
+        media_item.title = candidate.title
+        updated = True
+    if media_item.year is None and candidate.year is not None:
+        media_item.year = candidate.year
+        updated = True
+    return updated
+
+
+async def _find_local_metadata_candidate(
+    db: AsyncSession, media_item: MediaItem
+) -> MediaItem | None:
+    if media_item.imdb_id:
+        result = await db.execute(
+            select(MediaItem).where(
+                MediaItem.imdb_id == media_item.imdb_id,
+                MediaItem.id != media_item.id,
+            )
+        )
+        candidate = result.scalars().first()
+        if candidate:
+            return candidate
+    if media_item.tmdb_id:
+        result = await db.execute(
+            select(MediaItem).where(
+                MediaItem.tmdb_id == media_item.tmdb_id,
+                MediaItem.media_type == media_item.media_type,
+                MediaItem.id != media_item.id,
+            )
+        )
+        candidate = result.scalars().first()
+        if candidate:
+            return candidate
+    if media_item.tvdb_id:
+        result = await db.execute(
+            select(MediaItem).where(
+                MediaItem.tvdb_id == media_item.tvdb_id,
+                MediaItem.media_type == media_item.media_type,
+                MediaItem.id != media_item.id,
+            )
+        )
+        candidate = result.scalars().first()
+        if candidate:
+            return candidate
+    if media_item.title and media_item.year is not None:
+        result = await db.execute(
+            select(MediaItem).where(
+                MediaItem.media_type == media_item.media_type,
+                MediaItem.title == media_item.title,
+                MediaItem.year == media_item.year,
+                MediaItem.id != media_item.id,
+                or_(
+                    MediaItem.imdb_id.is_not(None),
+                    MediaItem.tmdb_id.is_not(None),
+                    MediaItem.tvdb_id.is_not(None),
+                ),
+            )
+        )
+        return result.scalars().first()
+    return None
 
 
 async def _fetch_tmdb_candidate(
@@ -120,10 +200,10 @@ async def _apply_candidate_to_media_item(
     await _set_media_id(db, media_item, "imdb_id", ids.get("imdb_id"), normalize=True)
     await _set_media_id(db, media_item, "tmdb_id", ids.get("tmdb_id"))
     await _set_media_id(db, media_item, "tvdb_id", ids.get("tvdb_id"))
-    if candidate.poster_url and _should_update_poster(
-        media_item.poster_url, candidate.provider
-    ):
+    if candidate.poster_url and _should_update_poster(media_item.poster_url, candidate.provider):
         media_item.poster_url = candidate.poster_url
+    if media_item.year is None and candidate.year is not None:
+        media_item.year = candidate.year
 
 
 async def _apply_tmdb_episode(
@@ -138,9 +218,7 @@ async def _apply_tmdb_episode(
     if episode_item.tmdb_id and episode_item.title:
         return
     try:
-        episodes = await provider.list_episodes(
-            media_item.tmdb_id, episode_item.season_number
-        )
+        episodes = await provider.list_episodes(media_item.tmdb_id, episode_item.season_number)
     except Exception as exc:
         logger.warning("TMDB episode lookup failed for %s: %s", media_item.id, exc)
         return
@@ -154,9 +232,7 @@ async def _apply_tmdb_episode(
         break
 
 
-def _select_candidate(
-    candidates: list[MediaCandidate], scope: str
-) -> MediaCandidate | None:
+def _select_candidate(candidates: list[MediaCandidate], scope: str) -> MediaCandidate | None:
     valid = [candidate for candidate in candidates if candidate.provider_id]
     if not valid:
         return None
@@ -208,9 +284,7 @@ async def _can_assign_id(
     value: str,
 ) -> bool:
     if field == "imdb_id":
-        result = await db.execute(
-            select(MediaItem.id).where(MediaItem.imdb_id == value)
-        )
+        result = await db.execute(select(MediaItem.id).where(MediaItem.imdb_id == value))
     elif field == "tmdb_id":
         result = await db.execute(
             select(MediaItem.id).where(
@@ -311,9 +385,7 @@ def _extract_tmdb_from_remote_ids(raw: dict) -> str | None:
     return None
 
 
-async def _load_tmdb_provider(
-    db: AsyncSession, user_id: str
-) -> TmdbMetadataProvider | None:
+async def _load_tmdb_provider(db: AsyncSession, user_id: str) -> TmdbMetadataProvider | None:
     integration, secret_data = await load_integration_with_secrets(db, user_id, "tmdb")
     if not integration or not integration.config or not integration.config.get("enabled"):
         return None
@@ -336,9 +408,7 @@ async def _load_tmdb_provider(
         return None
 
 
-async def _load_tvdb_provider(
-    db: AsyncSession, user_id: str
-) -> TvdbMetadataProvider | None:
+async def _load_tvdb_provider(db: AsyncSession, user_id: str) -> TvdbMetadataProvider | None:
     integration, secret_data = await load_integration_with_secrets(db, user_id, "tvdb")
     if not integration or not integration.config or not integration.config.get("enabled"):
         return None
@@ -356,7 +426,5 @@ async def _load_tvdb_provider(
 
 
 async def _load_include_adult(db: AsyncSession, user_id: str) -> bool:
-    result = await db.execute(
-        select(User.include_adult_in_search).where(User.id == user_id)
-    )
+    result = await db.execute(select(User.include_adult_in_search).where(User.id == user_id))
     return bool(result.scalar_one_or_none())

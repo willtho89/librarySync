@@ -175,6 +175,57 @@
           <p id="simkl-import-message" class="form-message" role="status" hidden></p>
         </form>
       </section>
+      <section class="card">
+        <h2>Stremio</h2>
+        <form id="stremio-form">
+          <label>
+            Email
+            <input type="email" name="email" autocomplete="username" required />
+          </label>
+          <label>
+            Password
+            <input type="password" name="password" autocomplete="current-password" required />
+          </label>
+          <label>
+            API Base URL (optional)
+            <input type="url" name="api_base_url" placeholder="https://api.strem.io" />
+          </label>
+          <div class="button-row">
+            <button type="submit" id="stremio-connect">Connect Stremio</button>
+            <button type="button" id="stremio-disconnect" class="secondary-button" hidden>
+              Disconnect
+            </button>
+          </div>
+          <p id="stremio-message" class="form-message" role="status" hidden></p>
+        </form>
+        <h3>History import</h3>
+        <form id="stremio-import-form">
+          <label>
+            Import schedule
+            <select name="import_interval">
+              <option value="">Manual only</option>
+              <option value="21600">Every 6 hours</option>
+              <option value="43200">Every 12 hours</option>
+              <option value="86400">Every day</option>
+              <option value="259200">Every 3 days</option>
+              <option value="604800">Every 7 days</option>
+            </select>
+          </label>
+          <div class="button-row">
+            <button type="submit">Save schedule</button>
+            <button type="button" id="stremio-import-now" class="secondary-button">
+              Import now
+            </button>
+          </div>
+          <p id="stremio-import-last" class="helper-text"></p>
+          <p
+            id="stremio-import-message"
+            class="form-message"
+            role="status"
+            hidden
+          ></p>
+        </form>
+      </section>
     </main>
   </body>
 </html>

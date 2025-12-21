@@ -12,11 +12,13 @@ from librarysync.api.deps import get_current_user, get_db
 from librarysync.config import settings
 from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
 from librarysync.connectors.services.simkl import has_required_simkl_fields
+from librarysync.connectors.services.stremio import has_required_stremio_fields
 from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_star_rating
 from librarysync.core.watch_pipeline import (
     build_simkl_payload,
+    build_stremio_payload,
     build_trakt_payload,
     enqueue_new_item_job,
 )
@@ -31,6 +33,36 @@ from librarysync.db.models import (
 )
 
 router = APIRouter(prefix="/api/history", tags=["history"])
+
+
+class HistoryItemIds(BaseModel):
+    imdb_id: str | None = None
+    tmdb_id: str | None = None
+    tvdb_id: str | None = None
+    tvmaze_id: str | None = None
+    kitsu_id: str | None = None
+    myanimelist_id: str | None = None
+
+
+class HistoryEpisodeIds(BaseModel):
+    imdb_id: str | None = None
+    tmdb_id: str | None = None
+    tvdb_id: str | None = None
+    tvmaze_id: str | None = None
+
+
+class HistoryItemMetadata(BaseModel):
+    media_item_id: str | None = None
+    episode_item_id: str | None = None
+    ids: HistoryItemIds
+    episode_ids: HistoryEpisodeIds | None = None
+    media_created_at: datetime | None = None
+    media_updated_at: datetime | None = None
+    episode_created_at: datetime | None = None
+    episode_updated_at: datetime | None = None
+    watched_created_at: datetime | None = None
+    first_sync_at: datetime | None = None
+    last_sync_at: datetime | None = None
 
 
 class WatchedItemOut(BaseModel):
@@ -64,6 +96,10 @@ class WatchedItemOut(BaseModel):
     simkl_status: str | None = None
     simkl_external_id: str | None = None
     simkl_last_error: str | None = None
+    stremio_status: str | None = None
+    stremio_external_id: str | None = None
+    stremio_last_error: str | None = None
+    metadata: HistoryItemMetadata | None = None
 
 
 class WatchedItemCreateIn(BaseModel):
@@ -282,6 +318,7 @@ async def list_watched_items(
     letterboxd_sync = aliased(WatchSync)
     trakt_sync = aliased(WatchSync)
     simkl_sync = aliased(WatchSync)
+    stremio_sync = aliased(WatchSync)
     result = await db.execute(
         select(
             WatchedItem,
@@ -291,6 +328,7 @@ async def list_watched_items(
             letterboxd_sync,
             trakt_sync,
             simkl_sync,
+            stremio_sync,
         )
         .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
         .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
@@ -316,15 +354,64 @@ async def list_watched_items(
                 simkl_sync.provider == "simkl",
             ),
         )
+        .outerjoin(
+            stremio_sync,
+            and_(
+                stremio_sync.watched_item_id == WatchedItem.id,
+                stremio_sync.provider == "stremio",
+            ),
+        )
         .where(WatchedItem.user_id == current_user.id)
         .order_by(WatchedItem.watched_at.desc())
         .limit(limit)
     )
     items = []
-    for watched, media_item, episode_item, show, sync, trakt, simkl in result.all():
+    for watched, media_item, episode_item, show, sync, trakt, simkl, stremio in result.all():
         base_item = media_item or show
         if not base_item:
             continue
+        sync_entries = [entry for entry in (sync, trakt, simkl, stremio) if entry]
+        first_sync_at = (
+            min((entry.created_at for entry in sync_entries), default=None)
+            if sync_entries
+            else None
+        )
+        last_sync_at = None
+        if sync_entries:
+            last_sync_at = max(
+                (
+                    entry.last_synced_at or entry.updated_at or entry.created_at
+                    for entry in sync_entries
+                ),
+                default=None,
+            )
+        metadata = HistoryItemMetadata(
+            media_item_id=base_item.id,
+            episode_item_id=episode_item.id if episode_item else None,
+            ids=HistoryItemIds(
+                imdb_id=base_item.imdb_id,
+                tmdb_id=base_item.tmdb_id,
+                tvdb_id=base_item.tvdb_id,
+                tvmaze_id=base_item.tvmaze_id,
+                kitsu_id=base_item.kitsu_id,
+                myanimelist_id=base_item.myanimelist_id,
+            ),
+            episode_ids=HistoryEpisodeIds(
+                imdb_id=episode_item.imdb_id if episode_item else None,
+                tmdb_id=episode_item.tmdb_id if episode_item else None,
+                tvdb_id=episode_item.tvdb_id if episode_item else None,
+                tvmaze_id=episode_item.tvmaze_id if episode_item else None,
+            )
+            if episode_item
+            else None,
+            media_created_at=base_item.created_at,
+            media_updated_at=base_item.updated_at,
+            episode_created_at=episode_item.created_at if episode_item else None,
+            episode_updated_at=episode_item.updated_at if episode_item else None,
+            watched_created_at=watched.created_at,
+            first_sync_at=first_sync_at,
+            last_sync_at=last_sync_at,
+        )
         items.append(
             WatchedItemOut(
                 id=watched.id,
@@ -357,6 +444,10 @@ async def list_watched_items(
                 simkl_status=simkl.status if simkl else None,
                 simkl_external_id=simkl.external_id if simkl else None,
                 simkl_last_error=simkl.last_error if simkl else None,
+                stremio_status=stremio.status if stremio else None,
+                stremio_external_id=stremio.external_id if stremio else None,
+                stremio_last_error=stremio.last_error if stremio else None,
+                metadata=metadata,
             ).model_dump()
         )
     return {"items": _merge_history_items(items)}
@@ -407,7 +498,12 @@ async def clear_watched_items(
         delete(WatchEvent).where(
             WatchEvent.user_id == current_user.id,
             WatchEvent.event_type.in_(
-                ("trakt_imported", "letterboxd_imported", "simkl_imported")
+                (
+                    "trakt_imported",
+                    "letterboxd_imported",
+                    "simkl_imported",
+                    "stremio_imported",
+                )
             ),
         )
     )
@@ -544,6 +640,9 @@ async def update_watched_item(
 )
 async def delete_watched_item(
     watched_id: str,
+    delete_integrations: bool = Query(
+        False, description="Also delete the item from connected integrations."
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -558,20 +657,62 @@ async def delete_watched_item(
             status_code=status.HTTP_404_NOT_FOUND, detail="Watched entry not found"
         )
 
+    media_item: MediaItem | None = None
+    episode_item: EpisodeItem | None = None
+    show_item: MediaItem | None = None
+    if delete_integrations:
+        if watched.media_item_id:
+            result = await db.execute(
+                select(MediaItem).where(MediaItem.id == watched.media_item_id)
+            )
+            media_item = result.scalars().first()
+        if watched.episode_item_id:
+            result = await db.execute(
+                select(EpisodeItem).where(EpisodeItem.id == watched.episode_item_id)
+            )
+            episode_item = result.scalars().first()
+            if episode_item:
+                result = await db.execute(
+                    select(MediaItem).where(
+                        MediaItem.id == episode_item.show_media_item_id
+                    )
+                )
+                show_item = result.scalars().first()
+
+    event_raw: dict[str, object] = {
+        "watched_id": watched.id,
+        "previous_watched_at": watched.watched_at.isoformat()
+        if watched.watched_at
+        else None,
+    }
+    if delete_integrations:
+        event_raw["delete_integrations"] = True
+
     event = WatchEvent(
         user_id=current_user.id,
         media_item_id=watched.media_item_id,
         episode_item_id=watched.episode_item_id,
         event_type="manual_watched_deleted",
         occurred_at=datetime.now(timezone.utc),
-        raw={
-            "watched_id": watched.id,
-            "previous_watched_at": watched.watched_at.isoformat()
-            if watched.watched_at
-            else None,
-        },
+        raw=event_raw,
     )
     db.add(event)
+    if delete_integrations:
+        target_media = media_item or show_item
+        if media_item:
+            await _enqueue_letterboxd_delete_sync(
+                db, current_user.id, watched, media_item
+            )
+        if target_media:
+            await _enqueue_trakt_delete_sync(
+                db, current_user.id, watched, target_media, episode_item
+            )
+            await _enqueue_simkl_delete_sync(
+                db, current_user.id, watched, target_media, episode_item
+            )
+            await _enqueue_stremio_delete_sync(
+                db, current_user.id, watched, target_media, episode_item
+            )
     await db.delete(watched)
     await db.commit()
     return {"status": "deleted"}
@@ -894,6 +1035,9 @@ def _provider_fields() -> tuple[str, ...]:
         "simkl_status",
         "simkl_external_id",
         "simkl_last_error",
+        "stremio_status",
+        "stremio_external_id",
+        "stremio_last_error",
     )
 
 
@@ -913,6 +1057,7 @@ def _metadata_fields() -> tuple[str, ...]:
         "episode_tmdb_id",
         "episode_tvdb_id",
         "episode_tvmaze_id",
+        "metadata",
     )
 
 
@@ -1107,6 +1252,154 @@ async def _enqueue_simkl_update_sync(
             status="pending",
         )
         db.add(job)
+
+
+async def _enqueue_letterboxd_delete_sync(
+    db: AsyncSession,
+    user_id: str,
+    watched: WatchedItem,
+    media_item: MediaItem,
+) -> None:
+    if media_item.media_type != "movie":
+        return
+    integration, secret_data = await load_integration_with_secrets(
+        db, user_id, "letterboxd"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_letterboxd_fields(secret_data):
+        return
+    result = await db.execute(
+        select(WatchSync).where(
+            WatchSync.watched_item_id == watched.id, WatchSync.provider == "letterboxd"
+        )
+    )
+    watch_sync = result.scalars().first()
+    if not watch_sync or not watch_sync.external_id:
+        return
+    payload = {
+        "entry_id": watch_sync.external_id,
+        "watched_item_id": watched.id,
+    }
+    job = OutboxJob(
+        user_id=user_id,
+        target_provider="letterboxd",
+        job_type="delete_log_entry",
+        payload=payload,
+        status="pending",
+    )
+    db.add(job)
+
+
+async def _enqueue_trakt_delete_sync(
+    db: AsyncSession,
+    user_id: str,
+    watched: WatchedItem,
+    media_item: MediaItem,
+    episode_item: EpisodeItem | None,
+) -> None:
+    if not settings.trakt_client_id or not settings.trakt_client_secret:
+        return
+    integration, secret_data = await load_integration_with_secrets(
+        db, user_id, "trakt"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_trakt_fields(secret_data):
+        return
+    payload = build_trakt_payload(
+        media_item,
+        episode_item,
+        watched.watched_at,
+        watched.rating,
+    )
+    if not payload:
+        return
+    payload.pop("watched_at", None)
+    payload.pop("rating", None)
+    result = await db.execute(
+        select(WatchSync).where(
+            WatchSync.watched_item_id == watched.id, WatchSync.provider == "trakt"
+        )
+    )
+    watch_sync = result.scalars().first()
+    if watch_sync and watch_sync.external_id:
+        payload["history_id"] = watch_sync.external_id
+    payload["watched_item_id"] = watched.id
+    job = OutboxJob(
+        user_id=user_id,
+        target_provider="trakt",
+        job_type="remove_history",
+        payload=payload,
+        status="pending",
+    )
+    db.add(job)
+
+
+async def _enqueue_simkl_delete_sync(
+    db: AsyncSession,
+    user_id: str,
+    watched: WatchedItem,
+    media_item: MediaItem,
+    episode_item: EpisodeItem | None,
+) -> None:
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        return
+    integration, secret_data = await load_integration_with_secrets(
+        db, user_id, "simkl"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_simkl_fields(secret_data):
+        return
+    payload = build_simkl_payload(
+        media_item,
+        episode_item,
+        watched.watched_at,
+        watched.rating,
+    )
+    if not payload:
+        return
+    payload.pop("watched_at", None)
+    payload.pop("rating", None)
+    payload["watched_item_id"] = watched.id
+    job = OutboxJob(
+        user_id=user_id,
+        target_provider="simkl",
+        job_type="remove_history",
+        payload=payload,
+        status="pending",
+    )
+    db.add(job)
+
+
+async def _enqueue_stremio_delete_sync(
+    db: AsyncSession,
+    user_id: str,
+    watched: WatchedItem,
+    media_item: MediaItem,
+    episode_item: EpisodeItem | None,
+) -> None:
+    integration, secret_data = await load_integration_with_secrets(
+        db, user_id, "stremio"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_stremio_fields(secret_data):
+        return
+    payload = build_stremio_payload(media_item, episode_item, watched.watched_at)
+    if not payload:
+        return
+    payload.pop("watched_at", None)
+    payload["watched_item_id"] = watched.id
+    job = OutboxJob(
+        user_id=user_id,
+        target_provider="stremio",
+        job_type="remove_watched",
+        payload=payload,
+        status="pending",
+    )
+    db.add(job)
 
 
 async def _find_media_item_by_ids(

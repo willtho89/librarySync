@@ -28,3 +28,4 @@ __pypackages__/
 .DS_Store
 Thumbs.db
 external-api-docs/*
+*test-output.xml

@@ -303,6 +303,34 @@ async function loadIntegrations() {
     }
   }
   applyImportControls("simkl", simkl);
+
+  const stremio = integrations.find((item) => item.provider === "stremio");
+  const stremioForm = document.getElementById("stremio-form");
+  if (stremioForm) {
+    const apiBaseInput = stremioForm.querySelector("input[name='api_base_url']");
+    if (stremio && stremio.config && stremio.config.api_base_url && apiBaseInput) {
+      apiBaseInput.value = stremio.config.api_base_url;
+    }
+  }
+  const stremioMessage = document.getElementById("stremio-message");
+  const stremioDisconnect = document.getElementById("stremio-disconnect");
+  if (stremio && stremio.has_secrets) {
+    const name =
+      stremio.config && stremio.config.stremio_name ? stremio.config.stremio_name : null;
+    const email =
+      stremio.config && stremio.config.stremio_email ? stremio.config.stremio_email : null;
+    const label = name || email ? `Connected as ${name || email}.` : "Stremio is connected.";
+    setMessage("stremio-message", label);
+    if (stremioDisconnect) {
+      stremioDisconnect.hidden = false;
+    }
+  } else {
+    setMessage("stremio-message", "");
+    if (stremioDisconnect) {
+      stremioDisconnect.hidden = true;
+    }
+  }
+  applyImportControls("stremio", stremio);
 }
 
 async function handleAIOStreamsSave(data, form) {
@@ -643,6 +671,52 @@ async function handleSimklDisconnect() {
     await loadIntegrations();
   } catch (error) {
     setMessage("simkl-message", error.message, true);
+  }
+}
+
+async function handleStremioConnect(data, form) {
+  setMessage("stremio-message", "");
+  const email = (data.get("email") || "").trim();
+  const password = data.get("password") || "";
+  const apiBaseUrl = (data.get("api_base_url") || "").trim();
+  if (!email) {
+    setMessage("stremio-message", "Email is required.", true);
+    return;
+  }
+  if (!password || !password.trim()) {
+    setMessage("stremio-message", "Password is required.", true);
+    return;
+  }
+  const payload = { email, password };
+  if (apiBaseUrl) {
+    payload.api_base_url = apiBaseUrl;
+  }
+  try {
+    await requestJSON("/api/integrations/stremio/login", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const passwordInput = form.querySelector("input[name='password']");
+    if (passwordInput) {
+      passwordInput.value = "";
+    }
+    setMessage("stremio-message", "Connected.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("stremio-message", error.message, true);
+  }
+}
+
+async function handleStremioDisconnect() {
+  setMessage("stremio-message", "");
+  try {
+    await requestJSON("/api/integrations/stremio/disconnect", {
+      method: "POST",
+    });
+    setMessage("stremio-message", "Stremio disconnected.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("stremio-message", error.message, true);
   }
 }
 
@@ -1554,11 +1628,208 @@ function formatProviderLabel(value) {
   return normalized.toUpperCase();
 }
 
+let historyUiBound = false;
+
+function bindHistoryUi() {
+  if (historyUiBound) {
+    return;
+  }
+  const modal = document.getElementById("metadata-modal");
+  if (!modal) {
+    return;
+  }
+  modal.querySelectorAll("[data-modal-close]").forEach((button) => {
+    button.addEventListener("click", closeMetadataModal);
+  });
+  document.addEventListener("click", (event) => {
+    if (event.target && event.target.closest(".history-actions")) {
+      return;
+    }
+    closeHistoryMenus();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeHistoryMenus();
+      closeMetadataModal();
+    }
+  });
+  historyUiBound = true;
+}
+
+function closeHistoryMenus() {
+  document.querySelectorAll("[data-menu-panel].is-open").forEach((panel) => {
+    panel.classList.remove("is-open");
+  });
+  document.querySelectorAll("[data-menu-button]").forEach((button) => {
+    button.setAttribute("aria-expanded", "false");
+  });
+}
+
+function formatMetadataDate(value) {
+  if (!value) {
+    return "—";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return "—";
+  }
+  return date.toLocaleString();
+}
+
+function formatMetadataValue(value) {
+  if (!value) {
+    return "—";
+  }
+  return String(value);
+}
+
+function renderMetadataSection(title, rows) {
+  const section = document.createElement("section");
+  section.className = "metadata-section";
+  const header = document.createElement("h3");
+  header.textContent = title;
+  section.appendChild(header);
+  const list = document.createElement("dl");
+  list.className = "metadata-grid";
+  rows.forEach((row) => {
+    const term = document.createElement("dt");
+    term.textContent = row.label;
+    const desc = document.createElement("dd");
+    desc.textContent = row.value;
+    list.appendChild(term);
+    list.appendChild(desc);
+  });
+  section.appendChild(list);
+  return section;
+}
+
+function openMetadataModal(item) {
+  const modal = document.getElementById("metadata-modal");
+  const body = document.getElementById("metadata-body");
+  const title = document.getElementById("metadata-title");
+  if (!modal || !body || !title) {
+    return;
+  }
+  const metadata = item.metadata || {};
+  const ids = {
+    imdb_id: (metadata.ids && metadata.ids.imdb_id) || item.imdb_id,
+    tmdb_id: (metadata.ids && metadata.ids.tmdb_id) || item.tmdb_id,
+    tvdb_id: (metadata.ids && metadata.ids.tvdb_id) || item.tvdb_id,
+    tvmaze_id: (metadata.ids && metadata.ids.tvmaze_id) || item.tvmaze_id,
+    kitsu_id: (metadata.ids && metadata.ids.kitsu_id) || item.kitsu_id,
+    myanimelist_id:
+      (metadata.ids && metadata.ids.myanimelist_id) || item.myanimelist_id,
+  };
+  const episodeIds = {
+    imdb_id:
+      (metadata.episode_ids && metadata.episode_ids.imdb_id) ||
+      item.episode_imdb_id,
+    tmdb_id:
+      (metadata.episode_ids && metadata.episode_ids.tmdb_id) ||
+      item.episode_tmdb_id,
+    tvdb_id:
+      (metadata.episode_ids && metadata.episode_ids.tvdb_id) ||
+      item.episode_tvdb_id,
+    tvmaze_id:
+      (metadata.episode_ids && metadata.episode_ids.tvmaze_id) ||
+      item.episode_tvmaze_id,
+  };
+  title.textContent = `Metadata for ${item.title}`;
+  body.innerHTML = "";
+
+  const systemRows = [
+    { label: "Watched entry ID", value: formatMetadataValue(item.id) },
+    {
+      label: "Media item ID",
+      value: formatMetadataValue(metadata.media_item_id),
+    },
+  ];
+  if (item.media_type === "tv") {
+    systemRows.push({
+      label: "Episode item ID",
+      value: formatMetadataValue(metadata.episode_item_id),
+    });
+  }
+  body.appendChild(renderMetadataSection("Library IDs", systemRows));
+
+  const externalRows = [
+    { label: "IMDb", value: formatMetadataValue(ids.imdb_id) },
+    { label: "TMDB", value: formatMetadataValue(ids.tmdb_id) },
+    { label: "TVDB", value: formatMetadataValue(ids.tvdb_id) },
+    { label: "TVMaze", value: formatMetadataValue(ids.tvmaze_id) },
+    { label: "Kitsu", value: formatMetadataValue(ids.kitsu_id) },
+    { label: "MyAnimeList", value: formatMetadataValue(ids.myanimelist_id) },
+  ];
+  body.appendChild(renderMetadataSection("External IDs", externalRows));
+
+  if (item.media_type === "tv") {
+    const episodeRows = [
+      { label: "Episode IMDb", value: formatMetadataValue(episodeIds.imdb_id) },
+      { label: "Episode TMDB", value: formatMetadataValue(episodeIds.tmdb_id) },
+      { label: "Episode TVDB", value: formatMetadataValue(episodeIds.tvdb_id) },
+      {
+        label: "Episode TVMaze",
+        value: formatMetadataValue(episodeIds.tvmaze_id),
+      },
+    ];
+    body.appendChild(renderMetadataSection("Episode IDs", episodeRows));
+  }
+
+  const timestampRows = [
+    {
+      label: "Watched entry created",
+      value: formatMetadataDate(metadata.watched_created_at),
+    },
+    {
+      label: "Media metadata created",
+      value: formatMetadataDate(metadata.media_created_at),
+    },
+    {
+      label: "Media metadata updated",
+      value: formatMetadataDate(metadata.media_updated_at),
+    },
+  ];
+  if (metadata.episode_created_at || metadata.episode_updated_at) {
+    timestampRows.push(
+      {
+        label: "Episode metadata created",
+        value: formatMetadataDate(metadata.episode_created_at),
+      },
+      {
+        label: "Episode metadata updated",
+        value: formatMetadataDate(metadata.episode_updated_at),
+      },
+    );
+  }
+  timestampRows.push(
+    {
+      label: "First sync attempt",
+      value: formatMetadataDate(metadata.first_sync_at),
+    },
+    {
+      label: "Last sync update",
+      value: formatMetadataDate(metadata.last_sync_at),
+    },
+  );
+  body.appendChild(renderMetadataSection("Timestamps", timestampRows));
+
+  modal.removeAttribute("hidden");
+}
+
+function closeMetadataModal() {
+  const modal = document.getElementById("metadata-modal");
+  if (!modal) {
+    return;
+  }
+  modal.setAttribute("hidden", "");
+}
+
 async function loadHistory() {
   const container = document.getElementById("history-list");
   if (!container) {
     return;
   }
+  bindHistoryUi();
   const clearButton = document.getElementById("history-clear");
   const data = await requestJSON("/api/history/items");
   const items = data && data.items ? data.items : [];
@@ -1649,23 +1920,70 @@ async function loadHistory() {
         rawError.length > 120 ? `${rawError.slice(0, 120)}...` : rawError;
       detailParts.push(`SIMKL error: ${shortError}`);
     }
+    const stremioStatus = item.stremio_status;
+    const stremioSucceeded = stremioStatus === "succeeded";
+    if (stremioStatus) {
+      const statusLabel = stremioStatus.replace(/_/g, " ");
+      detailParts.push(`Stremio ${statusLabel}`);
+    }
+    if (!stremioSucceeded && item.stremio_last_error) {
+      const rawError = String(item.stremio_last_error);
+      const shortError =
+        rawError.length > 120 ? `${rawError.slice(0, 120)}...` : rawError;
+      detailParts.push(`Stremio error: ${shortError}`);
+    }
     detail.textContent = detailParts.join(" · ");
+
+    const header = document.createElement("div");
+    header.className = "history-header";
 
     const actions = document.createElement("div");
     actions.className = "history-actions";
 
+    const menuButton = document.createElement("button");
+    menuButton.type = "button";
+    menuButton.className = "menu-button";
+    menuButton.setAttribute("aria-haspopup", "true");
+    menuButton.setAttribute("aria-expanded", "false");
+    menuButton.setAttribute("aria-label", "More actions");
+    menuButton.setAttribute("data-menu-button", "true");
+
+    const dotStack = document.createElement("span");
+    dotStack.className = "menu-dots";
+    for (let i = 0; i < 3; i += 1) {
+      const dot = document.createElement("span");
+      dot.className = "menu-dot";
+      dotStack.appendChild(dot);
+    }
+    menuButton.appendChild(dotStack);
+
+    const menuPanel = document.createElement("div");
+    menuPanel.className = "menu-panel";
+    menuPanel.setAttribute("role", "menu");
+    menuPanel.setAttribute("data-menu-panel", "true");
+
     const editButton = document.createElement("button");
     editButton.type = "button";
-    editButton.className = "secondary-button";
-    editButton.textContent = "Edit";
+    editButton.textContent = "Edit watch";
+    editButton.setAttribute("role", "menuitem");
+
+    const metadataButton = document.createElement("button");
+    metadataButton.type = "button";
+    metadataButton.textContent = "View metadata";
+    metadataButton.setAttribute("role", "menuitem");
 
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "danger-button";
     deleteButton.textContent = "Delete";
+    deleteButton.setAttribute("role", "menuitem");
 
-    actions.appendChild(editButton);
-    actions.appendChild(deleteButton);
+    menuPanel.appendChild(editButton);
+    menuPanel.appendChild(metadataButton);
+    menuPanel.appendChild(deleteButton);
+
+    actions.appendChild(menuButton);
+    actions.appendChild(menuPanel);
 
     const editRow = document.createElement("div");
     editRow.className = "history-edit";
@@ -1692,9 +2010,25 @@ async function loadHistory() {
     editRow.appendChild(saveButton);
     editRow.appendChild(cancelButton);
 
+    menuButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const isOpen = menuPanel.classList.contains("is-open");
+      closeHistoryMenus();
+      if (!isOpen) {
+        menuPanel.classList.add("is-open");
+        menuButton.setAttribute("aria-expanded", "true");
+      }
+    });
+
     editButton.addEventListener("click", () => {
+      closeHistoryMenus();
       editRow.classList.add("is-visible");
       editInput.focus();
+    });
+
+    metadataButton.addEventListener("click", () => {
+      closeHistoryMenus();
+      openMetadataModal(item);
     });
 
     cancelButton.addEventListener("click", () => {
@@ -1739,15 +2073,23 @@ async function loadHistory() {
     });
 
     deleteButton.addEventListener("click", async () => {
+      closeHistoryMenus();
       const confirmed = window.confirm(
         `Delete "${item.title}" from your history?`
       );
       if (!confirmed) {
         return;
       }
+      const deleteIntegrations = window.confirm(
+        "Also delete this item from all connected integrations? " +
+          "Click OK to remove it there too, or Cancel to delete locally only."
+      );
       try {
         setMessage("history-message", "Deleting...");
-        await requestJSON(`/api/history/items/${item.id}`, {
+        const url = deleteIntegrations
+          ? `/api/history/items/${item.id}?delete_integrations=true`
+          : `/api/history/items/${item.id}`;
+        await requestJSON(url, {
           method: "DELETE",
         });
         setMessage("history-message", "Entry deleted.");
@@ -1757,9 +2099,10 @@ async function loadHistory() {
       }
     });
 
-    meta.appendChild(title);
+    header.appendChild(title);
+    header.appendChild(actions);
+    meta.appendChild(header);
     meta.appendChild(detail);
-    meta.appendChild(actions);
     meta.appendChild(editRow);
     card.appendChild(poster);
     card.appendChild(meta);
@@ -1813,6 +2156,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindForm("letterboxd-form", handleLetterboxdSave);
   bindForm("letterboxd-import-form", (data) =>
     handleImportScheduleSave("letterboxd", data)
+  );
+  bindForm("stremio-form", handleStremioConnect);
+  bindForm("stremio-import-form", (data) =>
+    handleImportScheduleSave("stremio", data)
   );
   bindForm("trakt-import-form", (data) =>
     handleImportScheduleSave("trakt", data)
@@ -1888,6 +2235,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       handleImportNow("simkl")
     );
   }
+  const stremioImportNow = document.getElementById("stremio-import-now");
+  if (stremioImportNow) {
+    stremioImportNow.addEventListener("click", () =>
+      handleImportNow("stremio")
+    );
+  }
 
   const simklConnect = document.getElementById("simkl-connect");
   if (simklConnect) {
@@ -1896,6 +2249,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   const simklDisconnect = document.getElementById("simkl-disconnect");
   if (simklDisconnect) {
     simklDisconnect.addEventListener("click", handleSimklDisconnect);
+  }
+  const stremioDisconnect = document.getElementById("stremio-disconnect");
+  if (stremioDisconnect) {
+    stremioDisconnect.addEventListener("click", handleStremioDisconnect);
   }
 
   if (user) {

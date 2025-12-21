@@ -34,5 +34,22 @@
         <div id="history-list" class="candidate-list">Loading...</div>
       </section>
     </main>
+    <div id="metadata-modal" class="modal" hidden>
+      <div class="modal-backdrop" data-modal-close></div>
+      <div
+        class="modal-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="metadata-title"
+      >
+        <header class="modal-header">
+          <h2 id="metadata-title">Item metadata</h2>
+          <button type="button" class="secondary-button" data-modal-close>
+            Close
+          </button>
+        </header>
+        <div id="metadata-body" class="modal-body"></div>
+      </div>
+    </div>
   </body>
 </html>

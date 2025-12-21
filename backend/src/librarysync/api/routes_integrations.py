@@ -29,6 +29,11 @@ from librarysync.connectors.services.simkl import (
 from librarysync.connectors.services.simkl import (
     token_to_secret_payload as simkl_token_to_secret_payload,
 )
+from librarysync.connectors.services.stremio import (
+    DEFAULT_STREMIO_API_BASE_URL,
+    StremioClient,
+    StremioError,
+)
 from librarysync.connectors.services.trakt import (
     TRAKT_OAUTH_AUTHORIZE_URL,
     TraktClient,
@@ -51,7 +56,7 @@ router = APIRouter(
     tags=["integrations"],
 )
 
-IMPORTABLE_PROVIDERS = {"letterboxd", "trakt", "simkl"}
+IMPORTABLE_PROVIDERS = {"letterboxd", "trakt", "simkl", "stremio"}
 
 
 class AIOStreamsConfig(BaseModel):
@@ -81,6 +86,12 @@ class LetterboxdConfig(BaseModel):
     client_secret: str | None = None
     refresh_token: str | None = None
     cookies: dict[str, str] | None = None
+
+
+class StremioLoginConfig(BaseModel):
+    email: str
+    password: str
+    api_base_url: str | None = None
 
 
 class ImportScheduleIn(BaseModel):
@@ -843,6 +854,121 @@ async def simkl_disconnect(
     return {"status": "ok"}
 
 
+@router.post(
+    "/stremio/login",
+    summary="Connect Stremio",
+    description="Login to Stremio and store the auth key for the current user.",
+)
+async def stremio_login(
+    payload: StremioLoginConfig,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    email = payload.email.strip()
+    password = payload.password
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Email is required"
+        )
+    if not password or not password.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Password is required"
+        )
+    api_base_url = _normalize_optional(payload.api_base_url)
+
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == "stremio",
+        )
+    )
+    integration = result.scalars().first()
+    existing_base = None
+    if integration and integration.config:
+        existing_base = integration.config.get("api_base_url")
+    if not api_base_url:
+        api_base_url = existing_base or DEFAULT_STREMIO_API_BASE_URL
+
+    client = StremioClient(api_base_url=api_base_url)
+    try:
+        login = await client.login(email, password)
+    except StremioError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_format_stremio_error(exc)
+        ) from exc
+
+    if not integration:
+        integration = Integration(
+            user_id=current_user.id,
+            provider="stremio",
+            status="connected",
+        )
+
+    config = dict(integration.config or {})
+    config["api_base_url"] = api_base_url
+    _clear_stremio_profile(config)
+    _apply_stremio_profile(config, login.user, email)
+    integration.status = "connected"
+    integration.config = config
+    db.add(integration)
+    await db.flush()
+
+    secret_payload = {"auth_key": login.auth_key}
+    encrypted = encrypt_value(json.dumps(secret_payload))
+    result = await db.execute(
+        select(IntegrationSecret).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    secret = result.scalars().first()
+    if not secret:
+        secret = IntegrationSecret(
+            integration_id=integration.id,
+            secret_data=encrypted,
+        )
+    else:
+        secret.secret_data = encrypted
+    db.add(secret)
+
+    await db.commit()
+    return _integration_to_out(integration, True).model_dump()
+
+
+@router.post(
+    "/stremio/disconnect",
+    summary="Disconnect Stremio",
+    description="Remove stored Stremio auth key for the current user.",
+)
+async def stremio_disconnect(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == "stremio",
+        )
+    )
+    integration = result.scalars().first()
+    if not integration:
+        return {"status": "ok"}
+    result = await db.execute(
+        select(IntegrationSecret).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    secret = result.scalars().first()
+    if secret:
+        await db.delete(secret)
+    integration.status = "disconnected"
+    config = dict(integration.config or {})
+    _clear_stremio_profile(config)
+    integration.config = config
+    db.add(integration)
+    await db.commit()
+    return {"status": "ok"}
+
+
 def _extract_simkl_username(payload: object) -> str | None:
     if not isinstance(payload, dict):
         return None
@@ -879,3 +1005,61 @@ def _shorten_text(value: str, limit: int = 300) -> str:
     if len(trimmed) > limit:
         return f"{trimmed[:limit]}..."
     return trimmed
+
+
+def _apply_stremio_profile(
+    config: dict[str, object],
+    user_payload: object,
+    fallback_email: str | None = None,
+) -> None:
+    user: dict[str, object] = {}
+    if isinstance(user_payload, dict):
+        user = {str(key): value for key, value in user_payload.items()}
+
+    user_id = _coerce_stremio_field(user.get("_id")) or _coerce_stremio_field(
+        user.get("id")
+    )
+    if user_id:
+        config["stremio_user_id"] = user_id
+
+    email = _coerce_stremio_field(user.get("email")) or fallback_email
+    if email:
+        config["stremio_email"] = email
+
+    name = _coerce_stremio_field(user.get("fullname"))
+    if name:
+        config["stremio_name"] = name
+
+
+def _clear_stremio_profile(config: dict[str, object]) -> None:
+    for key in ("stremio_user_id", "stremio_email", "stremio_name"):
+        config.pop(key, None)
+
+
+def _coerce_stremio_field(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _format_stremio_error(error: StremioError) -> str:
+    message = str(error)
+    status_code = error.status_code
+    code = error.code
+    response_body = error.response_body
+    if response_body:
+        response_body = _shorten_text(response_body)
+    if code and status_code and response_body:
+        return f"{message} (code={code}, status={status_code}, body={response_body})"
+    if code and status_code:
+        return f"{message} (code={code}, status={status_code})"
+    if status_code and response_body:
+        return f"{message} (status={status_code}, body={response_body})"
+    if code:
+        return f"{message} (code={code})"
+    if status_code:
+        return f"{message} (status={status_code})"
+    if response_body:
+        return f"{message} (body={response_body})"
+    return message

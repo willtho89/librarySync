@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from librarysync.config import settings
 from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
 from librarysync.connectors.services.simkl import has_required_simkl_fields
+from librarysync.connectors.services.stremio import has_required_stremio_fields
 from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
@@ -31,6 +32,7 @@ SUCCESS_STATUSES = {
     "synced_from_trakt",
     "synced_from_letterboxd",
     "synced_from_simkl",
+    "synced_from_stremio",
 }
 
 
@@ -336,6 +338,58 @@ async def _sync_simkl(
         db.add(rating_job)
 
 
+async def _sync_stremio(
+    db: AsyncSession,
+    watched: WatchedItem,
+    media_item: MediaItem | None,
+    episode_item: EpisodeItem | None,
+    is_rewatch: bool,
+) -> None:
+    if not media_item:
+        return
+    integration, secret_data = await load_integration_with_secrets(
+        db, watched.user_id, "stremio"
+    )
+    if not integration or not secret_data:
+        return
+    if not has_required_stremio_fields(secret_data):
+        return
+    payload = build_stremio_payload(media_item, episode_item, watched.watched_at)
+    if not payload:
+        return
+
+    watch_sync = await _get_watch_sync(db, watched.id, "stremio")
+    if watch_sync and is_synced_status(watch_sync.status):
+        return
+    if watch_sync and watch_sync.status in {"pending", "in_progress"}:
+        return
+
+    if not watch_sync:
+        watch_sync = WatchSync(
+            user_id=watched.user_id,
+            watched_item_id=watched.id,
+            provider="stremio",
+            status="pending",
+            is_rewatch=is_rewatch,
+        )
+        db.add(watch_sync)
+        await db.flush()
+    else:
+        watch_sync.status = "pending"
+        watch_sync.last_error = None
+
+    payload["watch_sync_id"] = watch_sync.id
+    payload["watched_item_id"] = watched.id
+    job = OutboxJob(
+        user_id=watched.user_id,
+        target_provider="stremio",
+        job_type="push_watched",
+        payload=payload,
+        status="pending",
+    )
+    db.add(job)
+
+
 async def _get_watch_sync(
     db: AsyncSession, watched_id: str, provider: str
 ) -> WatchSync | None:
@@ -496,4 +550,128 @@ SYNC_STRATEGIES: dict[str, SyncStrategy] = {
     "letterboxd": _sync_letterboxd,
     "trakt": _sync_trakt,
     "simkl": _sync_simkl,
+    "stremio": _sync_stremio,
 }
+
+
+def build_stremio_payload(
+    media_item: MediaItem,
+    episode_item: EpisodeItem | None,
+    watched_at: datetime,
+) -> dict[str, object] | None:
+    item_id = _extract_stremio_item_id(media_item)
+    if not item_id:
+        return None
+    if episode_item:
+        video_id = _extract_stremio_video_id(media_item, episode_item)
+        if not video_id:
+            return None
+
+    media_type = "series" if episode_item or media_item.media_type == "tv" else "movie"
+    payload: dict[str, object] = {
+        "item_id": item_id,
+        "media_type": media_type,
+        "watched_at": watched_at.isoformat(),
+    }
+    if media_item.title:
+        payload["title"] = media_item.title
+    if media_item.year is not None:
+        payload["year"] = media_item.year
+    if media_item.poster_url:
+        payload["poster"] = media_item.poster_url
+
+    state = _extract_stremio_state(media_item, episode_item)
+    times_watched = _coerce_int(state.get("timesWatched"))
+    flagged_watched = _coerce_int(state.get("flaggedWatched"))
+    payload["times_watched"] = max(times_watched or 0, 1)
+    payload["flagged_watched"] = max(flagged_watched or 0, 1)
+
+    if episode_item:
+        payload["video_id"] = video_id
+        payload["season_number"] = episode_item.season_number
+        payload["episode_number"] = episode_item.episode_number
+
+    return payload
+
+
+def _extract_stremio_item_id(media_item: MediaItem) -> str | None:
+    raw = media_item.raw if isinstance(media_item.raw, dict) else {}
+    stremio_id = _coerce_str(raw.get("stremio_id"))
+    if stremio_id:
+        return stremio_id
+    stremio_payload = raw.get("stremio")
+    if isinstance(stremio_payload, dict):
+        stremio_id = _coerce_str(stremio_payload.get("id") or stremio_payload.get("_id"))
+        if stremio_id:
+            return stremio_id
+    if media_item.imdb_id:
+        return media_item.imdb_id
+    return None
+
+
+def _extract_stremio_video_id(
+    media_item: MediaItem, episode_item: EpisodeItem
+) -> str | None:
+    raw = episode_item.raw if isinstance(episode_item.raw, dict) else {}
+    stremio_video_id = _coerce_str(raw.get("stremio_video_id"))
+    if not stremio_video_id:
+        stremio_payload = raw.get("stremio")
+        if isinstance(stremio_payload, dict):
+            stremio_video_id = _coerce_str(
+                stremio_payload.get("video_id") or stremio_payload.get("videoId")
+            )
+            if not stremio_video_id:
+                state = stremio_payload.get("state")
+                if isinstance(state, dict):
+                    stremio_video_id = _coerce_str(
+                        state.get("video_id") or state.get("videoId")
+                    )
+    if stremio_video_id:
+        return stremio_video_id
+    if episode_item.imdb_id:
+        return episode_item.imdb_id
+    if media_item.imdb_id:
+        return f"{media_item.imdb_id}:{episode_item.season_number}:{episode_item.episode_number}"
+    return None
+
+
+def _extract_stremio_state(
+    media_item: MediaItem, episode_item: EpisodeItem | None
+) -> dict[str, object]:
+    raw = episode_item.raw if episode_item and isinstance(episode_item.raw, dict) else {}
+    if not raw and isinstance(media_item.raw, dict):
+        raw = media_item.raw
+    stremio_payload = raw.get("stremio")
+    if isinstance(stremio_payload, dict):
+        state = stremio_payload.get("state")
+        if isinstance(state, dict):
+            return state
+    state = raw.get("state")
+    if isinstance(state, dict):
+        return state
+    return {}
+
+
+def _coerce_str(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, (int, float)):
+        return str(value)
+    return None
+
+
+def _coerce_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned.isdigit():
+            return int(cleaned)
+    return None
