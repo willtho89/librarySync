@@ -17,7 +17,8 @@
       "cwd": "${workspaceFolder}/backend",
       "envFile": "${workspaceFolder}/.env",
       "env": {
-        "PYTHONPATH": "${workspaceFolder}/backend/src"
+        "PYTHONPATH": "${workspaceFolder}/backend/src",
+        "DATABASE_URL": "postgresql+psycopg://librarysync:librarysync@localhost:5432/librarysync"
       },
       "justMyCode": true,
       "subProcess": true,
@@ -31,7 +32,8 @@
       "cwd": "${workspaceFolder}/worker",
       "envFile": "${workspaceFolder}/.env",
       "env": {
-        "PYTHONPATH": "${workspaceFolder}/backend/src:${workspaceFolder}/worker/src"
+        "PYTHONPATH": "${workspaceFolder}/backend/src:${workspaceFolder}/worker/src",
+        "DATABASE_URL": "postgresql+psycopg://librarysync:librarysync@localhost:5432/librarysync"
       },
       "justMyCode": true,
       "console": "integratedTerminal"

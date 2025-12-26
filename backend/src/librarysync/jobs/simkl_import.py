@@ -40,7 +40,7 @@ from librarysync.db.models import (
 )
 from librarysync.db.session import SessionLocal, init_session_factory
 
-LOOKBACK_HOURS = 24 * 7
+LOOKBACK_HOURS = settings.history_lookback_days * 24
 MAX_PAGES = 8
 PER_PAGE = 50
 logger = logging.getLogger(__name__)

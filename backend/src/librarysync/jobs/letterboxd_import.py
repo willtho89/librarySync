@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from librarysync.config import settings
 from librarysync.connectors.services.letterboxd import (
     DEFAULT_LETTERBOXD_API_BASE_URL,
     LetterboxdClient,
@@ -36,7 +37,7 @@ from librarysync.db.models import (
 )
 from librarysync.db.session import SessionLocal, init_session_factory
 
-LOOKBACK_HOURS = 24 * 7
+LOOKBACK_HOURS = settings.history_lookback_days * 24
 MAX_PAGES = 6
 PER_PAGE = 20
 IMDB_ID_RE = re.compile(r"(tt\d{3,10})", re.IGNORECASE)

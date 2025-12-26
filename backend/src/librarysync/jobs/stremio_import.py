@@ -36,7 +36,7 @@ from librarysync.db.models import (
 )
 from librarysync.db.session import SessionLocal, init_session_factory
 
-LOOKBACK_HOURS = 24 * 7
+LOOKBACK_HOURS = settings.history_lookback_days * 24
 BATCH_SIZE = 50
 IMDB_ID_RE = re.compile(r"(tt\d{3,10})", re.IGNORECASE)
 TMDB_ID_RE = re.compile(r"tmdb[:/](?:movie|tv|show|series)?[:/](\d+)", re.IGNORECASE)

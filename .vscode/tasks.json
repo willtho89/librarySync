@@ -50,6 +50,65 @@
         "cwd": "${workspaceFolder}"
       },
       "problemMatcher": []
+    },
+    {
+      "label": "docker: start db",
+      "type": "shell",
+      "command": "docker",
+      "args": ["compose", "up", "-d", "db"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "docker: stop db",
+      "type": "shell", 
+      "command": "docker",
+      "args": ["compose", "stop", "db"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "docker: reset db",
+      "type": "shell",
+      "command": "docker",
+      "args": ["compose", "down", "-v", "db", "&&", "docker", "compose", "up", "-d", "db"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "migrate: up",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "alembic", "upgrade", "head"],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": [],
+      "dependsOn": ["docker: start db"]
+    },
+    {
+      "label": "migrate: create",
+      "type": "shell", 
+      "command": "uv",
+      "args": ["run", "alembic", "revision", "--autogenerate", "-m", "${input:message}"],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "message",
+      "description": "Migration message",
+      "default": "auto migration",
+      "type": "promptString"
     }
   ]
 }
