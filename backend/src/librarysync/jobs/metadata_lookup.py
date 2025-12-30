@@ -1,32 +1,24 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.connectors.metadata.base import MediaCandidate, MetadataProvider
-from librarysync.connectors.metadata.imdb import ImdbMetadataProvider
-from librarysync.connectors.metadata.kitsu import KitsuMetadataProvider
-from librarysync.connectors.metadata.myanimelist import MyAnimeListMetadataProvider
-from librarysync.connectors.metadata.tmdb import TmdbMetadataProvider
-from librarysync.connectors.metadata.tvdb import TvdbMetadataProvider
-from librarysync.connectors.metadata.tvmaze import TvmazeMetadataProvider
-from librarysync.core.security import decrypt_value
+from librarysync.connectors.metadata.base import MediaCandidate
+from librarysync.core.metadata_lookup_engine import LookupRequest, MetadataLookupEngine
+from librarysync.core.metadata_providers import MetadataProviderService
 from librarysync.db.models import (
-    Integration,
-    IntegrationSecret,
     MediaItem,
     MetadataLookupCandidate,
     MetadataLookupRequest,
-    User,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
 
 DETAILS_ENRICH_LIMIT = 5
 LOCAL_SEARCH_LIMIT = 10
 LOCAL_PROVIDER = "local"
+LOOKUP_ENGINE = MetadataLookupEngine(detail_limit=DETAILS_ENRICH_LIMIT)
 
 
 async def process_metadata_lookups_once(limit: int = 5) -> int:
@@ -63,7 +55,8 @@ async def _process_request(db: AsyncSession, request: MetadataLookupRequest) -> 
     now = datetime.now(timezone.utc)
     try:
         local_candidates = await _lookup_local_candidates(db, request)
-        providers = await _load_metadata_providers(db, request.user_id)
+        service = MetadataProviderService(db, request.user_id)
+        providers = await service.load_enabled_providers()
         if not providers and not local_candidates:
             await _mark_failed(
                 db,
@@ -75,10 +68,15 @@ async def _process_request(db: AsyncSession, request: MetadataLookupRequest) -> 
         candidates: list[MediaCandidate] = []
         provider_names: list[str] = []
         errors: list[str] = []
+        lookup_request = LookupRequest(
+            query=request.query,
+            query_type=request.query_type,
+            scope=_normalize_scope(request.search_scope),
+        )
         for provider in providers:
             provider_names.append(provider.provider)
             try:
-                provider_candidates = await _run_lookup(provider, request)
+                provider_candidates = await LOOKUP_ENGINE.lookup(provider, lookup_request)
             except Exception as exc:
                 errors.append(f"{provider.provider}: {exc}")
                 continue
@@ -111,39 +109,6 @@ async def _process_request(db: AsyncSession, request: MetadataLookupRequest) -> 
         await db.commit()
     except Exception as exc:
         await _mark_failed(db, request, f"Lookup failed: {exc}")
-
-
-async def _run_lookup(
-    provider: MetadataProvider, request: MetadataLookupRequest
-) -> list[MediaCandidate]:
-    query = request.query
-    search_scope = _normalize_scope(request.search_scope)
-    if request.query_type == "imdb":
-        candidates = await provider.find_by_external_id(query, search_scope)
-        return await _enrich_candidates(provider, candidates)
-    if request.query_type == "tmdb":
-        if provider.provider != "tmdb":
-            return []
-        return await _lookup_tmdb_id(provider, query, search_scope)
-    candidates = await provider.search(query, search_scope)
-    return await _enrich_candidates(provider, candidates)
-
-
-async def _enrich_candidates(
-    provider: MetadataProvider, candidates: list[MediaCandidate]
-) -> list[MediaCandidate]:
-    enriched: list[MediaCandidate] = []
-    for idx, candidate in enumerate(candidates):
-        if idx < DETAILS_ENRICH_LIMIT and candidate.provider_id:
-            try:
-                enriched.append(
-                    await provider.get_details(candidate.provider_id, candidate.media_type)
-                )
-                continue
-            except Exception:
-                pass
-        enriched.append(candidate)
-    return enriched
 
 
 def _candidate_to_model(
@@ -215,194 +180,6 @@ def _media_item_to_candidate(item: MediaItem) -> MediaCandidate:
         imdb_id=item.imdb_id,
         raw=raw,
     )
-
-
-async def _lookup_tmdb_id(
-    provider: TmdbMetadataProvider, tmdb_id: str, scope: str
-) -> list[MediaCandidate]:
-    if scope == "movie":
-        candidate = await provider.get_details(tmdb_id, "movie")
-        return [candidate] if candidate.provider_id else []
-    if scope == "tv":
-        candidate = await provider.get_details(tmdb_id, "tv")
-        return [candidate] if candidate.provider_id else []
-
-    last_error: Exception | None = None
-    for media_type in ("movie", "tv"):
-        try:
-            candidate = await provider.get_details(tmdb_id, media_type)
-        except Exception as exc:
-            last_error = exc
-            continue
-        if candidate.provider_id:
-            return [candidate]
-    if last_error:
-        raise last_error
-    return []
-
-
-async def _load_tmdb_provider(
-    db: AsyncSession, user_id: str
-) -> TmdbMetadataProvider | None:
-    result = await db.execute(
-        select(User.include_adult_in_search).where(User.id == user_id)
-    )
-    include_adult = result.scalar_one_or_none() or False
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "tmdb"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        return None
-    data = json.loads(decrypt_value(secret.secret_data))
-    api_key = data.get("api_key")
-    if not api_key:
-        return None
-
-    language = integration.config.get("language")
-    region = integration.config.get("region")
-    return TmdbMetadataProvider(
-        api_key=api_key,
-        language=language,
-        region=region,
-        include_adult=include_adult,
-    )
-
-
-async def _load_tvdb_provider(
-    db: AsyncSession, user_id: str
-) -> TvdbMetadataProvider | None:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "tvdb"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        return None
-    data = json.loads(decrypt_value(secret.secret_data))
-    api_key = data.get("api_key")
-    pin = data.get("pin")
-    if not api_key:
-        return None
-
-    language = integration.config.get("language")
-    return TvdbMetadataProvider(api_key=api_key, pin=pin, language=language)
-
-
-async def _load_kitsu_provider(
-    db: AsyncSession, user_id: str
-) -> KitsuMetadataProvider | None:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "kitsu"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-
-    language = integration.config.get("language")
-    return KitsuMetadataProvider(language=language)
-
-
-async def _load_tvmaze_provider(
-    db: AsyncSession, user_id: str
-) -> TvmazeMetadataProvider | None:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "tvmaze"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-    return TvmazeMetadataProvider()
-
-
-async def _load_imdb_provider(
-    db: AsyncSession, user_id: str
-) -> ImdbMetadataProvider | None:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "imdb"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-    return ImdbMetadataProvider()
-
-
-async def _load_myanimelist_provider(
-    db: AsyncSession, user_id: str
-) -> MyAnimeListMetadataProvider | None:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "myanimelist"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-    return MyAnimeListMetadataProvider()
-
-
-async def _load_metadata_providers(
-    db: AsyncSession, user_id: str
-) -> list[MetadataProvider]:
-    providers: list[MetadataProvider] = []
-    tmdb = await _load_tmdb_provider(db, user_id)
-    if tmdb:
-        providers.append(tmdb)
-    tvdb = await _load_tvdb_provider(db, user_id)
-    if tvdb:
-        providers.append(tvdb)
-    tvmaze = await _load_tvmaze_provider(db, user_id)
-    if tvmaze:
-        providers.append(tvmaze)
-    imdb = await _load_imdb_provider(db, user_id)
-    if imdb:
-        providers.append(imdb)
-    kitsu = await _load_kitsu_provider(db, user_id)
-    if kitsu:
-        providers.append(kitsu)
-    myanimelist = await _load_myanimelist_provider(db, user_id)
-    if myanimelist:
-        providers.append(myanimelist)
-    return providers
 
 
 async def _mark_failed(

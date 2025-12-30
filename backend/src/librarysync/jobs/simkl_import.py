@@ -19,14 +19,9 @@ from librarysync.connectors.services.simkl import (
     parse_expires_at,
     token_to_secret_payload,
 )
-from librarysync.core.import_schedule import (
-    DEFAULT_IMPORT_INTERVAL_SECONDS,
-    IMPORT_REQUESTED_KEY,
-    parse_datetime,
-    record_import_run,
-    should_run_import,
-)
+from librarysync.core.import_schedule import parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
+from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
@@ -39,6 +34,7 @@ from librarysync.db.models import (
     WatchSync,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
+from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
 LOOKBACK_HOURS = settings.history_lookback_days * 24
 MAX_PAGES = 8
@@ -79,10 +75,32 @@ class EpisodeSummary:
     raw: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class ImportResult:
-    imported: int
-    attempted: bool
+class SimklImportStrategy(ImportStrategy):
+    provider = "simkl"
+
+    def __init__(
+        self,
+        lookback_hours: int = LOOKBACK_HOURS,
+        per_page: int = PER_PAGE,
+        max_pages: int = MAX_PAGES,
+    ) -> None:
+        self._lookback_hours = lookback_hours
+        self._per_page = per_page
+        self._max_pages = max_pages
+
+    async def import_for_integration(
+        self,
+        context: ImportContext,
+        integration: Integration,
+        requested_at: datetime | None,
+    ) -> ImportResult:
+        return await _import_for_integration(
+            context.db,
+            integration,
+            self._lookback_hours,
+            self._per_page,
+            self._max_pages,
+        )
 
 
 async def process_simkl_imports_once(
@@ -92,33 +110,13 @@ async def process_simkl_imports_once(
 ) -> int:
     init_session_factory()
     async with SessionLocal() as db:
-        result = await db.execute(
-            select(Integration).where(Integration.provider == "simkl")
+        strategy = SimklImportStrategy(
+            lookback_hours=lookback_hours,
+            per_page=per_page,
+            max_pages=max_pages,
         )
-        integrations = result.scalars().all()
-        if not integrations:
-            return 0
         now = datetime.now(timezone.utc)
-        total_imported = 0
-        for integration in integrations:
-            if not should_run_import(
-                integration.config,
-                now,
-                default_interval_seconds=DEFAULT_IMPORT_INTERVAL_SECONDS,
-            ):
-                continue
-            requested_at = parse_datetime(
-                (integration.config or {}).get(IMPORT_REQUESTED_KEY)
-            )
-            import_result = await _import_for_integration(
-                db, integration, lookback_hours, per_page, max_pages
-            )
-            total_imported += import_result.imported
-            if import_result.attempted or requested_at is None:
-                integration.config = record_import_run(integration.config, now)
-                db.add(integration)
-                await db.commit()
-        return total_imported
+        return await strategy.run_once(db, now)
 
 
 async def _import_for_integration(
@@ -421,12 +419,19 @@ def _extract_all_items_entries(
         container = payload
     entries: list[dict[str, Any]] = []
     if isinstance(container, dict):
+        has_status_keys = bool(statuses) and any(
+            status in container for status in statuses or set()
+        )
         if statuses:
             for status in statuses:
-                entries.extend(_coerce_entry_list(container.get(status)))
-        else:
-            for value in container.values():
-                entries.extend(_coerce_entry_list(value))
+                entries.extend(_extract_entries_from_container(container.get(status)))
+            if entries:
+                return entries
+            entries.extend(_extract_entries_from_container(container.get("all")))
+            if entries or has_status_keys:
+                return entries
+        for value in container.values():
+            entries.extend(_extract_entries_from_container(value))
         return entries
     if isinstance(container, list):
         entries = _coerce_entry_list(container)
@@ -444,6 +449,34 @@ def _entry_status(entry: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
     return None
+
+
+def _extract_entries_from_container(value: object) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        if _looks_like_payload(value) or any(
+            key in value for key in ("movie", "show", "item", "episode", "anime")
+        ):
+            return [value]
+        entries: list[dict[str, Any]] = []
+        for key in (
+            "items",
+            "movies",
+            "shows",
+            "anime",
+            "entries",
+            "list",
+            "history",
+            "records",
+        ):
+            entries.extend(_extract_entries_from_container(value.get(key)))
+        if entries:
+            return entries
+        for nested in value.values():
+            entries.extend(_extract_entries_from_container(nested))
+        return entries
+    return []
 
 
 def _coerce_entry_list(value: object) -> list[dict[str, Any]]:
@@ -647,6 +680,7 @@ async def _import_movie_entry(
     movie = _extract_movie_summary(entry)
     if not movie:
         return False
+    rating = _extract_entry_rating(entry, include_show_rating=True)
     entry_key = _build_entry_key(
         history_id,
         movie.imdb_id,
@@ -667,7 +701,7 @@ async def _import_movie_entry(
         media_item_id=media_item.id,
         episode_item_id=None,
         watched_at=watched_at,
-        rating=None,
+        rating=rating,
         source="simkl",
     )
     event = WatchEvent(
@@ -676,7 +710,7 @@ async def _import_movie_entry(
         episode_item_id=None,
         event_type="simkl_imported",
         occurred_at=watched_at,
-        raw=_build_event_raw(entry_key, history_id, watched_at, movie, None),
+        raw=_build_event_raw(entry_key, history_id, watched_at, movie, None, rating),
     )
     db.add_all([watched, event])
     await db.flush()
@@ -712,6 +746,7 @@ async def _import_show_entry(
     show = _extract_show_summary(entry)
     if not show:
         return False
+    rating = _extract_entry_rating(entry, include_show_rating=True)
     entry_key = _build_entry_key(
         history_id,
         show.imdb_id,
@@ -732,7 +767,7 @@ async def _import_show_entry(
         media_item_id=media_item.id,
         episode_item_id=None,
         watched_at=watched_at,
-        rating=None,
+        rating=rating,
         source="simkl",
     )
     event = WatchEvent(
@@ -741,7 +776,7 @@ async def _import_show_entry(
         episode_item_id=None,
         event_type="simkl_imported",
         occurred_at=watched_at,
-        raw=_build_event_raw(entry_key, history_id, watched_at, show, None),
+        raw=_build_event_raw(entry_key, history_id, watched_at, show, None, rating),
     )
     db.add_all([watched, event])
     await db.flush()
@@ -778,6 +813,7 @@ async def _import_episode_entry(
     episode = _extract_episode_summary(entry)
     if not show or not episode:
         return False
+    rating = _extract_entry_rating(entry, include_show_rating=False)
     entry_key = _build_episode_entry_key(history_id, show, episode, watched_at)
     if not entry_key:
         return False
@@ -794,7 +830,7 @@ async def _import_episode_entry(
         media_item_id=None,
         episode_item_id=episode_item.id,
         watched_at=watched_at,
-        rating=None,
+        rating=rating,
         source="simkl",
     )
     event = WatchEvent(
@@ -803,7 +839,7 @@ async def _import_episode_entry(
         episode_item_id=episode_item.id,
         event_type="simkl_imported",
         occurred_at=watched_at,
-        raw=_build_event_raw(entry_key, history_id, watched_at, show, episode),
+        raw=_build_event_raw(entry_key, history_id, watched_at, show, episode, rating),
     )
     db.add_all([watched, event])
     await db.flush()
@@ -1161,6 +1197,7 @@ def _summarize_payload(payload: object, limit: int = 8) -> str:
 def _summarize_container(payload: dict[str, Any]) -> str:
     for key in (
         "items",
+        "all",
         "history",
         "entries",
         "list",
@@ -1183,12 +1220,33 @@ def _summarize_container(payload: dict[str, Any]) -> str:
     return f"dict[{preview}]"
 
 
+def _extract_entry_rating(entry: dict[str, Any], include_show_rating: bool) -> float | None:
+    candidates: list[object] = []
+    if include_show_rating:
+        candidates.extend([entry.get("user_rating"), entry.get("rating")])
+        for key in ("movie", "show", "anime", "item"):
+            nested = entry.get(key)
+            if isinstance(nested, dict):
+                candidates.append(nested.get("user_rating"))
+                candidates.append(nested.get("rating"))
+    episode = entry.get("episode")
+    if isinstance(episode, dict):
+        candidates.append(episode.get("user_rating"))
+        candidates.append(episode.get("rating"))
+    for candidate in candidates:
+        rating = normalize_ten_point_rating(candidate)
+        if rating is not None:
+            return rating
+    return None
+
+
 def _build_event_raw(
     entry_key: str,
     history_id: str | None,
     watched_at: datetime,
     show_or_movie: MovieSummary | ShowSummary,
     episode: EpisodeSummary | None,
+    rating: float | None,
 ) -> dict[str, Any]:
     raw: dict[str, Any] = {
         "source": "simkl",
@@ -1215,6 +1273,8 @@ def _build_event_raw(
                 "simkl": episode.simkl_id,
             },
         }
+    if rating is not None:
+        raw["rating"] = rating
     return raw
 
 

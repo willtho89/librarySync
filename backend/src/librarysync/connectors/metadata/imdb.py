@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
-from librarysync.connectors.metadata.base import MediaCandidate
+from librarysync.connectors.metadata.base import (
+    MediaCandidate,
+    MetadataProvider,
+    ProviderCapabilities,
+    ProviderConfig,
+)
 
 IMDB_SUGGESTION_BASE = "https://v2.sg.media-imdb.com/suggestion"
 DEFAULT_SEARCH_LIMIT = 10
 MEDIA_TYPE_MOVIE = "movie"
 MEDIA_TYPE_TV = "tv"
+
+
+@dataclass(frozen=True)
+class ImdbConfig(ProviderConfig):
+    pass
 
 
 def _extract_year(value: Any) -> int | None:
@@ -48,8 +59,17 @@ def _normalize_media_type(raw: dict[str, Any]) -> str:
     return MEDIA_TYPE_MOVIE
 
 
-class ImdbMetadataProvider:
+class ImdbMetadataProvider(MetadataProvider[ImdbConfig, None]):
     provider = "imdb"
+    config_schema = ImdbConfig
+    secrets_schema = None
+    capabilities = ProviderCapabilities(
+        scopes={MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV},
+        supports_external_id=True,
+        supports_search=True,
+        supports_details=True,
+        supports_episodes=False,
+    )
 
     async def search(self, query: str, scope: str = "all") -> list[MediaCandidate]:
         payload = await self._get_suggestions(query)

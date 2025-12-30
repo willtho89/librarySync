@@ -100,6 +100,13 @@ function applyImportControls(provider, integration) {
   }
 }
 
+function isIntegrationConnected(integration) {
+  return (
+    !!integration &&
+    (integration.has_secrets || integration.status === "connected")
+  );
+}
+
 async function requestJSON(path, options = {}) {
   const headers = Object.assign(
     {},
@@ -203,54 +210,47 @@ async function handleLogout() {
 }
 
 async function loadIntegrations() {
-  const form = document.getElementById("aiostreams-form");
-  if (!form) {
-    return;
-  }
   const data = await requestJSON("/api/integrations");
   const integrations = data && data.integrations ? data.integrations : [];
-  const aiostreams = integrations.find((item) => item.provider === "aiostreams");
-  const baseInput = form.querySelector("input[name='base_url']");
-  if (aiostreams && aiostreams.config && aiostreams.config.base_url && baseInput) {
-    baseInput.value = aiostreams.config.base_url;
-  }
-  const messageEl = document.getElementById("aiostreams-message");
-  if (aiostreams && aiostreams.has_secrets && messageEl && !messageEl.textContent) {
-    setMessage("aiostreams-message", "API key is stored securely.");
-  }
-
   const letterboxdForm = document.getElementById("letterboxd-form");
-  if (!letterboxdForm) {
-    return;
-  }
   const letterboxd = integrations.find((item) => item.provider === "letterboxd");
-  const apiBaseInput = letterboxdForm.querySelector(
-    "input[name='api_base_url']"
-  );
-  if (
-    letterboxd &&
-    letterboxd.config &&
-    letterboxd.config.api_base_url &&
-    apiBaseInput
-  ) {
-    apiBaseInput.value = letterboxd.config.api_base_url;
+  if (letterboxdForm) {
+    const apiBaseInput = letterboxdForm.querySelector(
+      "input[name='api_base_url']"
+    );
+    if (
+      letterboxd &&
+      letterboxd.config &&
+      letterboxd.config.api_base_url &&
+      apiBaseInput
+    ) {
+      apiBaseInput.value = letterboxd.config.api_base_url;
+    }
+    const letterboxdMessage = document.getElementById("letterboxd-message");
+    const letterboxdDisconnect = document.getElementById("letterboxd-disconnect");
+    const letterboxdConnected = isIntegrationConnected(letterboxd);
+    if (letterboxdConnected) {
+      if (letterboxdMessage && !letterboxdMessage.textContent) {
+        setMessage("letterboxd-message", "Credentials are stored securely.");
+      }
+      if (letterboxdDisconnect) {
+        letterboxdDisconnect.hidden = false;
+      }
+    } else {
+      setMessage("letterboxd-message", "");
+      if (letterboxdDisconnect) {
+        letterboxdDisconnect.hidden = true;
+      }
+    }
+    applyImportControls("letterboxd", letterboxd);
   }
-  const letterboxdMessage = document.getElementById("letterboxd-message");
-  if (
-    letterboxd &&
-    letterboxd.has_secrets &&
-    letterboxdMessage &&
-    !letterboxdMessage.textContent
-  ) {
-    setMessage("letterboxd-message", "Credentials are stored securely.");
-  }
-  applyImportControls("letterboxd", letterboxd);
 
   const trakt = integrations.find((item) => item.provider === "trakt");
   const traktMessage = document.getElementById("trakt-message");
   const traktConnect = document.getElementById("trakt-connect");
   const traktDisconnect = document.getElementById("trakt-disconnect");
-  if (trakt && trakt.has_secrets) {
+  const traktConnected = isIntegrationConnected(trakt);
+  if (traktConnected) {
     const username =
       trakt.config && trakt.config.trakt_username
         ? trakt.config.trakt_username
@@ -280,7 +280,8 @@ async function loadIntegrations() {
   const simklMessage = document.getElementById("simkl-message");
   const simklConnect = document.getElementById("simkl-connect");
   const simklDisconnect = document.getElementById("simkl-disconnect");
-  if (simkl && simkl.has_secrets) {
+  const simklConnected = isIntegrationConnected(simkl);
+  if (simklConnected) {
     const username =
       simkl.config && simkl.config.simkl_username ? simkl.config.simkl_username : null;
     const label = username
@@ -314,7 +315,8 @@ async function loadIntegrations() {
   }
   const stremioMessage = document.getElementById("stremio-message");
   const stremioDisconnect = document.getElementById("stremio-disconnect");
-  if (stremio && stremio.has_secrets) {
+  const stremioConnected = isIntegrationConnected(stremio);
+  if (stremioConnected) {
     const name =
       stremio.config && stremio.config.stremio_name ? stremio.config.stremio_name : null;
     const email =
@@ -331,34 +333,6 @@ async function loadIntegrations() {
     }
   }
   applyImportControls("stremio", stremio);
-}
-
-async function handleAIOStreamsSave(data, form) {
-  setMessage("aiostreams-message", "");
-  const baseUrl = (data.get("base_url") || "").trim();
-  const apiKey = (data.get("api_key") || "").trim();
-  if (!baseUrl) {
-    setMessage("aiostreams-message", "Base URL is required.", true);
-    return;
-  }
-  const payload = { base_url: baseUrl };
-  if (apiKey) {
-    payload.api_key = apiKey;
-  }
-  try {
-    await requestJSON("/api/integrations/aiostreams", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    const apiKeyInput = form.querySelector("input[name='api_key']");
-    if (apiKeyInput) {
-      apiKeyInput.value = "";
-    }
-    setMessage("aiostreams-message", "Saved.");
-    await loadIntegrations();
-  } catch (error) {
-    setMessage("aiostreams-message", error.message, true);
-  }
 }
 
 function parseCookieString(cookieHeader) {
@@ -640,6 +614,19 @@ async function handleLetterboxdTest() {
   }
 }
 
+async function handleLetterboxdDisconnect() {
+  setMessage("letterboxd-message", "");
+  try {
+    await requestJSON("/api/integrations/letterboxd/disconnect", {
+      method: "POST",
+    });
+    setMessage("letterboxd-message", "Letterboxd disconnected.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("letterboxd-message", error.message, true);
+  }
+}
+
 function handleTraktConnect() {
   window.location.href = "/api/integrations/trakt/start";
 }
@@ -763,17 +750,9 @@ async function loadSettings() {
     return;
   }
   const data = await requestJSON("/api/settings");
-  const pollInput = form.querySelector("input[name='poll_interval']");
-  const thresholdInput = form.querySelector("input[name='completion_threshold']");
   const includeAdultInput = form.querySelector(
     "input[name='include_adult_in_search']"
   );
-  if (pollInput && typeof data.poll_interval === "number") {
-    pollInput.value = data.poll_interval.toString();
-  }
-  if (thresholdInput && typeof data.completion_threshold === "number") {
-    thresholdInput.value = data.completion_threshold.toString();
-  }
   if (includeAdultInput) {
     includeAdultInput.checked = !!data.include_adult_in_search;
   }
@@ -781,12 +760,8 @@ async function loadSettings() {
 
 async function handleSettingsSave(data) {
   setMessage("settings-message", "");
-  const pollValue = (data.get("poll_interval") || "").trim();
-  const thresholdValue = (data.get("completion_threshold") || "").trim();
   const includeAdult = data.get("include_adult_in_search") === "on";
   const payload = {
-    poll_interval: pollValue ? Number(pollValue) : null,
-    completion_threshold: thresholdValue ? Number(thresholdValue) : null,
     include_adult_in_search: includeAdult,
   };
   try {
@@ -2152,7 +2127,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   bindForm("login-form", handleLogin);
   bindForm("register-form", handleRegister);
-  bindForm("aiostreams-form", handleAIOStreamsSave);
   bindForm("letterboxd-form", handleLetterboxdSave);
   bindForm("letterboxd-import-form", (data) =>
     handleImportScheduleSave("letterboxd", data)
@@ -2214,6 +2188,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   const letterboxdParse = document.getElementById("letterboxd-parse");
   if (letterboxdParse) {
     letterboxdParse.addEventListener("click", handleLetterboxdParse);
+  }
+  const letterboxdDisconnect = document.getElementById("letterboxd-disconnect");
+  if (letterboxdDisconnect) {
+    letterboxdDisconnect.addEventListener("click", handleLetterboxdDisconnect);
   }
   const traktConnect = document.getElementById("trakt-connect");
   if (traktConnect) {

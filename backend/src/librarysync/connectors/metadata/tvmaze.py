@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
-from librarysync.connectors.metadata.base import MediaCandidate
+from librarysync.connectors.metadata.base import (
+    MediaCandidate,
+    MetadataProvider,
+    ProviderCapabilities,
+    ProviderConfig,
+)
 
 TVMAZE_API_BASE = "https://api.tvmaze.com"
 DEFAULT_SEARCH_LIMIT = 10
 MEDIA_TYPE_TV = "tv"
+
+
+@dataclass(frozen=True)
+class TvmazeConfig(ProviderConfig):
+    pass
 
 
 def _extract_year(value: str | None) -> int | None:
@@ -26,8 +37,17 @@ def _poster_url(image: dict[str, Any] | None) -> str | None:
     return image.get("medium") or image.get("original")
 
 
-class TvmazeMetadataProvider:
+class TvmazeMetadataProvider(MetadataProvider[TvmazeConfig, None]):
     provider = "tvmaze"
+    config_schema = TvmazeConfig
+    secrets_schema = None
+    capabilities = ProviderCapabilities(
+        scopes={MEDIA_TYPE_TV},
+        supports_external_id=True,
+        supports_search=True,
+        supports_details=True,
+        supports_episodes=False,
+    )
 
     async def search(self, query: str, scope: str = "all") -> list[MediaCandidate]:
         if scope not in {"all", MEDIA_TYPE_TV}:

@@ -1,6 +1,6 @@
 # librarySync
 
-Self-hosted, Docker-compose-deployable multi-user sync hub for watch progress. MVP target: ingest from Stremio (AIOStreams) and sync to Trakt + SIMKL.
+Self-hosted, Docker-compose-deployable multi-user sync hub for watch progress. MVP target: sync to Trakt + SIMKL.
 
 ## Goals (MVP)
 - [x] Integrate MetaData Provider (TVDB, TMDB, IMDB)
@@ -18,7 +18,6 @@ Self-hosted, Docker-compose-deployable multi-user sync hub for watch progress. M
 - [x] Add Watch API
 - [x] Sttremio movie/tv sync (based on @MunifTanjim in StremThru)
 - [x] Stremio movie/tv import (based on @MunifTanjim in StremThru)
-- [ ] Ingest playback progress from AIOStreams proxy.
 - [x] minimal web UI (plain JS + static HTML).
 - [ ] worker/activity logs
 - [ ] Docker as Non Root User
@@ -67,13 +66,11 @@ librarySync/
       connectors/
         players/
           base.py
-          aiostreams.py
         services/
           base.py
           trakt.py
           simkl.py
       jobs/
-        poll_aiostreams.py
         process_outbox.py
         drift_daily.py
       static/
@@ -125,8 +122,6 @@ The following are required for the MVP (see `.env.example` for defaults):
 - `LIBRARYSYNC_BASE_URL`
 - `TRAKT_CLIENT_ID`, `TRAKT_CLIENT_SECRET`
 - `SIMKL_CLIENT_ID`, `SIMKL_CLIENT_SECRET`
-- `POLL_INTERVAL_SECONDS`
-- `COMPLETION_THRESHOLD_PERCENT`
 - `HISTORY_LOOKBACK_DAYS`
 - `LOG_LEVEL`
 - `LIBRARYSYNC_JWT_ACCESS_TOKEN_MINUTES`

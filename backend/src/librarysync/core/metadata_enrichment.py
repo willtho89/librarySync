@@ -5,11 +5,13 @@ import logging
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.connectors.metadata.base import MediaCandidate
-from librarysync.connectors.metadata.tmdb import TmdbMetadataProvider
-from librarysync.connectors.metadata.tvdb import TvdbMetadataProvider
-from librarysync.core.integrations import load_integration_with_secrets
-from librarysync.db.models import EpisodeItem, MediaItem, User
+from librarysync.connectors.metadata.base import (
+    EpisodeMetadataProvider,
+    MediaCandidate,
+    MetadataProvider,
+)
+from librarysync.core.metadata_providers import MetadataProviderService
+from librarysync.db.models import EpisodeItem, MediaItem
 
 logger = logging.getLogger(__name__)
 
@@ -37,20 +39,21 @@ async def enrich_watched_metadata(
         if not _needs_media_enrichment(media_item, episode_item):
             return
 
-    tmdb = await _load_tmdb_provider(db, user_id)
-    tvdb = await _load_tvdb_provider(db, user_id)
+    service = MetadataProviderService(db, user_id)
+    tmdb = await service.load_provider("tmdb")
+    tvdb = await service.load_provider("tvdb")
     if not tmdb and not tvdb:
         return
 
     if tmdb:
-        candidate = await _fetch_tmdb_candidate(tmdb, media_item)
+        candidate = await _fetch_provider_candidate(tmdb, media_item, "tmdb_id")
         if candidate:
             await _apply_candidate_to_media_item(db, media_item, candidate)
-        if episode_item:
-            await _apply_tmdb_episode(tmdb, media_item, episode_item)
+        if episode_item and isinstance(tmdb, EpisodeMetadataProvider):
+            await _apply_episode_metadata(tmdb, media_item, episode_item)
 
     if tvdb:
-        candidate = await _fetch_tvdb_candidate(tvdb, media_item)
+        candidate = await _fetch_provider_candidate(tvdb, media_item, "tvdb_id")
         if candidate:
             await _apply_candidate_to_media_item(db, media_item, candidate)
 
@@ -147,47 +150,29 @@ async def _find_local_metadata_candidate(
     return None
 
 
-async def _fetch_tmdb_candidate(
-    provider: TmdbMetadataProvider, media_item: MediaItem
+async def _fetch_provider_candidate(
+    provider: MetadataProvider, media_item: MediaItem, provider_id_field: str
 ) -> MediaCandidate | None:
     scope = _scope_for_media_item(media_item)
     if scope is None:
         return None
-    if media_item.tmdb_id:
+    provider_id = getattr(media_item, provider_id_field)
+    if provider_id:
         try:
-            return await provider.get_details(media_item.tmdb_id, scope)
+            return await provider.get_details(provider_id, scope)
         except Exception as exc:
-            logger.warning("TMDB details failed for %s: %s", media_item.id, exc)
+            logger.warning(
+                "%s details failed for %s: %s", provider.provider, media_item.id, exc
+            )
             return None
     if media_item.imdb_id:
         imdb_id = media_item.imdb_id.lower()
         try:
             candidates = await provider.find_by_external_id(imdb_id, scope)
         except Exception as exc:
-            logger.warning("TMDB lookup failed for %s: %s", media_item.id, exc)
-            return None
-        return _select_candidate(candidates, scope)
-    return None
-
-
-async def _fetch_tvdb_candidate(
-    provider: TvdbMetadataProvider, media_item: MediaItem
-) -> MediaCandidate | None:
-    scope = _scope_for_media_item(media_item)
-    if scope is None:
-        return None
-    if media_item.tvdb_id:
-        try:
-            return await provider.get_details(media_item.tvdb_id, scope)
-        except Exception as exc:
-            logger.warning("TVDB details failed for %s: %s", media_item.id, exc)
-            return None
-    if media_item.imdb_id:
-        imdb_id = media_item.imdb_id.lower()
-        try:
-            candidates = await provider.find_by_external_id(imdb_id, scope)
-        except Exception as exc:
-            logger.warning("TVDB lookup failed for %s: %s", media_item.id, exc)
+            logger.warning(
+                "%s lookup failed for %s: %s", provider.provider, media_item.id, exc
+            )
             return None
         return _select_candidate(candidates, scope)
     return None
@@ -206,8 +191,8 @@ async def _apply_candidate_to_media_item(
         media_item.year = candidate.year
 
 
-async def _apply_tmdb_episode(
-    provider: TmdbMetadataProvider,
+async def _apply_episode_metadata(
+    provider: EpisodeMetadataProvider,
     media_item: MediaItem,
     episode_item: EpisodeItem,
 ) -> None:
@@ -220,7 +205,9 @@ async def _apply_tmdb_episode(
     try:
         episodes = await provider.list_episodes(media_item.tmdb_id, episode_item.season_number)
     except Exception as exc:
-        logger.warning("TMDB episode lookup failed for %s: %s", media_item.id, exc)
+        logger.warning(
+            "%s episode lookup failed for %s: %s", provider.provider, media_item.id, exc
+        )
         return
     for summary in episodes:
         if summary.episode_number != episode_item.episode_number:
@@ -384,47 +371,3 @@ def _extract_tmdb_from_remote_ids(raw: dict) -> str | None:
                 return str(tmdb_value)
     return None
 
-
-async def _load_tmdb_provider(db: AsyncSession, user_id: str) -> TmdbMetadataProvider | None:
-    integration, secret_data = await load_integration_with_secrets(db, user_id, "tmdb")
-    if not integration or not integration.config or not integration.config.get("enabled"):
-        return None
-    if not secret_data:
-        return None
-    api_key = secret_data.get("api_key")
-    if not api_key:
-        return None
-    include_adult = await _load_include_adult(db, user_id)
-    language = integration.config.get("language")
-    region = integration.config.get("region")
-    try:
-        return TmdbMetadataProvider(
-            api_key=str(api_key),
-            language=language,
-            region=region,
-            include_adult=include_adult,
-        )
-    except ValueError:
-        return None
-
-
-async def _load_tvdb_provider(db: AsyncSession, user_id: str) -> TvdbMetadataProvider | None:
-    integration, secret_data = await load_integration_with_secrets(db, user_id, "tvdb")
-    if not integration or not integration.config or not integration.config.get("enabled"):
-        return None
-    if not secret_data:
-        return None
-    api_key = secret_data.get("api_key")
-    if not api_key:
-        return None
-    pin = secret_data.get("pin")
-    language = integration.config.get("language")
-    try:
-        return TvdbMetadataProvider(api_key=str(api_key), pin=pin, language=language)
-    except ValueError:
-        return None
-
-
-async def _load_include_adult(db: AsyncSession, user_id: str) -> bool:
-    result = await db.execute(select(User.include_adult_in_search).where(User.id == user_id))
-    return bool(result.scalar_one_or_none())

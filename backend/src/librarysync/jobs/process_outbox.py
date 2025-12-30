@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -62,6 +64,136 @@ RETRYABLE_STATUSES = ("pending", "failed_retryable")
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class DeliveryResult:
+    response_code: int | None
+    external_id: str | None
+    resolved_rewatch: bool | None = None
+
+
+class OutboxHandler(ABC):
+    provider: str
+
+    @abstractmethod
+    async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        raise NotImplementedError
+
+
+class OutboxHandlerRegistry:
+    def __init__(self, handlers: list[OutboxHandler]) -> None:
+        self._handlers = {handler.provider: handler for handler in handlers}
+
+    def get(self, provider: str) -> OutboxHandler | None:
+        return self._handlers.get(provider)
+
+
+class OutboxDispatcher:
+    def __init__(self, registry: OutboxHandlerRegistry) -> None:
+        self._registry = registry
+
+    async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        handler = self._registry.get(job.target_provider)
+        if not handler:
+            raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
+        return await handler.deliver(db, job)
+
+
+class LetterboxdOutboxHandler(OutboxHandler):
+    provider = "letterboxd"
+
+    async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        if job.job_type == "push_watched":
+            response_code, external_id, resolved_rewatch = await _deliver_letterboxd_watch(
+                db, job
+            )
+            return DeliveryResult(response_code, external_id, resolved_rewatch)
+        if job.job_type == "push_rating":
+            response_code, external_id, resolved_rewatch = await _deliver_letterboxd_watch(
+                db, job, force_update_rating=True
+            )
+            return DeliveryResult(response_code, external_id, resolved_rewatch)
+        if job.job_type == "update_log_entry":
+            response_code, external_id = await _deliver_letterboxd_log_update(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "delete_log_entry":
+            response_code, external_id = await _deliver_letterboxd_delete(db, job)
+            return DeliveryResult(response_code, external_id)
+        raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
+
+
+class TraktOutboxHandler(OutboxHandler):
+    provider = "trakt"
+
+    async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        if job.job_type == "push_watched":
+            response_code, external_id = await _deliver_trakt_watch(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "push_rating":
+            response_code, external_id = await _deliver_trakt_rating(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "update_history":
+            response_code, external_id = await _deliver_trakt_update(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "remove_history":
+            response_code, external_id = await _deliver_trakt_remove(db, job)
+            return DeliveryResult(response_code, external_id)
+        raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
+
+
+class SimklOutboxHandler(OutboxHandler):
+    provider = "simkl"
+
+    async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        if job.job_type == "push_watched":
+            response_code, external_id = await _deliver_simkl_watch(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "push_rating":
+            response_code, external_id = await _deliver_simkl_rating(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "update_history":
+            response_code, external_id = await _deliver_simkl_update(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "remove_history":
+            response_code, external_id = await _deliver_simkl_remove(db, job)
+            return DeliveryResult(response_code, external_id)
+        raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
+
+
+class StremioOutboxHandler(OutboxHandler):
+    provider = "stremio"
+
+    async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        if job.job_type == "push_watched":
+            response_code, external_id = await _deliver_stremio_watch(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "remove_watched":
+            response_code, external_id = await _deliver_stremio_remove(db, job)
+            return DeliveryResult(response_code, external_id)
+        raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
+
+
+class InternalOutboxHandler(OutboxHandler):
+    provider = "internal"
+
+    async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        if job.job_type != "new_item_added":
+            raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
+        await process_new_item_job(db, job)
+        return DeliveryResult(None, None, None)
+
+
+OUTBOX_HANDLER_REGISTRY = OutboxHandlerRegistry(
+    [
+        LetterboxdOutboxHandler(),
+        TraktOutboxHandler(),
+        SimklOutboxHandler(),
+        StremioOutboxHandler(),
+        InternalOutboxHandler(),
+    ]
+)
+OUTBOX_DISPATCHER = OutboxDispatcher(OUTBOX_HANDLER_REGISTRY)
+
+
 async def process_outbox_once(limit: int = 10) -> int:
     init_session_factory()
     async with SessionLocal() as db:
@@ -104,64 +236,10 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     resolved_rewatch: bool | None = None
 
     try:
-        if job.target_provider == "letterboxd" and job.job_type in {
-            "push_watched",
-            "push_rating",
-            "update_log_entry",
-            "delete_log_entry",
-        }:
-            if job.job_type == "update_log_entry":
-                response_code, external_id = await _deliver_letterboxd_log_update(db, job)
-            elif job.job_type == "delete_log_entry":
-                response_code, external_id = await _deliver_letterboxd_delete(db, job)
-            else:
-                (
-                    response_code,
-                    external_id,
-                    resolved_rewatch,
-                ) = await _deliver_letterboxd_watch(
-                    db, job, force_update_rating=job.job_type == "push_rating"
-                )
-        elif job.target_provider == "trakt" and job.job_type in {
-            "push_watched",
-            "push_rating",
-            "update_history",
-            "remove_history",
-        }:
-            if job.job_type == "push_rating":
-                response_code, external_id = await _deliver_trakt_rating(db, job)
-            elif job.job_type == "update_history":
-                response_code, external_id = await _deliver_trakt_update(db, job)
-            elif job.job_type == "remove_history":
-                response_code, external_id = await _deliver_trakt_remove(db, job)
-            else:
-                response_code, external_id = await _deliver_trakt_watch(db, job)
-        elif job.target_provider == "simkl" and job.job_type in {
-            "push_watched",
-            "push_rating",
-            "update_history",
-            "remove_history",
-        }:
-            if job.job_type == "push_rating":
-                response_code, external_id = await _deliver_simkl_rating(db, job)
-            elif job.job_type == "update_history":
-                response_code, external_id = await _deliver_simkl_update(db, job)
-            elif job.job_type == "remove_history":
-                response_code, external_id = await _deliver_simkl_remove(db, job)
-            else:
-                response_code, external_id = await _deliver_simkl_watch(db, job)
-        elif job.target_provider == "stremio" and job.job_type in {
-            "push_watched",
-            "remove_watched",
-        }:
-            if job.job_type == "remove_watched":
-                response_code, external_id = await _deliver_stremio_remove(db, job)
-            else:
-                response_code, external_id = await _deliver_stremio_watch(db, job)
-        elif job.target_provider == "internal" and job.job_type == "new_item_added":
-            await process_new_item_job(db, job)
-        else:
-            raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
+        result = await OUTBOX_DISPATCHER.deliver(db, job)
+        response_code = result.response_code
+        external_id = result.external_id
+        resolved_rewatch = result.resolved_rewatch
     except LetterboxdError as exc:
         response_code = exc.status_code
         error_message = _format_letterboxd_error(exc)

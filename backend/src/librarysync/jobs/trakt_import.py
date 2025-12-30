@@ -18,14 +18,8 @@ from librarysync.connectors.services.trakt import (
     parse_expires_at,
     token_to_secret_payload,
 )
-from librarysync.core.import_schedule import (
-    DEFAULT_IMPORT_INTERVAL_SECONDS,
-    IMPORT_REQUESTED_KEY,
-    parse_datetime,
-    record_import_run,
-    should_run_import,
-)
 from librarysync.core.integrations import load_integration_with_secrets
+from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
@@ -38,6 +32,7 @@ from librarysync.db.models import (
     WatchSync,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
+from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
 LOOKBACK_HOURS = settings.history_lookback_days * 24
 MAX_PAGES = 8
@@ -78,10 +73,32 @@ class EpisodeSummary:
     raw: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class ImportResult:
-    imported: int
-    attempted: bool
+class TraktImportStrategy(ImportStrategy):
+    provider = "trakt"
+
+    def __init__(
+        self,
+        lookback_hours: int = LOOKBACK_HOURS,
+        per_page: int = PER_PAGE,
+        max_pages: int = MAX_PAGES,
+    ) -> None:
+        self._lookback_hours = lookback_hours
+        self._per_page = per_page
+        self._max_pages = max_pages
+
+    async def import_for_integration(
+        self,
+        context: ImportContext,
+        integration: Integration,
+        requested_at: datetime | None,
+    ) -> ImportResult:
+        return await _import_for_integration(
+            context.db,
+            integration,
+            self._lookback_hours,
+            self._per_page,
+            self._max_pages,
+        )
 
 
 async def process_trakt_imports_once(
@@ -91,33 +108,13 @@ async def process_trakt_imports_once(
 ) -> int:
     init_session_factory()
     async with SessionLocal() as db:
-        result = await db.execute(
-            select(Integration).where(Integration.provider == "trakt")
+        strategy = TraktImportStrategy(
+            lookback_hours=lookback_hours,
+            per_page=per_page,
+            max_pages=max_pages,
         )
-        integrations = result.scalars().all()
-        if not integrations:
-            return 0
         now = datetime.now(timezone.utc)
-        total_imported = 0
-        for integration in integrations:
-            if not should_run_import(
-                integration.config,
-                now,
-                default_interval_seconds=DEFAULT_IMPORT_INTERVAL_SECONDS,
-            ):
-                continue
-            requested_at = parse_datetime(
-                (integration.config or {}).get(IMPORT_REQUESTED_KEY)
-            )
-            import_result = await _import_for_integration(
-                db, integration, lookback_hours, per_page, max_pages
-            )
-            total_imported += import_result.imported
-            if import_result.attempted or requested_at is None:
-                integration.config = record_import_run(integration.config, now)
-                db.add(integration)
-                await db.commit()
-        return total_imported
+        return await strategy.run_once(db, now)
 
 
 async def _import_for_integration(
@@ -164,16 +161,26 @@ async def _import_for_integration(
             per_page=per_page,
             max_pages=max_pages,
         )
+        rating_lookup: dict[str, float] = {}
+        if entries:
+            rating_lookup = await _load_trakt_rating_lookup(
+                client,
+                access_token,
+                history_type,
+                per_page=per_page,
+                max_pages=max_pages,
+                user_id=integration.user_id,
+            )
         for entry in entries:
             try:
                 if history_type == "movies":
                     if await _import_movie_entry(
-                        db, integration.user_id, entry
+                        db, integration.user_id, entry, rating_lookup
                     ):
                         imported += 1
                 else:
                     if await _import_episode_entry(
-                        db, integration.user_id, entry
+                        db, integration.user_id, entry, rating_lookup
                     ):
                         imported += 1
             except Exception:
@@ -221,6 +228,114 @@ async def _fetch_history_entries(
     return entries
 
 
+async def _fetch_ratings_entries(
+    client: TraktClient,
+    access_token: str,
+    rating_type: str,
+    per_page: int,
+    max_pages: int,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    page = 1
+    while page <= max_pages:
+        items, headers = await client.fetch_ratings(
+            access_token,
+            rating_type=rating_type,
+            page=page,
+            limit=per_page,
+        )
+        if not items:
+            break
+        entries.extend(item for item in items if isinstance(item, dict))
+        page_count = _parse_page_count(headers)
+        if page_count and page >= page_count:
+            break
+        if len(items) < per_page:
+            break
+        page += 1
+    return entries
+
+
+async def _load_trakt_rating_lookup(
+    client: TraktClient,
+    access_token: str,
+    history_type: str,
+    per_page: int,
+    max_pages: int,
+    user_id: str,
+) -> dict[str, float]:
+    rating_type_map = {"movies": ("movies", "movie"), "episodes": ("episodes", "episode")}
+    mapped = rating_type_map.get(history_type)
+    if not mapped:
+        return {}
+    rating_type, item_key = mapped
+    try:
+        entries = await _fetch_ratings_entries(
+            client,
+            access_token,
+            rating_type,
+            per_page=per_page,
+            max_pages=max_pages,
+        )
+    except TraktError as exc:
+        logger.warning("Trakt ratings fetch failed for user %s: %s", user_id, exc)
+        return {}
+    return _build_trakt_rating_lookup(entries, item_key)
+
+
+def _build_trakt_rating_lookup(
+    entries: list[dict[str, Any]],
+    item_key: str,
+) -> dict[str, float]:
+    lookup: dict[str, float] = {}
+    for entry in entries:
+        rating = normalize_ten_point_rating(entry.get("rating"))
+        if rating is None:
+            continue
+        item = entry.get(item_key)
+        if not isinstance(item, dict):
+            continue
+        ids = _coerce_ids(item.get("ids"))
+        _insert_rating_lookup(lookup, "imdb", _normalize_imdb_id(ids.get("imdb")), rating)
+        _insert_rating_lookup(lookup, "tmdb", _coerce_str(ids.get("tmdb")), rating)
+        _insert_rating_lookup(lookup, "trakt", _coerce_str(ids.get("trakt")), rating)
+    return lookup
+
+
+def _insert_rating_lookup(
+    lookup: dict[str, float], label: str, value: str | None, rating: float
+) -> None:
+    if value:
+        lookup[f"{label}:{value}"] = rating
+
+
+def _lookup_rating(
+    lookup: dict[str, float],
+    imdb_id: str | None,
+    tmdb_id: str | None,
+    trakt_id: str | None,
+) -> float | None:
+    for label, value in (("imdb", imdb_id), ("tmdb", tmdb_id), ("trakt", trakt_id)):
+        if value:
+            rating = lookup.get(f"{label}:{value}")
+            if rating is not None:
+                return rating
+    return None
+
+
+def _extract_entry_rating(
+    entry: dict[str, Any],
+    lookup: dict[str, float],
+    imdb_id: str | None,
+    tmdb_id: str | None,
+    trakt_id: str | None,
+) -> float | None:
+    rating = normalize_ten_point_rating(entry.get("rating"))
+    if rating is not None:
+        return rating
+    return _lookup_rating(lookup, imdb_id, tmdb_id, trakt_id)
+
+
 def _parse_page_count(headers: dict[str, str]) -> int | None:
     value = headers.get("x-pagination-page-count") or headers.get(
         "X-Pagination-Page-Count"
@@ -234,13 +349,19 @@ def _parse_page_count(headers: dict[str, str]) -> int | None:
 
 
 async def _import_movie_entry(
-    db: AsyncSession, user_id: str, entry: dict[str, Any]
+    db: AsyncSession,
+    user_id: str,
+    entry: dict[str, Any],
+    rating_lookup: dict[str, float],
 ) -> bool:
     history_id = _coerce_str(entry.get("id"))
     watched_at = _parse_datetime(entry.get("watched_at")) or datetime.now(timezone.utc)
     movie = _extract_movie_summary(entry)
     if not movie:
         return False
+    rating = _extract_entry_rating(
+        entry, rating_lookup, movie.imdb_id, movie.tmdb_id, movie.trakt_id
+    )
     entry_key = _build_entry_key(
         history_id, movie.imdb_id, movie.tmdb_id, watched_at, "movie"
     )
@@ -256,7 +377,7 @@ async def _import_movie_entry(
         media_item_id=media_item.id,
         episode_item_id=None,
         watched_at=watched_at,
-        rating=None,
+        rating=rating,
         source="trakt",
     )
     event = WatchEvent(
@@ -265,7 +386,7 @@ async def _import_movie_entry(
         episode_item_id=None,
         event_type="trakt_imported",
         occurred_at=watched_at,
-        raw=_build_event_raw(entry_key, history_id, watched_at, movie, None, None),
+        raw=_build_event_raw(entry_key, history_id, watched_at, movie, None, rating),
     )
     db.add_all([watched, event])
     await db.flush()
@@ -291,7 +412,10 @@ async def _import_movie_entry(
 
 
 async def _import_episode_entry(
-    db: AsyncSession, user_id: str, entry: dict[str, Any]
+    db: AsyncSession,
+    user_id: str,
+    entry: dict[str, Any],
+    rating_lookup: dict[str, float],
 ) -> bool:
     history_id = _coerce_str(entry.get("id"))
     watched_at = _parse_datetime(entry.get("watched_at")) or datetime.now(timezone.utc)
@@ -299,6 +423,9 @@ async def _import_episode_entry(
     episode = _extract_episode_summary(entry)
     if not show or not episode:
         return False
+    rating = _extract_entry_rating(
+        entry, rating_lookup, episode.imdb_id, episode.tmdb_id, episode.trakt_id
+    )
     entry_key = _build_entry_key(
         history_id,
         episode.imdb_id or show.imdb_id,
@@ -321,7 +448,7 @@ async def _import_episode_entry(
         media_item_id=None,
         episode_item_id=episode_item.id,
         watched_at=watched_at,
-        rating=None,
+        rating=rating,
         source="trakt",
     )
     event = WatchEvent(
@@ -330,7 +457,7 @@ async def _import_episode_entry(
         episode_item_id=episode_item.id,
         event_type="trakt_imported",
         occurred_at=watched_at,
-        raw=_build_event_raw(entry_key, history_id, watched_at, show, episode, None),
+        raw=_build_event_raw(entry_key, history_id, watched_at, show, episode, rating),
     )
     db.add_all([watched, event])
     await db.flush()

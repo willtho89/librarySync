@@ -59,11 +59,6 @@ router = APIRouter(
 IMPORTABLE_PROVIDERS = {"letterboxd", "trakt", "simkl", "stremio"}
 
 
-class AIOStreamsConfig(BaseModel):
-    base_url: str
-    api_key: str | None = None
-
-
 class IntegrationOut(BaseModel):
     provider: str
     status: str
@@ -196,93 +191,6 @@ async def list_integrations(
             for integration in integrations
         ]
     }
-
-
-@router.post(
-    "/aiostreams",
-    summary="Save AIOStreams settings",
-    description="Upsert the AIOStreams base URL and optional API key.",
-)
-async def save_aiostreams(
-    payload: AIOStreamsConfig,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    base_url = payload.base_url.strip()
-    if not base_url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Base URL is required"
-        )
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "aiostreams",
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="aiostreams",
-            status="configured",
-        )
-    integration.config = {"base_url": base_url}
-    db.add(integration)
-    await db.flush()
-
-    has_secrets = False
-    api_key = payload.api_key.strip() if payload.api_key else None
-    if api_key:
-        encrypted = encrypt_value(json.dumps({"api_key": api_key}))
-        result = await db.execute(
-            select(IntegrationSecret).where(
-                IntegrationSecret.integration_id == integration.id
-            )
-        )
-        secret = result.scalars().first()
-        if not secret:
-            secret = IntegrationSecret(
-                integration_id=integration.id,
-                secret_data=encrypted,
-            )
-        else:
-            secret.secret_data = encrypted
-        db.add(secret)
-        has_secrets = True
-    else:
-        result = await db.execute(
-            select(IntegrationSecret.integration_id).where(
-                IntegrationSecret.integration_id == integration.id
-            )
-        )
-        has_secrets = result.scalar_one_or_none() is not None
-
-    await db.commit()
-    return _integration_to_out(integration, has_secrets).model_dump()
-
-
-@router.post(
-    "/aiostreams/test",
-    summary="Test AIOStreams settings",
-    description="Verify the AIOStreams configuration exists for the current user.",
-)
-async def test_aiostreams(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "aiostreams",
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config or not integration.config.get("base_url"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="AIOStreams configuration is missing",
-        )
-    return {"status": "ok"}
 
 
 @router.post(
@@ -444,6 +352,41 @@ async def test_letterboxd(
             db.add(integration)
             await db.commit()
 
+    return {"status": "ok"}
+
+
+@router.post(
+    "/letterboxd/disconnect",
+    summary="Disconnect Letterboxd",
+    description="Remove stored Letterboxd credentials for the current user.",
+)
+async def letterboxd_disconnect(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == "letterboxd",
+        )
+    )
+    integration = result.scalars().first()
+    if not integration:
+        return {"status": "ok"}
+    result = await db.execute(
+        select(IntegrationSecret).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    secret = result.scalars().first()
+    if secret:
+        await db.delete(secret)
+    integration.status = "disconnected"
+    config = dict(integration.config or {})
+    config.pop("member_id", None)
+    integration.config = config
+    db.add(integration)
+    await db.commit()
     return {"status": "ok"}
 
 

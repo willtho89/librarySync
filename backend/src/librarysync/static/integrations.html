@@ -21,21 +21,6 @@
     </header>
     <main>
       <section class="card">
-        <h2>AIOStreams</h2>
-        <form id="aiostreams-form">
-          <label>
-            Base URL
-            <input type="url" name="base_url" placeholder="https://..." required />
-          </label>
-          <label>
-            API Key (optional)
-            <input type="text" name="api_key" />
-          </label>
-          <button type="submit">Save</button>
-          <p id="aiostreams-message" class="form-message" role="status" hidden></p>
-        </form>
-      </section>
-      <section class="card">
         <h2>Letterboxd</h2>
         <form id="letterboxd-form">
           <label>
@@ -79,8 +64,20 @@
           <p class="helper-text">
             Paste a JSON object of cookie names to values from your captured session.
           </p>
-          <button type="submit">Save</button>
-          <button type="button" id="letterboxd-test">Test</button>
+          <div class="button-row">
+            <button type="submit">Save</button>
+            <button type="button" id="letterboxd-test" class="secondary-button">
+              Test
+            </button>
+            <button
+              type="button"
+              id="letterboxd-disconnect"
+              class="secondary-button"
+              hidden
+            >
+              Disconnect
+            </button>
+          </div>
           <p id="letterboxd-message" class="form-message" role="status" hidden></p>
         </form>
         <h3>History import</h3>

@@ -2,13 +2,10 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from librarysync.jobs.letterboxd_import import process_letterboxd_imports_once
+from librarysync.jobs.imports import process_imports_once
 from librarysync.jobs.merge_history import process_history_merges_once
 from librarysync.jobs.metadata_lookup import process_metadata_lookups_once
 from librarysync.jobs.process_outbox import process_outbox_once
-from librarysync.jobs.simkl_import import process_simkl_imports_once
-from librarysync.jobs.stremio_import import process_stremio_imports_once
-from librarysync.jobs.trakt_import import process_trakt_imports_once
 
 logger = logging.getLogger(__name__)
 MERGE_HISTORY_INTERVAL = timedelta(hours=6)
@@ -30,21 +27,9 @@ async def main() -> None:
             logger.exception("outbox processing failed")
         now = datetime.now(timezone.utc)
         try:
-            processed += await process_letterboxd_imports_once()
+            processed += await process_imports_once()
         except Exception:
-            logger.exception("letterboxd import failed")
-        try:
-            processed += await process_trakt_imports_once()
-        except Exception:
-            logger.exception("trakt import failed")
-        try:
-            processed += await process_simkl_imports_once()
-        except Exception:
-            logger.exception("simkl import failed")
-        try:
-            processed += await process_stremio_imports_once()
-        except Exception:
-            logger.exception("stremio import failed")
+            logger.exception("import processing failed")
         if (
             last_history_merge is None
             or now - last_history_merge >= MERGE_HISTORY_INTERVAL

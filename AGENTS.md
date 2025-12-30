@@ -4,7 +4,7 @@
 
 Build **librarySync**, a self-hosted, Docker-compose-deployable, **multi-user** synchronization hub that:
 
-- **Ingests watch progress** from media players (MVP: **Stremio via AIOStreams add-on**).
+- **Ingests watch activity** from configured sources.
 - Normalizes events into a **canonical progress/watched model**.
 - **Syncs watched/progress** to downstream tracking services (MVP: **Trakt + SIMKL**).
 - Runs background jobs for polling, syncing, retries, and (later) drift reconciliation.
@@ -24,37 +24,6 @@ Repository style: **monorepo** named `librarySync`.
 
 ## 2) MVP Feature Set (Must Have)
 
-### Player ingest (MVP)
-- Poll AIOStreams "active sessions" endpoint on a configurable interval (e.g. 10–30s).
-- Parse AIOStreams JSON similar to:
-
-https://aiostreams.saladprecedestretch123.uk/api/v1/proxy/stats |jq .users.username.active
-    ```json
-    [
-        {
-            "ip": "80.187.74.90",
-            "url": "https://addon.debridio.com/play/serie/torbox/506386038130ecedba49e71e8cd3f4d0/4b6d8076-4e66-472d-928a-e5928ba6c2f3/33238ed6676afb691a6ae3554f1ffc59b08bf72a/Gen.V.S02E04.Bags.2160p.AMZN.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-G66.mkv",
-            "filename": "Gen.V.S02E04.Bags.2160p.AMZN.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-G66.mkv",
-            "timestamp": "2025-12-16T17:23:37.344Z",
-            "lastSeen": "2025-12-16T17:45:19.002Z",
-            "count": 5,
-            "requestIds": [
-            "rz8c6e"
-            ],
-            "metaId": "tt13159924:2:4",
-            "relativeTimestamp": "21m 50s ago",
-            "relativeLastSeen": "8.88s ago",
-            "progress": 51.9
-        },
-        //…
-    ]
-    ```
-- Interpret `imdbId`:
-  - `tt1234567` => movie
-  - `tt1234567:season:episode` => episode (show/anime treated as episode for MVP)
-- Generate canonical progress events with dedupe/coalescing to avoid spamming downstream APIs.
-- Determine completion using a configurable threshold (default 85%).
-
 ### Downstream sync (MVP)
 - Trakt OAuth connect + token refresh + push:
   - progress/scrobble if supported reasonably
@@ -67,13 +36,13 @@ https://aiostreams.saladprecedestretch123.uk/api/v1/proxy/stats |jq .users.usern
 ### Multi-user (MVP)
 - Multi-user data model from day one.
 - Local authentication for the web UI (simple username + password for MVP).
-- Each user configures their own integrations (AIOStreams endpoint + OAuth connections).
+- Each user configures their own integrations (OAuth connections and metadata providers).
 
 ### UI (MVP)
 - Very small set of pages; plain JS (no frameworks):
   - Login
   - Integrations (connect/disconnect, test connection)
-  - Settings (poll interval, completion threshold, source-of-truth placeholders)
+  - Settings (search preferences, source-of-truth placeholders)
   - Activity (recent events + sync status)
 
 ---
@@ -93,7 +62,7 @@ https://aiostreams.saladprecedestretch123.uk/api/v1/proxy/stats |jq .users.usern
 ### Components
 - **Backend API**: Python (FastAPI recommended)
 - **Worker**: background processing loop(s) for:
-  - polling AIOStreams
+  - processing import jobs
   - processing outbox jobs
   - retries/backoff
   - (later) daily drift reconciliation
@@ -118,7 +87,7 @@ https://aiostreams.saladprecedestretch123.uk/api/v1/proxy/stats |jq .users.usern
 ### PlaybackSession (from player connector)
 - `session_key`: stable identifier for a session (prefer requestId; otherwise hash of key fields)
 - `user_id`
-- `provider`: `aiostreams`
+- `provider`: player connector id (e.g. `stremio`)
 - `imdb_id_raw`: e.g. `tt0472954:10:7`
 - `imdb_id`: base IMDb ID e.g. `tt0472954`
 - `media_type`: `movie` | `episode`
@@ -132,7 +101,7 @@ https://aiostreams.saladprecedestretch123.uk/api/v1/proxy/stats |jq .users.usern
 ### ProgressEvent (append-only)
 - `event_id`
 - `user_id`
-- `source_provider`: `aiostreams`
+- `source_provider`: player connector id
 - `item_key`: canonical key (e.g. `imdb:tt123` or `imdb:tt123:s10e7`)
 - `event_type`: `progress` | `completed`
 - `progress_percent`: float?
@@ -187,12 +156,6 @@ https://aiostreams.saladprecedestretch123.uk/api/v1/proxy/stats |jq .users.usern
 ---
 
 ## 7) Connectors (Pluggable Interfaces)
-
-### PlayerConnector interface (conceptual)
-- `fetch_active_sessions(user) -> list[PlaybackSession]`
-- `validate_config(config) -> bool` (test endpoint / credentials)
-
-MVP player connector: `AIOStreamsConnector`
 
 ### ServiceConnector interface (conceptual)
 - OAuth:
@@ -256,7 +219,6 @@ librarySync/
       connectors/
         players/
           base.py
-          aiostreams.py
         services/
           base.py
           trakt.py
@@ -266,7 +228,6 @@ librarySync/
           tmdb.py
           tvdb.py
       jobs/
-        poll_aiostreams.py
         process_outbox.py
         drift_daily.py         # stub for MVP, can be disabled initially
       static/
@@ -329,7 +290,7 @@ Queue/backing store:
 ## 11) Observability / Debuggability Requirements
 
 - Store raw payload snapshots for:
-  - AIOStreams session entries (sanitized)
+  - player session entries (sanitized, when applicable)
   - downstream API responses (sanitized)
 - Expose in UI:
   - last poll time per user
@@ -351,10 +312,6 @@ MVP env vars (example names; finalize during implementation):
 - `COMPLETION_THRESHOLD_PERCENT` (default 85)
 - `LOG_LEVEL`
 
-Per-user AIOStreams config stored in DB:
-- `aiostreams_base_url`
-- `aiostreams_api_key` (if used)
-
 ---
 
 ## 13) API Endpoints (MVP Target)
@@ -366,8 +323,6 @@ Per-user AIOStreams config stored in DB:
 
 ### Integrations
 - `GET /api/integrations`
-- `POST /api/integrations/aiostreams` (save config)
-- `POST /api/integrations/aiostreams/test`
 - `GET /api/integrations/trakt/start`
 - `GET /api/integrations/trakt/callback`
 - `POST /api/integrations/trakt/disconnect`
@@ -390,10 +345,8 @@ Per-user AIOStreams config stored in DB:
 3. **Integrations framework**: `integrations` table, encryption helpers, UI wiring.
 4. **Trakt OAuth**: connect + test call.
 5. **SIMKL OAuth**: connect + test call.
-6. **AIOStreams poller**:
-   - fetch active sessions
-   - session tracking
-   - dedupe + generate `ProgressEvent`
+6. **History imports**:
+   - Stremio/Trakt/SIMKL/Letterboxd history ingestion
 7. **Outbox + delivery worker**:
    - enqueue jobs per event per provider
    - implement Trakt push (completed first; progress second)
@@ -408,7 +361,7 @@ Per-user AIOStreams config stored in DB:
 
 - Keep connectors pure: **no DB writes inside connectors**.
 - Canonicalize early:
-  - parse AIOStreams -> canonical session
+  - normalize source payload -> canonical session (when applicable)
   - canonical session -> canonical event
   - canonical event -> outbox jobs
 - Use Ruff for linting/import sorting with a 100-character line length.
@@ -433,7 +386,6 @@ Per-user AIOStreams config stored in DB:
 
 ## 16) Known Risks / Open Items
 
-- AIOStreams progress units must be confirmed (assume percent 0–100 until verified).
 - Trakt/SIMKL episode mapping may require search calls and caching.
 - Some services have different semantics for "scrobble" vs "watched". Implement watched first, then progress.
 
@@ -445,9 +397,9 @@ A user can:
 
 - Deploy with `docker compose up`.
 - Log in to the web UI.
-- Configure AIOStreams endpoint and connect Trakt + SIMKL via OAuth.
-- Start playback in Stremio; librarySync detects progress and emits events.
-- On completion threshold, librarySync marks the item watched in Trakt and SIMKL.
+- Configure integrations and connect Trakt + SIMKL via OAuth.
+- Import or add watched history; librarySync records events.
+- On completion, librarySync marks the item watched in Trakt and SIMKL.
 - UI shows recent events and whether sync succeeded or failed.
 - Failures are retried and visible; tokens are stored encrypted.
 
@@ -475,7 +427,7 @@ Now (Sprint 2):
 
 Later (future sprints):
 - Add Trakt/SIMKL connectors + sync worker that pushes local watched events.
-- Add player ingestion (AIOStreams) as another source of watch events.
+- Add player ingestion as another source of watch events.
 - Add drift detection and reconciliation.
 
 ### User-facing features (Sprint 2)

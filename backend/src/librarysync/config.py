@@ -17,8 +17,6 @@ class Settings:
     simkl_client_id: str | None
     simkl_client_secret: str | None
     admin_api_key: str | None
-    poll_interval_seconds: int
-    completion_threshold_percent: float
     history_lookback_days: int
     log_level: str
     jwt_access_token_minutes: int
@@ -36,8 +34,6 @@ def load_settings() -> Settings:
         simkl_client_id=_get_env("SIMKL_CLIENT_ID"),
         simkl_client_secret=_get_env("SIMKL_CLIENT_SECRET"),
         admin_api_key=_get_env("LIBRARYSYNC_ADMIN_API_KEY"),
-        poll_interval_seconds=int(_get_env("POLL_INTERVAL_SECONDS", "60") or "60"),
-        completion_threshold_percent=float(_get_env("COMPLETION_THRESHOLD_PERCENT", "85") or "85"),
         history_lookback_days=int(_get_env("HISTORY_LOOKBACK_DAYS", "30") or "30"),
         log_level=_get_env("LOG_LEVEL", "INFO") or "INFO",
         jwt_access_token_minutes=int(

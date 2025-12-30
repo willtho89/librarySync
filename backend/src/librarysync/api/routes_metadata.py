@@ -1,4 +1,3 @@
-import json
 import re
 from typing import Literal
 
@@ -9,29 +8,29 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
-from librarysync.connectors.metadata.base import MediaCandidate, MetadataProvider
-from librarysync.connectors.metadata.imdb import ImdbMetadataProvider
-from librarysync.connectors.metadata.kitsu import KitsuMetadataProvider
-from librarysync.connectors.metadata.myanimelist import MyAnimeListMetadataProvider
+from librarysync.connectors.metadata.base import (
+    EpisodeMetadataProvider,
+    MediaCandidate,
+    ProviderContext,
+)
 from librarysync.connectors.metadata.tmdb import TmdbMetadataProvider
 from librarysync.connectors.metadata.tvdb import TvdbMetadataProvider
-from librarysync.connectors.metadata.tvmaze import TvmazeMetadataProvider
-from librarysync.core.security import decrypt_value, encrypt_value
-from librarysync.db.models import (
-    Integration,
-    IntegrationSecret,
-    MediaItem,
-    MetadataLookupCandidate,
-    MetadataLookupRequest,
-    User,
+from librarysync.core.metadata_providers import (
+    METADATA_PROVIDER_REGISTRY,
+    ImdbProviderSettings,
+    KitsuProviderSettings,
+    MetadataProviderService,
+    MyAnimeListProviderSettings,
+    TmdbProviderSettings,
+    TvdbProviderSettings,
+    TvmazeProviderSettings,
 )
+from librarysync.db.models import MediaItem, MetadataLookupCandidate, MetadataLookupRequest, User
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
 
 IMDB_ID_RE = re.compile(r"^tt\d+$", re.IGNORECASE)
 TMDB_ID_RE = re.compile(r"^\d+$")
-METADATA_PROVIDERS = ("tmdb", "tvdb", "tvmaze", "imdb", "kitsu", "myanimelist")
-PROVIDERS_WITH_SECRETS = {"tmdb", "tvdb"}
 
 
 class ProviderOut(BaseModel):
@@ -39,37 +38,6 @@ class ProviderOut(BaseModel):
     enabled: bool
     config: dict
     has_credentials: bool
-
-
-class TmdbSettingsIn(BaseModel):
-    enabled: bool = True
-    api_key: str | None = None
-    language: str | None = None
-    region: str | None = None
-
-
-class TvdbSettingsIn(BaseModel):
-    enabled: bool = True
-    api_key: str | None = None
-    pin: str | None = None
-    language: str | None = None
-
-
-class KitsuSettingsIn(BaseModel):
-    enabled: bool = True
-    language: str | None = None
-
-
-class TvmazeSettingsIn(BaseModel):
-    enabled: bool = True
-
-
-class ImdbSettingsIn(BaseModel):
-    enabled: bool = True
-
-
-class MyAnimeListSettingsIn(BaseModel):
-    enabled: bool = True
 
 
 class LookupCreateIn(BaseModel):
@@ -386,41 +354,17 @@ async def list_providers(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider.in_(METADATA_PROVIDERS),
-        )
-    )
-    integrations = {integration.provider: integration for integration in result.scalars().all()}
-    integration_ids = [integration.id for integration in integrations.values()]
-    if integration_ids:
-        result = await db.execute(
-            select(IntegrationSecret.integration_id).where(
-                IntegrationSecret.integration_id.in_(integration_ids)
-            )
-        )
-        secret_ids = set(result.scalars().all())
-    else:
-        secret_ids = set()
-
-    providers: list[dict] = []
-    for provider in METADATA_PROVIDERS:
-        integration = integrations.get(provider)
-        config = integration.config if integration and integration.config else {}
-        enabled = bool(config.get("enabled")) if integration else False
-        requires_credentials = provider in PROVIDERS_WITH_SECRETS
-        has_credentials = False
-        if integration:
-            has_credentials = integration.id in secret_ids or not requires_credentials
-        providers.append(
-            ProviderOut(
-                provider=provider,
-                enabled=enabled,
-                config=config,
-                has_credentials=has_credentials,
-            ).model_dump()
-        )
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    states = await service.list_provider_states()
+    providers = [
+        ProviderOut(
+            provider=state.provider,
+            enabled=state.enabled,
+            config=state.config,
+            has_credentials=state.has_credentials,
+        ).model_dump()
+        for state in states
+    ]
     return {"providers": providers}
 
 
@@ -430,77 +374,19 @@ async def list_providers(
     description="Enable/disable TMDB and store credentials and locale settings.",
 )
 async def save_tmdb_provider(
-    payload: TmdbSettingsIn,
+    payload: TmdbProviderSettings,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id, Integration.provider == "tmdb"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="tmdb",
-        )
-
-    language = payload.language.strip() if payload.language else None
-    region = payload.region.strip() if payload.region else None
-    api_key = payload.api_key.strip() if payload.api_key is not None else None
-    if api_key:
-        await _validate_tmdb_credentials(api_key, language, region)
-    config = dict(integration.config or {})
-    config.update(
-        {
-            "enabled": payload.enabled,
-            "language": language,
-            "region": region,
-        }
-    )
-    integration.config = config
-    integration.status = "enabled" if payload.enabled else "disabled"
-    db.add(integration)
-    await db.flush()
-
-    has_credentials = False
-    if payload.api_key is not None:
-        result = await db.execute(
-            select(IntegrationSecret).where(
-                IntegrationSecret.integration_id == integration.id
-            )
-        )
-        secret = result.scalars().first()
-        if api_key:
-            encrypted = encrypt_value(json.dumps({"api_key": api_key}))
-            if not secret:
-                secret = IntegrationSecret(
-                    integration_id=integration.id,
-                    secret_data=encrypted,
-                )
-            else:
-                secret.secret_data = encrypted
-            db.add(secret)
-            has_credentials = True
-        else:
-            if secret:
-                await db.delete(secret)
-            has_credentials = False
-    else:
-        result = await db.execute(
-            select(IntegrationSecret.integration_id).where(
-                IntegrationSecret.integration_id == integration.id
-            )
-        )
-        has_credentials = result.scalar_one_or_none() is not None
-
-    await db.commit()
+    if "api_key" in payload.model_fields_set and payload.api_key:
+        await _validate_tmdb_credentials(payload.api_key, payload.language, payload.region)
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    state = await service.save_provider_settings("tmdb", payload)
     return ProviderOut(
-        provider="tmdb",
-        enabled=payload.enabled,
-        config=config,
-        has_credentials=has_credentials,
+        provider=state.provider,
+        enabled=state.enabled,
+        config=state.config,
+        has_credentials=state.has_credentials,
     ).model_dump()
 
 
@@ -513,7 +399,8 @@ async def test_tmdb_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    provider = await _load_tmdb_provider(db, current_user.id)
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    provider = await service.load_provider("tmdb")
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -534,76 +421,19 @@ async def test_tmdb_provider(
     description="Enable/disable TVDB and store credentials and locale settings.",
 )
 async def save_tvdb_provider(
-    payload: TvdbSettingsIn,
+    payload: TvdbProviderSettings,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id, Integration.provider == "tvdb"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="tvdb",
-        )
-
-    language = payload.language.strip() if payload.language else None
-    api_key = payload.api_key.strip() if payload.api_key is not None else None
-    pin = payload.pin.strip() if payload.pin else None
-    if api_key:
-        await _validate_tvdb_credentials(api_key, pin, language)
-    config = dict(integration.config or {})
-    config.update(
-        {
-            "enabled": payload.enabled,
-            "language": language,
-        }
-    )
-    integration.config = config
-    integration.status = "enabled" if payload.enabled else "disabled"
-    db.add(integration)
-    await db.flush()
-
-    has_credentials = False
-    if payload.api_key is not None:
-        result = await db.execute(
-            select(IntegrationSecret).where(
-                IntegrationSecret.integration_id == integration.id
-            )
-        )
-        secret = result.scalars().first()
-        if api_key:
-            encrypted = encrypt_value(json.dumps({"api_key": api_key, "pin": pin}))
-            if not secret:
-                secret = IntegrationSecret(
-                    integration_id=integration.id,
-                    secret_data=encrypted,
-                )
-            else:
-                secret.secret_data = encrypted
-            db.add(secret)
-            has_credentials = True
-        else:
-            if secret:
-                await db.delete(secret)
-            has_credentials = False
-    else:
-        result = await db.execute(
-            select(IntegrationSecret.integration_id).where(
-                IntegrationSecret.integration_id == integration.id
-            )
-        )
-        has_credentials = result.scalar_one_or_none() is not None
-
-    await db.commit()
+    if "api_key" in payload.model_fields_set and payload.api_key:
+        await _validate_tvdb_credentials(payload.api_key, payload.pin, payload.language)
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    state = await service.save_provider_settings("tvdb", payload)
     return ProviderOut(
-        provider="tvdb",
-        enabled=payload.enabled,
-        config=config,
-        has_credentials=has_credentials,
+        provider=state.provider,
+        enabled=state.enabled,
+        config=state.config,
+        has_credentials=state.has_credentials,
     ).model_dump()
 
 
@@ -616,7 +446,8 @@ async def test_tvdb_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    provider = await _load_tvdb_provider(db, current_user.id)
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    provider = await service.load_provider("tvdb")
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -637,39 +468,17 @@ async def test_tvdb_provider(
     description="Enable/disable Kitsu and store preferences.",
 )
 async def save_kitsu_provider(
-    payload: KitsuSettingsIn,
+    payload: KitsuProviderSettings,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id, Integration.provider == "kitsu"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="kitsu",
-        )
-
-    language = payload.language.strip() if payload.language else None
-    config = dict(integration.config or {})
-    config.update(
-        {
-            "enabled": payload.enabled,
-            "language": language,
-        }
-    )
-    integration.config = config
-    integration.status = "enabled" if payload.enabled else "disabled"
-    db.add(integration)
-    await db.commit()
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    state = await service.save_provider_settings("kitsu", payload)
     return ProviderOut(
-        provider="kitsu",
-        enabled=payload.enabled,
-        config=config,
-        has_credentials=True,
+        provider=state.provider,
+        enabled=state.enabled,
+        config=state.config,
+        has_credentials=state.has_credentials,
     ).model_dump()
 
 
@@ -682,7 +491,8 @@ async def test_kitsu_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    provider = await _load_kitsu_provider(db, current_user.id)
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    provider = await service.load_provider("kitsu")
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -703,33 +513,17 @@ async def test_kitsu_provider(
     description="Enable/disable TVMaze provider access.",
 )
 async def save_tvmaze_provider(
-    payload: TvmazeSettingsIn,
+    payload: TvmazeProviderSettings,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id, Integration.provider == "tvmaze"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="tvmaze",
-        )
-
-    config = dict(integration.config or {})
-    config.update({"enabled": payload.enabled})
-    integration.config = config
-    integration.status = "enabled" if payload.enabled else "disabled"
-    db.add(integration)
-    await db.commit()
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    state = await service.save_provider_settings("tvmaze", payload)
     return ProviderOut(
-        provider="tvmaze",
-        enabled=payload.enabled,
-        config=config,
-        has_credentials=True,
+        provider=state.provider,
+        enabled=state.enabled,
+        config=state.config,
+        has_credentials=state.has_credentials,
     ).model_dump()
 
 
@@ -742,7 +536,8 @@ async def test_tvmaze_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    provider = await _load_tvmaze_provider(db, current_user.id)
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    provider = await service.load_provider("tvmaze")
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -763,33 +558,17 @@ async def test_tvmaze_provider(
     description="Enable/disable IMDb provider access.",
 )
 async def save_imdb_provider(
-    payload: ImdbSettingsIn,
+    payload: ImdbProviderSettings,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id, Integration.provider == "imdb"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="imdb",
-        )
-
-    config = dict(integration.config or {})
-    config.update({"enabled": payload.enabled})
-    integration.config = config
-    integration.status = "enabled" if payload.enabled else "disabled"
-    db.add(integration)
-    await db.commit()
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    state = await service.save_provider_settings("imdb", payload)
     return ProviderOut(
-        provider="imdb",
-        enabled=payload.enabled,
-        config=config,
-        has_credentials=True,
+        provider=state.provider,
+        enabled=state.enabled,
+        config=state.config,
+        has_credentials=state.has_credentials,
     ).model_dump()
 
 
@@ -802,7 +581,8 @@ async def test_imdb_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    provider = await _load_imdb_provider(db, current_user.id)
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    provider = await service.load_provider("imdb")
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -823,34 +603,17 @@ async def test_imdb_provider(
     description="Enable/disable MyAnimeList provider access.",
 )
 async def save_myanimelist_provider(
-    payload: MyAnimeListSettingsIn,
+    payload: MyAnimeListProviderSettings,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "myanimelist",
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="myanimelist",
-        )
-
-    config = dict(integration.config or {})
-    config.update({"enabled": payload.enabled})
-    integration.config = config
-    integration.status = "enabled" if payload.enabled else "disabled"
-    db.add(integration)
-    await db.commit()
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    state = await service.save_provider_settings("myanimelist", payload)
     return ProviderOut(
-        provider="myanimelist",
-        enabled=payload.enabled,
-        config=config,
-        has_credentials=True,
+        provider=state.provider,
+        enabled=state.enabled,
+        config=state.config,
+        has_credentials=state.has_credentials,
     ).model_dump()
 
 
@@ -863,7 +626,8 @@ async def test_myanimelist_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    provider = await _load_myanimelist_provider(db, current_user.id)
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    provider = await service.load_provider("myanimelist")
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -961,18 +725,19 @@ async def list_tv_seasons(
     db: AsyncSession = Depends(get_db),
 ) -> list[SeasonOut]:
     normalized = provider.lower()
-    if normalized != "tmdb":
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    provider_instance = await service.load_provider(normalized)
+    if not provider_instance:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Episode lookup is only supported for TMDB right now",
+            detail="Metadata provider is not enabled for this user",
         )
-    tmdb = await _load_tmdb_provider(db, current_user.id)
-    if not tmdb:
+    if not isinstance(provider_instance, EpisodeMetadataProvider):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="TMDB provider is not enabled for this user",
+            detail="Episode lookup is not supported for this provider",
         )
-    seasons = await tmdb.list_seasons(provider_item_id)
+    seasons = await provider_instance.list_seasons(provider_item_id)
     return [
         SeasonOut(
             season_number=season.season_number,
@@ -999,18 +764,19 @@ async def list_tv_episodes(
     db: AsyncSession = Depends(get_db),
 ) -> list[EpisodeOut]:
     normalized = provider.lower()
-    if normalized != "tmdb":
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    provider_instance = await service.load_provider(normalized)
+    if not provider_instance:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Episode lookup is only supported for TMDB right now",
+            detail="Metadata provider is not enabled for this user",
         )
-    tmdb = await _load_tmdb_provider(db, current_user.id)
-    if not tmdb:
+    if not isinstance(provider_instance, EpisodeMetadataProvider):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="TMDB provider is not enabled for this user",
+            detail="Episode lookup is not supported for this provider",
         )
-    episodes = await tmdb.list_episodes(provider_item_id, season_number)
+    episodes = await provider_instance.list_episodes(provider_item_id, season_number)
     return [
         EpisodeOut(
             episode_number=episode.episode_number,
@@ -1029,170 +795,6 @@ def _classify_query(query: str) -> tuple[str, str]:
     if TMDB_ID_RE.match(query):
         return "tmdb", query
     return "title", query
-
-
-async def _load_tmdb_provider(
-    db: AsyncSession, user_id: str
-) -> TmdbMetadataProvider | None:
-    result = await db.execute(
-        select(User.include_adult_in_search).where(User.id == user_id)
-    )
-    include_adult = result.scalar_one_or_none() or False
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "tmdb"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        return None
-    try:
-        data = json.loads(decrypt_value(secret.secret_data))
-    except (ValueError, json.JSONDecodeError):
-        return None
-    api_key = data.get("api_key")
-    if not api_key:
-        return None
-
-    language = integration.config.get("language")
-    region = integration.config.get("region")
-    return TmdbMetadataProvider(
-        api_key=api_key,
-        language=language,
-        region=region,
-        include_adult=include_adult,
-    )
-
-
-async def _load_tvdb_provider(
-    db: AsyncSession, user_id: str
-) -> TvdbMetadataProvider | None:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "tvdb"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        return None
-    try:
-        data = json.loads(decrypt_value(secret.secret_data))
-    except (ValueError, json.JSONDecodeError):
-        return None
-    api_key = data.get("api_key")
-    pin = data.get("pin")
-    if not api_key:
-        return None
-
-    language = integration.config.get("language")
-    return TvdbMetadataProvider(api_key=api_key, pin=pin, language=language)
-
-
-async def _load_kitsu_provider(
-    db: AsyncSession, user_id: str
-) -> KitsuMetadataProvider | None:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "kitsu"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-
-    language = integration.config.get("language")
-    return KitsuMetadataProvider(language=language)
-
-
-async def _load_tvmaze_provider(
-    db: AsyncSession, user_id: str
-) -> TvmazeMetadataProvider | None:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "tvmaze"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-    return TvmazeMetadataProvider()
-
-
-async def _load_imdb_provider(
-    db: AsyncSession, user_id: str
-) -> ImdbMetadataProvider | None:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == "imdb"
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-    return ImdbMetadataProvider()
-
-
-async def _load_myanimelist_provider(
-    db: AsyncSession, user_id: str
-) -> MyAnimeListMetadataProvider | None:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id,
-            Integration.provider == "myanimelist",
-        )
-    )
-    integration = result.scalars().first()
-    if not integration or not integration.config:
-        return None
-    if not integration.config.get("enabled"):
-        return None
-    return MyAnimeListMetadataProvider()
-
-
-async def _load_metadata_provider(
-    db: AsyncSession, user_id: str, provider_name: str
-) -> MetadataProvider | None:
-    if provider_name == "tmdb":
-        return await _load_tmdb_provider(db, user_id)
-    if provider_name == "tvdb":
-        return await _load_tvdb_provider(db, user_id)
-    if provider_name == "kitsu":
-        return await _load_kitsu_provider(db, user_id)
-    if provider_name == "tvmaze":
-        return await _load_tvmaze_provider(db, user_id)
-    if provider_name == "imdb":
-        return await _load_imdb_provider(db, user_id)
-    if provider_name == "myanimelist":
-        return await _load_myanimelist_provider(db, user_id)
-    return None
 
 
 async def _upsert_media_item(db: AsyncSession, candidate: MediaCandidate) -> MediaItem:
@@ -1284,7 +886,11 @@ async def _validate_tmdb_credentials(
     api_key: str, language: str | None, region: str | None
 ) -> None:
     try:
-        provider = TmdbMetadataProvider(api_key=api_key, language=language, region=region)
+        provider = TmdbMetadataProvider.from_settings(
+            {"language": language, "region": region, "include_adult": False},
+            {"api_key": api_key},
+            ProviderContext(user_id="validation", include_adult=False),
+        )
         await provider.validate_credentials()
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in {401, 403}:
@@ -1306,7 +912,11 @@ async def _validate_tvdb_credentials(
     api_key: str, pin: str | None, language: str | None
 ) -> None:
     try:
-        provider = TvdbMetadataProvider(api_key=api_key, pin=pin, language=language)
+        provider = TvdbMetadataProvider.from_settings(
+            {"language": language},
+            {"api_key": api_key, "pin": pin},
+            ProviderContext(user_id="validation", include_adult=False),
+        )
         await provider.validate_credentials()
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in {401, 403}:

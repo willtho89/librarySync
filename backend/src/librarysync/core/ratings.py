@@ -29,3 +29,19 @@ def coerce_star_rating(value: object | None) -> float | None:
         return normalize_star_rating(value)
     except ValueError:
         return None
+
+
+def normalize_ten_point_rating(value: object | None) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        rating = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(rating):
+        return None
+    if rating < 1 or rating > 10:
+        return None
+    return coerce_star_rating(rating / 2)

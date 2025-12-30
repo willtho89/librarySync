@@ -1,15 +1,32 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
-from librarysync.connectors.metadata.base import MediaCandidate
+from librarysync.connectors.metadata.base import (
+    MediaCandidate,
+    MetadataProvider,
+    ProviderCapabilities,
+    ProviderContext,
+)
 
 TVDB_API_BASE = "https://api4.thetvdb.com/v4"
 DEFAULT_SEARCH_LIMIT = 10
 MEDIA_TYPE_MOVIE = "movie"
 MEDIA_TYPE_TV = "tv"
+
+
+@dataclass(frozen=True)
+class TvdbConfig:
+    language: str | None = None
+
+
+@dataclass(frozen=True)
+class TvdbSecrets:
+    api_key: str
+    pin: str | None = None
 
 
 def _extract_year(value: str | None) -> int | None:
@@ -113,20 +130,30 @@ def _extract_tmdb_id(raw: dict[str, Any]) -> str | None:
     return None
 
 
-class TvdbMetadataProvider:
+class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
     provider = "tvdb"
+    config_schema = TvdbConfig
+    secrets_schema = TvdbSecrets
+    capabilities = ProviderCapabilities(
+        scopes={MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV},
+        supports_external_id=True,
+        supports_search=True,
+        supports_details=True,
+        supports_episodes=False,
+    )
 
     def __init__(
         self,
-        api_key: str,
-        pin: str | None = None,
-        language: str | None = None,
+        config: TvdbConfig,
+        secrets: TvdbSecrets | None,
+        context: ProviderContext,
     ) -> None:
-        if not api_key:
+        super().__init__(config, secrets, context)
+        if not secrets or not secrets.api_key:
             raise ValueError("TVDB API key is required")
-        self._api_key = api_key
-        self._pin = pin
-        self._language = language
+        self._api_key = secrets.api_key
+        self._pin = secrets.pin
+        self._language = config.language
         self._token: str | None = None
 
     async def search(self, query: str, scope: str = "all") -> list[MediaCandidate]:

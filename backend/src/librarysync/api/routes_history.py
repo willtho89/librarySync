@@ -9,23 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
-from librarysync.config import settings
-from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
-from librarysync.connectors.services.simkl import has_required_simkl_fields
-from librarysync.connectors.services.stremio import has_required_stremio_fields
-from librarysync.connectors.services.trakt import has_required_trakt_fields
-from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_star_rating
 from librarysync.core.watch_pipeline import (
-    build_simkl_payload,
-    build_stremio_payload,
-    build_trakt_payload,
+    SYNC_COORDINATOR,
     enqueue_new_item_job,
 )
 from librarysync.db.models import (
     EpisodeItem,
     MediaItem,
-    OutboxJob,
     User,
     WatchedItem,
     WatchEvent,
@@ -597,28 +588,9 @@ async def update_watched_item(
                     )
                 )
                 show_item = result.scalars().first()
-        if media_item:
-            await _enqueue_letterboxd_update_sync(
-                db,
-                current_user.id,
-                watched,
-                media_item,
-                watched_at_updated,
-                rating_updated,
-            )
         if media_item or episode_item:
-            await _enqueue_trakt_update_sync(
+            await _enqueue_update_syncs(
                 db,
-                current_user.id,
-                watched,
-                media_item or show_item,
-                episode_item,
-                watched_at_updated,
-                rating_updated,
-            )
-            await _enqueue_simkl_update_sync(
-                db,
-                current_user.id,
                 watched,
                 media_item or show_item,
                 episode_item,
@@ -699,19 +671,12 @@ async def delete_watched_item(
     db.add(event)
     if delete_integrations:
         target_media = media_item or show_item
-        if media_item:
-            await _enqueue_letterboxd_delete_sync(
-                db, current_user.id, watched, media_item
-            )
         if target_media:
-            await _enqueue_trakt_delete_sync(
-                db, current_user.id, watched, target_media, episode_item
-            )
-            await _enqueue_simkl_delete_sync(
-                db, current_user.id, watched, target_media, episode_item
-            )
-            await _enqueue_stremio_delete_sync(
-                db, current_user.id, watched, target_media, episode_item
+            await _enqueue_delete_syncs(
+                db,
+                watched,
+                target_media,
+                episode_item,
             )
     await db.delete(watched)
     await db.commit()
@@ -1061,345 +1026,36 @@ def _metadata_fields() -> tuple[str, ...]:
     )
 
 
-async def _enqueue_letterboxd_update_sync(
+async def _enqueue_update_syncs(
     db: AsyncSession,
-    user_id: str,
-    watched: WatchedItem,
-    media_item: MediaItem,
-    watched_at_updated: bool,
-    rating_updated: bool,
-) -> None:
-    if media_item.media_type != "movie":
-        return
-    integration, secret_data = await load_integration_with_secrets(
-        db, user_id, "letterboxd"
-    )
-    if not integration or not secret_data:
-        return
-    if not has_required_letterboxd_fields(secret_data):
-        return
-    result = await db.execute(
-        select(WatchSync).where(
-            WatchSync.watched_item_id == watched.id, WatchSync.provider == "letterboxd"
-        )
-    )
-    watch_sync = result.scalars().first()
-    if not watch_sync or not watch_sync.external_id:
-        return
-    payload: dict[str, object] = {
-        "watch_sync_id": watch_sync.id,
-        "watched_item_id": watched.id,
-        "media_item_id": media_item.id,
-        "entry_id": watch_sync.external_id,
-    }
-    if watched_at_updated:
-        payload["watched_at"] = watched.watched_at.isoformat()
-    if rating_updated and watched.rating is not None:
-        payload["rating"] = watched.rating
-    if not {"watched_at", "rating"} & payload.keys():
-        return
-
-    watch_sync.status = "pending"
-    watch_sync.last_error = None
-
-    job = OutboxJob(
-        user_id=user_id,
-        target_provider="letterboxd",
-        job_type="update_log_entry",
-        payload=payload,
-        status="pending",
-    )
-    db.add(job)
-
-
-async def _enqueue_trakt_update_sync(
-    db: AsyncSession,
-    user_id: str,
     watched: WatchedItem,
     media_item: MediaItem | None,
     episode_item: EpisodeItem | None,
     watched_at_updated: bool,
     rating_updated: bool,
 ) -> None:
-    if not media_item:
-        return
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        return
-    integration, secret_data = await load_integration_with_secrets(
-        db, user_id, "trakt"
-    )
-    if not integration or not secret_data:
-        return
-    if not has_required_trakt_fields(secret_data):
-        return
-    result = await db.execute(
-        select(WatchSync).where(
-            WatchSync.watched_item_id == watched.id, WatchSync.provider == "trakt"
-        )
-    )
-    watch_sync = result.scalars().first()
-    if not watch_sync:
-        return
-    payload = build_trakt_payload(
+    await SYNC_COORDINATOR.enqueue_update_all(
+        db,
+        watched,
         media_item,
         episode_item,
-        watched.watched_at,
-        watched.rating,
+        watched_at_updated,
+        rating_updated,
     )
-    if not payload:
-        return
-    payload["watch_sync_id"] = watch_sync.id
-    payload["watched_item_id"] = watched.id
-    if watch_sync.external_id:
-        payload["history_id"] = watch_sync.external_id
-    if watched_at_updated:
-        payload["watched_at"] = watched.watched_at.isoformat()
-    if rating_updated and watched.rating is not None:
-        payload["rating"] = watched.rating
-
-    watch_sync.status = "pending"
-    watch_sync.last_error = None
-    db.add(watch_sync)
-
-    if watched_at_updated:
-        job = OutboxJob(
-            user_id=user_id,
-            target_provider="trakt",
-            job_type="update_history",
-            payload=payload,
-            status="pending",
-        )
-        db.add(job)
-    if rating_updated and watched.rating is not None:
-        rating_payload = dict(payload)
-        rating_payload["rating"] = watched.rating
-        job = OutboxJob(
-            user_id=user_id,
-            target_provider="trakt",
-            job_type="push_rating",
-            payload=rating_payload,
-            status="pending",
-        )
-        db.add(job)
 
 
-async def _enqueue_simkl_update_sync(
+async def _enqueue_delete_syncs(
     db: AsyncSession,
-    user_id: str,
     watched: WatchedItem,
     media_item: MediaItem | None,
     episode_item: EpisodeItem | None,
-    watched_at_updated: bool,
-    rating_updated: bool,
 ) -> None:
-    if not media_item:
-        return
-    if not settings.simkl_client_id or not settings.simkl_client_secret:
-        return
-    integration, secret_data = await load_integration_with_secrets(
-        db, user_id, "simkl"
-    )
-    if not integration or not secret_data:
-        return
-    if not has_required_simkl_fields(secret_data):
-        return
-    result = await db.execute(
-        select(WatchSync).where(
-            WatchSync.watched_item_id == watched.id, WatchSync.provider == "simkl"
-        )
-    )
-    watch_sync = result.scalars().first()
-    if not watch_sync:
-        return
-    payload = build_simkl_payload(
+    await SYNC_COORDINATOR.enqueue_delete_all(
+        db,
+        watched,
         media_item,
         episode_item,
-        watched.watched_at,
-        watched.rating,
     )
-    if not payload:
-        return
-    payload["watch_sync_id"] = watch_sync.id
-    payload["watched_item_id"] = watched.id
-    if watch_sync.external_id:
-        payload["history_id"] = watch_sync.external_id
-    if watched_at_updated:
-        payload["watched_at"] = watched.watched_at.isoformat()
-    if rating_updated and watched.rating is not None:
-        payload["rating"] = watched.rating
-
-    watch_sync.status = "pending"
-    watch_sync.last_error = None
-    db.add(watch_sync)
-
-    if watched_at_updated:
-        job = OutboxJob(
-            user_id=user_id,
-            target_provider="simkl",
-            job_type="update_history",
-            payload=payload,
-            status="pending",
-        )
-        db.add(job)
-    if rating_updated and watched.rating is not None:
-        rating_payload = dict(payload)
-        rating_payload["rating"] = watched.rating
-        job = OutboxJob(
-            user_id=user_id,
-            target_provider="simkl",
-            job_type="push_rating",
-            payload=rating_payload,
-            status="pending",
-        )
-        db.add(job)
-
-
-async def _enqueue_letterboxd_delete_sync(
-    db: AsyncSession,
-    user_id: str,
-    watched: WatchedItem,
-    media_item: MediaItem,
-) -> None:
-    if media_item.media_type != "movie":
-        return
-    integration, secret_data = await load_integration_with_secrets(
-        db, user_id, "letterboxd"
-    )
-    if not integration or not secret_data:
-        return
-    if not has_required_letterboxd_fields(secret_data):
-        return
-    result = await db.execute(
-        select(WatchSync).where(
-            WatchSync.watched_item_id == watched.id, WatchSync.provider == "letterboxd"
-        )
-    )
-    watch_sync = result.scalars().first()
-    if not watch_sync or not watch_sync.external_id:
-        return
-    payload = {
-        "entry_id": watch_sync.external_id,
-        "watched_item_id": watched.id,
-    }
-    job = OutboxJob(
-        user_id=user_id,
-        target_provider="letterboxd",
-        job_type="delete_log_entry",
-        payload=payload,
-        status="pending",
-    )
-    db.add(job)
-
-
-async def _enqueue_trakt_delete_sync(
-    db: AsyncSession,
-    user_id: str,
-    watched: WatchedItem,
-    media_item: MediaItem,
-    episode_item: EpisodeItem | None,
-) -> None:
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        return
-    integration, secret_data = await load_integration_with_secrets(
-        db, user_id, "trakt"
-    )
-    if not integration or not secret_data:
-        return
-    if not has_required_trakt_fields(secret_data):
-        return
-    payload = build_trakt_payload(
-        media_item,
-        episode_item,
-        watched.watched_at,
-        watched.rating,
-    )
-    if not payload:
-        return
-    payload.pop("watched_at", None)
-    payload.pop("rating", None)
-    result = await db.execute(
-        select(WatchSync).where(
-            WatchSync.watched_item_id == watched.id, WatchSync.provider == "trakt"
-        )
-    )
-    watch_sync = result.scalars().first()
-    if watch_sync and watch_sync.external_id:
-        payload["history_id"] = watch_sync.external_id
-    payload["watched_item_id"] = watched.id
-    job = OutboxJob(
-        user_id=user_id,
-        target_provider="trakt",
-        job_type="remove_history",
-        payload=payload,
-        status="pending",
-    )
-    db.add(job)
-
-
-async def _enqueue_simkl_delete_sync(
-    db: AsyncSession,
-    user_id: str,
-    watched: WatchedItem,
-    media_item: MediaItem,
-    episode_item: EpisodeItem | None,
-) -> None:
-    if not settings.simkl_client_id or not settings.simkl_client_secret:
-        return
-    integration, secret_data = await load_integration_with_secrets(
-        db, user_id, "simkl"
-    )
-    if not integration or not secret_data:
-        return
-    if not has_required_simkl_fields(secret_data):
-        return
-    payload = build_simkl_payload(
-        media_item,
-        episode_item,
-        watched.watched_at,
-        watched.rating,
-    )
-    if not payload:
-        return
-    payload.pop("watched_at", None)
-    payload.pop("rating", None)
-    payload["watched_item_id"] = watched.id
-    job = OutboxJob(
-        user_id=user_id,
-        target_provider="simkl",
-        job_type="remove_history",
-        payload=payload,
-        status="pending",
-    )
-    db.add(job)
-
-
-async def _enqueue_stremio_delete_sync(
-    db: AsyncSession,
-    user_id: str,
-    watched: WatchedItem,
-    media_item: MediaItem,
-    episode_item: EpisodeItem | None,
-) -> None:
-    integration, secret_data = await load_integration_with_secrets(
-        db, user_id, "stremio"
-    )
-    if not integration or not secret_data:
-        return
-    if not has_required_stremio_fields(secret_data):
-        return
-    payload = build_stremio_payload(media_item, episode_item, watched.watched_at)
-    if not payload:
-        return
-    payload.pop("watched_at", None)
-    payload["watched_item_id"] = watched.id
-    job = OutboxJob(
-        user_id=user_id,
-        target_provider="stremio",
-        job_type="remove_watched",
-        payload=payload,
-        status="pending",
-    )
-    db.add(job)
 
 
 async def _find_media_item_by_ids(

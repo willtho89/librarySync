@@ -241,6 +241,29 @@ class TraktClient:
             items = []
         return items, dict(response.headers)
 
+    async def fetch_ratings(
+        self,
+        access_token: str,
+        rating_type: str | None = None,
+        page: int = 1,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        path = "/sync/ratings"
+        if rating_type:
+            path = f"{path}/{rating_type}"
+        params: dict[str, str] = {"page": str(page), "limit": str(limit)}
+        response = await self._request(
+            "GET", path, access_token=access_token, params=params
+        )
+        payload = self._parse_json(response)
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict) and isinstance(payload.get("items"), list):
+            items = payload["items"]
+        else:
+            items = []
+        return items, dict(response.headers)
+
     async def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         try:

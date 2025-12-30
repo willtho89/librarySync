@@ -1,16 +1,36 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
-from librarysync.connectors.metadata.base import EpisodeSummary, MediaCandidate, SeasonSummary
+from librarysync.connectors.metadata.base import (
+    EpisodeMetadataProvider,
+    EpisodeSummary,
+    MediaCandidate,
+    ProviderCapabilities,
+    ProviderContext,
+    SeasonSummary,
+)
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w185"
 DEFAULT_SEARCH_LIMIT = 10
 MEDIA_TYPE_MOVIE = "movie"
 MEDIA_TYPE_TV = "tv"
+
+
+@dataclass(frozen=True)
+class TmdbConfig:
+    language: str | None = None
+    region: str | None = None
+    include_adult: bool = False
+
+
+@dataclass(frozen=True)
+class TmdbSecrets:
+    api_key: str
 
 
 def _extract_year(date_value: str | None) -> int | None:
@@ -57,22 +77,31 @@ def _year_for_type(raw: dict[str, Any], media_type: str) -> int | None:
     return _extract_year(raw.get(date_key) or raw.get("release_date") or raw.get("first_air_date"))
 
 
-class TmdbMetadataProvider:
+class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
     provider = "tmdb"
+    config_schema = TmdbConfig
+    secrets_schema = TmdbSecrets
+    capabilities = ProviderCapabilities(
+        scopes={MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV},
+        supports_external_id=True,
+        supports_search=True,
+        supports_details=True,
+        supports_episodes=True,
+    )
 
     def __init__(
         self,
-        api_key: str,
-        language: str | None = None,
-        region: str | None = None,
-        include_adult: bool = False,
+        config: TmdbConfig,
+        secrets: TmdbSecrets | None,
+        context: ProviderContext,
     ):
-        if not api_key:
+        super().__init__(config, secrets, context)
+        if not secrets or not secrets.api_key:
             raise ValueError("TMDB API key is required")
-        self._api_key = api_key
-        self._language = language
-        self._region = region
-        self._include_adult = bool(include_adult)
+        self._api_key = secrets.api_key
+        self._language = config.language
+        self._region = config.region
+        self._include_adult = bool(config.include_adult)
 
     async def search(self, query: str, scope: str = "all") -> list[MediaCandidate]:
         if scope == "anime":

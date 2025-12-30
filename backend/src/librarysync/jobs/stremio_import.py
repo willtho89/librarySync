@@ -16,14 +16,7 @@ from librarysync.connectors.services.stremio import (
     StremioError,
     has_required_stremio_fields,
 )
-from librarysync.core.import_schedule import (
-    DEFAULT_IMPORT_INTERVAL_SECONDS,
-    IMPORT_LAST_RUN_KEY,
-    IMPORT_REQUESTED_KEY,
-    parse_datetime,
-    record_import_run,
-    should_run_import,
-)
+from librarysync.core.import_schedule import IMPORT_LAST_RUN_KEY, parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
@@ -35,8 +28,10 @@ from librarysync.db.models import (
     WatchSync,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
+from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
 LOOKBACK_HOURS = settings.history_lookback_days * 24
+COMPLETION_THRESHOLD = 0.85
 BATCH_SIZE = 50
 IMDB_ID_RE = re.compile(r"(tt\d{3,10})", re.IGNORECASE)
 TMDB_ID_RE = re.compile(r"tmdb[:/](?:movie|tv|show|series)?[:/](\d+)", re.IGNORECASE)
@@ -79,10 +74,30 @@ class EpisodeSummary:
     raw: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class ImportResult:
-    imported: int
-    attempted: bool
+class StremioImportStrategy(ImportStrategy):
+    provider = "stremio"
+
+    def __init__(
+        self,
+        lookback_hours: int = LOOKBACK_HOURS,
+        batch_size: int = BATCH_SIZE,
+    ) -> None:
+        self._lookback_hours = lookback_hours
+        self._batch_size = batch_size
+
+    async def import_for_integration(
+        self,
+        context: ImportContext,
+        integration: Integration,
+        requested_at: datetime | None,
+    ) -> ImportResult:
+        return await _import_for_integration(
+            context.db,
+            integration,
+            self._lookback_hours,
+            self._batch_size,
+            requested_at,
+        )
 
 
 async def process_stremio_imports_once(
@@ -91,29 +106,12 @@ async def process_stremio_imports_once(
 ) -> int:
     init_session_factory()
     async with SessionLocal() as db:
-        result = await db.execute(select(Integration).where(Integration.provider == "stremio"))
-        integrations = result.scalars().all()
-        if not integrations:
-            return 0
+        strategy = StremioImportStrategy(
+            lookback_hours=lookback_hours,
+            batch_size=batch_size,
+        )
         now = datetime.now(timezone.utc)
-        total_imported = 0
-        for integration in integrations:
-            if not should_run_import(
-                integration.config,
-                now,
-                default_interval_seconds=DEFAULT_IMPORT_INTERVAL_SECONDS,
-            ):
-                continue
-            requested_at = parse_datetime((integration.config or {}).get(IMPORT_REQUESTED_KEY))
-            import_result = await _import_for_integration(
-                db, integration, lookback_hours, batch_size, requested_at
-            )
-            total_imported += import_result.imported
-            if import_result.attempted or requested_at is None:
-                integration.config = record_import_run(integration.config, now)
-                db.add(integration)
-                await db.commit()
-        return total_imported
+        return await strategy.run_once(db, now)
 
 
 async def _import_for_integration(
@@ -811,8 +809,7 @@ def _state_indicates_watched(state: dict[str, Any]) -> bool:
     time_watched = _coerce_number(state.get("timeWatched") or state.get("overallTimeWatched"))
     duration = _coerce_number(state.get("duration"))
     if time_watched and duration and duration > 0:
-        threshold = max(settings.completion_threshold_percent, 0.0) / 100.0
-        if time_watched / duration >= threshold:
+        if time_watched / duration >= COMPLETION_THRESHOLD:
             return True
     return False
 

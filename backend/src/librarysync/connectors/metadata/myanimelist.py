@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
-from librarysync.connectors.metadata.base import MediaCandidate
+from librarysync.connectors.metadata.base import (
+    MediaCandidate,
+    MetadataProvider,
+    ProviderCapabilities,
+    ProviderConfig,
+)
 
 JIKAN_API_BASE = "https://api.jikan.moe/v4"
 DEFAULT_SEARCH_LIMIT = 10
 MEDIA_TYPE_ANIME = "anime"
+
+
+@dataclass(frozen=True)
+class MyAnimeListConfig(ProviderConfig):
+    pass
 
 
 def _extract_year(value: str | None) -> int | None:
@@ -38,8 +49,17 @@ def _normalize_title(raw: dict[str, Any]) -> str:
     )
 
 
-class MyAnimeListMetadataProvider:
+class MyAnimeListMetadataProvider(MetadataProvider[MyAnimeListConfig, None]):
     provider = "myanimelist"
+    config_schema = MyAnimeListConfig
+    secrets_schema = None
+    capabilities = ProviderCapabilities(
+        scopes={MEDIA_TYPE_ANIME},
+        supports_external_id=False,
+        supports_search=True,
+        supports_details=True,
+        supports_episodes=False,
+    )
 
     async def search(self, query: str, scope: str = "all") -> list[MediaCandidate]:
         if scope != MEDIA_TYPE_ANIME:

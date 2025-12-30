@@ -27,7 +27,7 @@ OPENAPI_TAGS = [
     {"name": "metadata", "description": "Metadata providers and lookup workflows."},
     {"name": "history", "description": "Manual watched history operations."},
     {"name": "activity", "description": "Progress events, outbox, and status feeds."},
-    {"name": "settings", "description": "Per-user polling and completion settings."},
+    {"name": "settings", "description": "Per-user search settings."},
     {"name": "admin", "description": "Administrative operations."},
     {"name": "health", "description": "Service health check."},
 ]

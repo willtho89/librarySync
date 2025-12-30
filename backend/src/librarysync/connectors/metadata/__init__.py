@@ -1,4 +1,11 @@
-from librarysync.connectors.metadata.base import MediaCandidate, MetadataProvider
+from librarysync.connectors.metadata.base import (
+    EpisodeMetadataProvider,
+    MediaCandidate,
+    MetadataProvider,
+    ProviderCapabilities,
+    ProviderConfig,
+    ProviderContext,
+)
 from librarysync.connectors.metadata.imdb import ImdbMetadataProvider
 from librarysync.connectors.metadata.kitsu import KitsuMetadataProvider
 from librarysync.connectors.metadata.myanimelist import MyAnimeListMetadataProvider
@@ -8,7 +15,11 @@ from librarysync.connectors.metadata.tvmaze import TvmazeMetadataProvider
 
 __all__ = [
     "MetadataProvider",
+    "EpisodeMetadataProvider",
     "MediaCandidate",
+    "ProviderCapabilities",
+    "ProviderConfig",
+    "ProviderContext",
     "ImdbMetadataProvider",
     "KitsuMetadataProvider",
     "MyAnimeListMetadataProvider",

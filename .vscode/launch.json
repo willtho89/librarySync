@@ -38,5 +38,12 @@
       "justMyCode": true,
       "console": "integratedTerminal"
     }
+  ],
+  "compounds": [
+    {
+      "name": "API + Worker",
+      "configurations": ["API: Uvicorn", "Worker: Run"],
+      "stopAll": true
+    }
   ]
 }

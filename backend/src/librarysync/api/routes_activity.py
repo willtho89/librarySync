@@ -39,7 +39,7 @@ async def outbox():
 @router.get(
     "/status",
     summary="Get sync status (stub)",
-    description="Placeholder for returning poller and worker status.",
+    description="Placeholder for returning worker status.",
 )
 async def status():
     raise HTTPException(status_code=501, detail="Not implemented")

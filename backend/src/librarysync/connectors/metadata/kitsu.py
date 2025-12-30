@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
-from librarysync.connectors.metadata.base import MediaCandidate
+from librarysync.connectors.metadata.base import (
+    MediaCandidate,
+    MetadataProvider,
+    ProviderCapabilities,
+    ProviderConfig,
+    ProviderContext,
+)
 
 KITSU_API_BASE = "https://kitsu.io/api/edge"
 DEFAULT_SEARCH_LIMIT = 10
 MEDIA_TYPE_ANIME = "anime"
+
+
+@dataclass(frozen=True)
+class KitsuConfig(ProviderConfig):
+    language: str | None = None
 
 
 def _extract_year(date_value: str | None) -> int | None:
@@ -49,11 +61,26 @@ def _normalize_title(raw: dict[str, Any], language: str | None) -> str:
     )
 
 
-class KitsuMetadataProvider:
+class KitsuMetadataProvider(MetadataProvider[KitsuConfig, None]):
     provider = "kitsu"
+    config_schema = KitsuConfig
+    secrets_schema = None
+    capabilities = ProviderCapabilities(
+        scopes={MEDIA_TYPE_ANIME},
+        supports_external_id=True,
+        supports_search=True,
+        supports_details=True,
+        supports_episodes=False,
+    )
 
-    def __init__(self, language: str | None = None) -> None:
-        self._language = language
+    def __init__(
+        self,
+        config: KitsuConfig,
+        secrets: None,
+        context: ProviderContext,
+    ) -> None:
+        super().__init__(config, secrets, context)
+        self._language = config.language
 
     async def search(self, query: str, scope: str = "all") -> list[MediaCandidate]:
         if scope != MEDIA_TYPE_ANIME:

@@ -29,10 +29,6 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    poll_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    completion_threshold_percent: Mapped[float | None] = mapped_column(
-        Float, nullable=True
-    )
     include_adult_in_search: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
