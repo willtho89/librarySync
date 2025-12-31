@@ -53,6 +53,37 @@ def create_app() -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    def _static_asset(filename: str) -> FileResponse:
+        return FileResponse(STATIC_DIR / filename)
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon_ico() -> FileResponse:
+        return _static_asset("favicon.ico")
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    async def favicon_svg() -> FileResponse:
+        return _static_asset("favicon.svg")
+
+    @app.get("/favicon-96x96.png", include_in_schema=False)
+    async def favicon_png() -> FileResponse:
+        return _static_asset("favicon-96x96.png")
+
+    @app.get("/apple-touch-icon.png", include_in_schema=False)
+    async def apple_touch_icon() -> FileResponse:
+        return _static_asset("apple-touch-icon.png")
+
+    @app.get("/site.webmanifest", include_in_schema=False)
+    async def webmanifest() -> FileResponse:
+        return _static_asset("site.webmanifest")
+
+    @app.get("/web-app-manifest-192x192.png", include_in_schema=False)
+    async def webmanifest_192() -> FileResponse:
+        return _static_asset("web-app-manifest-192x192.png")
+
+    @app.get("/web-app-manifest-512x512.png", include_in_schema=False)
+    async def webmanifest_512() -> FileResponse:
+        return _static_asset("web-app-manifest-512x512.png")
+
     @app.on_event("startup")
     def _startup() -> None:
         run_migrations()

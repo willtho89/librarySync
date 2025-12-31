@@ -1,5 +1,7 @@
 # librarySync
 
+![librarySync logo](.img/logo_w_text.png)
+
 Self-hosted, Docker-compose-deployable sync hub for watch history and ratings across
 multiple services. This project exists because I use multiple services and want to keep
 my watch history in sync.
@@ -66,6 +68,22 @@ All defaults below are from `.env.example`.
 - `LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE` (default `60`).
 - `LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE` (default `30`).
 - `LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE` (default `120`).
+
+## Integrations
+
+### Letterboxd
+Letterboxd unfortunately does not have a devleoper program to request API access. For personal use it is possible to extract the required information from the app. Special thanks to @dado3212 with https://github.com/dado3212/letterboxd-scripts/ for guidance on retrieving the `client_id` and `client_secret`.
+> Letterboxd tip: users can paste an intercepted request as `curl` or `httpie` to extract the `client_id` and `client_secret`.
+
+### Trakt/SIMKL
+
+When configuring connected apps for Trakt and SIMKL, add your domain and callback URLs.
+Example values (replace `example.com` with your domain):
+- Trakt app URL: `https://example.com`
+- Trakt redirect URI: `https://example.com/api/integrations/trakt/callback`
+- SIMKL app URL: `https://example.com`
+- SIMKL redirect URI: `https://example.com/api/integrations/simkl`
+
 
 ## Development (uv + Ruff)
 

@@ -4,18 +4,32 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Integrations - librarySync</title>
+    <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="lIbrarySync" />
+    <link rel="manifest" href="/site.webmanifest" />
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/app.js" defer></script>
   </head>
   <body data-requires-auth="true">
     <header class="site-header">
-      <h1>Integrations</h1>
+      <h1 class="site-title">
+        <img class="site-logo" src="/favicon.svg" alt="" />
+        <span>librarySync</span>
+      </h1>
       <nav>
-        <a href="/" data-auth-only>Home</a>
+        <a href="/">Home</a>
+        <a href="/static/login.html" data-guest-only>Login</a>
         <a href="/static/add-watched.html" data-auth-only>Add Watched</a>
         <a href="/static/history.html" data-auth-only>History</a>
+        <a href="/static/integrations.html" data-auth-only>Integrations</a>
         <a href="/static/activity.html" data-auth-only>Activity</a>
         <a href="/static/settings.html" data-auth-only>Settings</a>
+        <span class="nav-user" data-auth-only>
+          Signed in as <strong data-user-username></strong>
+        </span>
         <button type="button" data-logout data-auth-only>Log out</button>
       </nav>
     </header>
