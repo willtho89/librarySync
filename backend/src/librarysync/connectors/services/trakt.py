@@ -249,13 +249,13 @@ class TraktClient:
         start_at: datetime | None = None,
         end_at: datetime | None = None,
         per_page: int = 50,
-        max_pages: int = 10,
+        max_pages: int | None = 10,
     ) -> list[dict[str, Any]]:
         if start_at is None and days is not None:
             start_at = datetime.now(timezone.utc) - timedelta(days=days)
         entries: list[dict[str, Any]] = []
         page = 1
-        while page <= max_pages:
+        while max_pages is None or page <= max_pages:
             items, headers = await self.fetch_history(
                 access_token,
                 history_type=history_type,
@@ -303,11 +303,11 @@ class TraktClient:
         access_token: str,
         rating_type: str | None = None,
         per_page: int = 50,
-        max_pages: int = 10,
+        max_pages: int | None = 10,
     ) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
         page = 1
-        while page <= max_pages:
+        while max_pages is None or page <= max_pages:
             items, headers = await self.fetch_ratings(
                 access_token,
                 rating_type=rating_type,

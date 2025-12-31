@@ -35,6 +35,8 @@ from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStra
 LOOKBACK_DAYS = settings.history_lookback_days
 MAX_PAGES = 6
 PER_PAGE = 20
+FULL_HISTORY_START = datetime(1900, 1, 1, tzinfo=timezone.utc)
+FULL_HISTORY_EMPTY_MONTHS = 3
 IMDB_ID_RE = re.compile(r"(tt\d{3,10})", re.IGNORECASE)
 TMDB_URL_RE = re.compile(r"/(?:movie|film|tv)/(\d+)", re.IGNORECASE)
 logger = logging.getLogger(__name__)
@@ -146,6 +148,7 @@ async def _import_for_integration(
                     await db.commit()
         now = datetime.now(timezone.utc)
         last_run = parse_datetime((integration.config or {}).get(IMPORT_LAST_RUN_KEY))
+        full_history = lookback_days < 0 and last_run is None
         since = _select_letterboxd_since(now, lookback_days, last_run)
         entries = await client.get_history(
             access_token,
@@ -153,6 +156,8 @@ async def _import_for_integration(
             member_id=member_id,
             per_page=per_page,
             max_pages=max_pages,
+            reverse=full_history,
+            stop_after_empty_months=FULL_HISTORY_EMPTY_MONTHS if full_history else None,
         )
     except LetterboxdError as exc:
         logger.warning(
@@ -182,6 +187,10 @@ async def _import_for_integration(
 def _select_letterboxd_since(
     now: datetime, lookback_days: int, last_run: datetime | None
 ) -> datetime:
+    if lookback_days < 0:
+        if last_run:
+            return last_run - timedelta(minutes=5)
+        return FULL_HISTORY_START
     window_start = now - timedelta(days=lookback_days)
     if last_run and last_run > window_start:
         return last_run - timedelta(minutes=5)

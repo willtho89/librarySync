@@ -150,13 +150,14 @@ async def _import_for_integration(
     client = StremioClient(api_base_url=api_base_url)
 
     now = datetime.now(timezone.utc)
-    since = now - timedelta(days=lookback_days)
     last_run = parse_datetime((integration.config or {}).get(IMPORT_LAST_RUN_KEY))
     force_full = bool(requested_at and (last_run is None or requested_at > last_run))
+    full_history = lookback_days < 0 and last_run is None
     rewatch_cutoff = _compute_rewatch_cutoff(now, last_run)
+    since = None if lookback_days < 0 else now - timedelta(days=lookback_days)
     if force_full:
         since = None
-    elif last_run and last_run > since:
+    elif last_run and (since is None or last_run > since):
         since = last_run - timedelta(minutes=5)
 
     try:
@@ -169,9 +170,11 @@ async def _import_for_integration(
         )
         return ImportResult(imported=0, attempted=True)
 
-    ids = _select_item_ids(timestamps, since)
+    ids: list[str] = []
+    if not full_history:
+        ids = _select_item_ids(timestamps, since)
     if not ids:
-        if force_full:
+        if force_full or full_history:
             logger.info(
                 "Stremio import falling back to full library fetch for user %s",
                 integration.user_id,

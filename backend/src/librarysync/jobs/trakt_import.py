@@ -153,7 +153,9 @@ async def _import_for_integration(
     imported = 0
     now = datetime.now(timezone.utc)
     last_run = parse_datetime((integration.config or {}).get(IMPORT_LAST_RUN_KEY))
+    full_history = lookback_days < 0 and last_run is None
     start_at = _select_trakt_start_at(now, lookback_days, last_run)
+    max_pages = None if full_history else max_pages
     for history_type in ("movies", "episodes"):
         entries = await client.get_history(
             access_token,
@@ -202,6 +204,10 @@ async def _import_for_integration(
 def _select_trakt_start_at(
     now: datetime, lookback_days: int, last_run: datetime | None
 ) -> datetime | None:
+    if lookback_days < 0:
+        if last_run:
+            return last_run - timedelta(minutes=5)
+        return None
     window_start = now - timedelta(days=lookback_days)
     if last_run and last_run > window_start:
         return last_run - timedelta(minutes=5)

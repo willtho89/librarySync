@@ -1,6 +1,6 @@
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -421,6 +421,8 @@ class LetterboxdClient:
         member_id: str | None = None,
         per_page: int = 20,
         max_pages: int = 10,
+        reverse: bool = False,
+        stop_after_empty_months: int | None = None,
     ) -> list[dict[str, Any]]:
         if since is None and days is not None:
             since = datetime.now(timezone.utc) - timedelta(days=days)
@@ -434,18 +436,24 @@ class LetterboxdClient:
         if not resolved_member_id:
             raise LetterboxdError("Letterboxd /me response missing member id")
         entries: list[dict[str, Any]] = []
-        for year, month in _month_range(since.date(), now.date()):
-            entries.extend(
-                await self.fetch_recent_log_entries(
-                    access_token,
-                    since,
-                    member_id=resolved_member_id,
-                    per_page=per_page,
-                    max_pages=max_pages,
-                    year=year,
-                    month=month,
-                )
+        empty_streak = 0
+        for year, month in _iter_months(since.date(), now.date(), reverse=reverse):
+            month_entries = await self.fetch_recent_log_entries(
+                access_token,
+                since,
+                member_id=resolved_member_id,
+                per_page=per_page,
+                max_pages=max_pages,
+                year=year,
+                month=month,
             )
+            if month_entries:
+                entries.extend(month_entries)
+                empty_streak = 0
+                continue
+            empty_streak += 1
+            if stop_after_empty_months and empty_streak >= stop_after_empty_months:
+                break
         return entries
 
     async def _resolve_log_entries_strategy(
@@ -841,20 +849,31 @@ def _parse_datetime_value(value: Any) -> datetime | None:
     )
 
 
-def _month_range(start: date, end: date) -> list[tuple[int, int]]:
+def _iter_months(
+    start: date, end: date, *, reverse: bool = False
+) -> Iterable[tuple[int, int]]:
     if start > end:
         start, end = end, start
-    months: list[tuple[int, int]] = []
+    if reverse:
+        year = end.year
+        month = end.month
+        while (year, month) >= (start.year, start.month):
+            yield year, month
+            if month == 1:
+                year -= 1
+                month = 12
+            else:
+                month -= 1
+        return
     year = start.year
     month = start.month
     while (year, month) <= (end.year, end.month):
-        months.append((year, month))
+        yield year, month
         if month == 12:
             year += 1
             month = 1
         else:
             month += 1
-    return months
 
 
 def extract_member_id(payload: Any) -> str | None:

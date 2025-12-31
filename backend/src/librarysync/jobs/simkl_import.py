@@ -241,13 +241,20 @@ def _select_date_from(
     has_history: bool,
 ) -> tuple[datetime | None, bool]:
     config = config or {}
+    full_history = lookback_days < 0
     if not has_history:
+        if full_history:
+            return None, True
         return now - timedelta(days=lookback_days), True
     last_activity = parse_datetime(config.get("simkl_activity_all"))
     if last_activity:
         return last_activity, False
-    fallback = now - timedelta(days=lookback_days)
     activity_all = _extract_activity_timestamp(activities)
+    if full_history:
+        if activity_all:
+            return activity_all, True
+        return None, True
+    fallback = now - timedelta(days=lookback_days)
     if activity_all and activity_all < fallback:
         return activity_all, True
     return fallback, True

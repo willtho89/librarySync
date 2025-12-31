@@ -43,7 +43,7 @@ All defaults below are from `.env.example`.
 - `LIBRARYSYNC_ADMIN_API_KEY` (default `your_admin_api_key`): required for admin endpoints.
 - `LIBRARYSYNC_BASE_URL` (default `http://localhost:8000`): base URL for OAuth callbacks.
 - `LOG_LEVEL` (default `INFO`): logging level.
-- `HISTORY_LOOKBACK_DAYS` (default `30`): import lookback window.
+- `HISTORY_LOOKBACK_DAYS` (default `30`): import lookback window (use `-1` for full history).
 - `LIBRARYSYNC_JWT_ACCESS_TOKEN_MINUTES` (default `60`): access token lifetime.
 - `LIBRARYSYNC_JWT_ALGORITHM` (default `HS256`): JWT signing algorithm.
 - `LIBRARYSYNC_ALLOW_REGISTRATION` (default `true`): enable `/api/auth/register`.
