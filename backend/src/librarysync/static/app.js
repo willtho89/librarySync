@@ -24,6 +24,17 @@ const activityState = {
     search: "",
   },
 };
+const historyState = {
+  page: 1,
+  pageSize: 50,
+  total: 0,
+  filters: {
+    search: "",
+    mediaType: "all",
+    source: "all",
+  },
+  searchTimer: null,
+};
 const DEFAULT_IMPORT_INTERVAL_SECONDS = 86400;
 
 function bindForm(id, handler) {
@@ -1674,6 +1685,61 @@ const historySelectionState = {
   selectedIds: new Set(),
 };
 
+function historyHasActiveFilters() {
+  return (
+    (historyState.filters.search && historyState.filters.search.trim()) ||
+    historyState.filters.mediaType !== "all" ||
+    historyState.filters.source !== "all"
+  );
+}
+
+function buildHistoryQueryParams() {
+  const params = new URLSearchParams();
+  params.set("limit", String(historyState.pageSize));
+  params.set("offset", String((historyState.page - 1) * historyState.pageSize));
+  if (historyState.filters.search && historyState.filters.search.trim()) {
+    params.set("search", historyState.filters.search.trim());
+  }
+  if (historyState.filters.mediaType !== "all") {
+    params.set("media_type", historyState.filters.mediaType);
+  }
+  if (historyState.filters.source !== "all") {
+    params.set("source", historyState.filters.source);
+  }
+  return params;
+}
+
+function getHistoryTotalPages(total) {
+  const value = Math.ceil(total / historyState.pageSize);
+  return Math.max(1, value);
+}
+
+function updateHistoryPagination() {
+  const info = document.getElementById("history-page-info");
+  const prev = document.getElementById("history-page-prev");
+  const next = document.getElementById("history-page-next");
+  const clearFilters = document.getElementById("history-filters-clear");
+  const total = historyState.total;
+  const totalPages = getHistoryTotalPages(total);
+  const label = total
+    ? `Page ${historyState.page} of ${totalPages} · ${total} items`
+    : historyHasActiveFilters()
+      ? "No matches for your filters."
+      : "No history items yet.";
+  if (info) {
+    info.textContent = label;
+  }
+  if (prev) {
+    prev.disabled = historyState.page <= 1;
+  }
+  if (next) {
+    next.disabled = historyState.page >= totalPages;
+  }
+  if (clearFilters) {
+    clearFilters.disabled = !historyHasActiveFilters();
+  }
+}
+
 function updateHistoryBulkControls() {
   const selectAll = document.getElementById("history-select-all");
   const deleteButton = document.getElementById("history-delete-selected");
@@ -1756,6 +1822,91 @@ function bindHistoryUi() {
         }
       });
       updateHistoryBulkControls();
+    });
+  }
+  const searchInput = document.getElementById("history-search");
+  if (searchInput) {
+    searchInput.value = historyState.filters.search;
+    searchInput.addEventListener("input", () => {
+      historyState.filters.search = searchInput.value || "";
+      historyState.page = 1;
+      if (historyState.searchTimer) {
+        window.clearTimeout(historyState.searchTimer);
+      }
+      historyState.searchTimer = window.setTimeout(() => {
+        loadHistory();
+      }, 250);
+    });
+  }
+  const typeSelect = document.getElementById("history-type-filter");
+  if (typeSelect) {
+    typeSelect.value = historyState.filters.mediaType;
+    typeSelect.addEventListener("change", () => {
+      historyState.filters.mediaType = typeSelect.value || "all";
+      historyState.page = 1;
+      loadHistory();
+    });
+  }
+  const sourceSelect = document.getElementById("history-source-filter");
+  if (sourceSelect) {
+    sourceSelect.value = historyState.filters.source;
+    sourceSelect.addEventListener("change", () => {
+      historyState.filters.source = sourceSelect.value || "all";
+      historyState.page = 1;
+      loadHistory();
+    });
+  }
+  const pageSizeSelect = document.getElementById("history-page-size");
+  if (pageSizeSelect) {
+    pageSizeSelect.value = String(historyState.pageSize);
+    pageSizeSelect.addEventListener("change", () => {
+      const parsed = Number(pageSizeSelect.value);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return;
+      }
+      historyState.pageSize = Math.trunc(parsed);
+      historyState.page = 1;
+      loadHistory();
+    });
+  }
+  const prevButton = document.getElementById("history-page-prev");
+  if (prevButton) {
+    prevButton.addEventListener("click", () => {
+      if (historyState.page <= 1) {
+        return;
+      }
+      historyState.page -= 1;
+      loadHistory();
+    });
+  }
+  const nextButton = document.getElementById("history-page-next");
+  if (nextButton) {
+    nextButton.addEventListener("click", () => {
+      const totalPages = getHistoryTotalPages(historyState.total);
+      if (historyState.page >= totalPages) {
+        return;
+      }
+      historyState.page += 1;
+      loadHistory();
+    });
+  }
+  const clearFilters = document.getElementById("history-filters-clear");
+  if (clearFilters) {
+    clearFilters.addEventListener("click", () => {
+      historyState.filters.search = "";
+      historyState.filters.mediaType = "all";
+      historyState.filters.source = "all";
+      historyState.page = 1;
+      if (searchInput) {
+        searchInput.value = "";
+      }
+      if (typeSelect) {
+        typeSelect.value = "all";
+      }
+      if (sourceSelect) {
+        sourceSelect.value = "all";
+      }
+      loadHistory();
     });
   }
   const deleteSelectedButton = document.getElementById("history-delete-selected");
@@ -2164,14 +2315,34 @@ async function loadHistory() {
   }
   bindHistoryUi();
   const clearButton = document.getElementById("history-clear");
-  const data = await requestJSON("/api/history/items");
+  container.textContent = "Loading...";
+  const params = buildHistoryQueryParams();
+  let data = null;
+  try {
+    data = await requestJSON(`/api/history/items?${params.toString()}`);
+  } catch (error) {
+    setMessage("history-message", error.message, true);
+    container.textContent = "Unable to load history.";
+    return;
+  }
   const items = data && data.items ? data.items : [];
+  const total = data && typeof data.total === "number" ? data.total : items.length;
+  historyState.total = total;
+  const totalPages = getHistoryTotalPages(total);
+  if (historyState.page > totalPages) {
+    historyState.page = totalPages;
+    await loadHistory();
+    return;
+  }
   resetHistorySelection(items);
   if (clearButton) {
-    clearButton.disabled = !items.length;
+    clearButton.disabled = !total && !historyHasActiveFilters();
   }
+  updateHistoryPagination();
   if (!items.length) {
-    container.textContent = "No watched titles yet.";
+    container.textContent = historyHasActiveFilters()
+      ? "No watched titles match your filters."
+      : "No watched titles yet.";
     return;
   }
   container.innerHTML = "";

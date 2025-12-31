@@ -36,6 +36,62 @@
     <main>
       <section class="card">
         <h2>Watched items</h2>
+        <div class="history-controls">
+          <div class="button-row history-filters">
+            <label class="inline-label">
+              <span>Search</span>
+              <input
+                id="history-search"
+                type="search"
+                placeholder="Title, ID, or year"
+              />
+            </label>
+            <label class="inline-label">
+              <span>Type</span>
+              <select id="history-type-filter">
+                <option value="all">All types</option>
+                <option value="movie">Movies</option>
+                <option value="tv">TV</option>
+                <option value="anime">Anime</option>
+              </select>
+            </label>
+            <label class="inline-label">
+              <span>Source</span>
+              <select id="history-source-filter">
+                <option value="all">All sources</option>
+                <option value="manual">Manual</option>
+                <option value="trakt">Trakt</option>
+                <option value="simkl">SIMKL</option>
+                <option value="letterboxd">Letterboxd</option>
+                <option value="stremio">Stremio</option>
+              </select>
+            </label>
+            <button
+              id="history-filters-clear"
+              type="button"
+              class="secondary-button"
+            >
+              Clear filters
+            </button>
+          </div>
+          <div class="button-row history-pagination">
+            <button id="history-page-prev" type="button" class="secondary-button">
+              Previous
+            </button>
+            <span id="history-page-info" class="helper-text">Loading...</span>
+            <button id="history-page-next" type="button" class="secondary-button">
+              Next
+            </button>
+            <label class="inline-label">
+              <span>Per page</span>
+              <select id="history-page-size">
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+            </label>
+          </div>
+        </div>
         <div class="button-row history-bulk-actions">
           <label class="inline-label">
             <span>Select all</span>

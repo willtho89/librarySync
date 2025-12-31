@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -313,6 +313,10 @@ async def add_watched_item(
 )
 async def list_watched_items(
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    search: str | None = Query(None, max_length=200),
+    media_type: Literal["movie", "tv", "anime"] | None = Query(None),
+    source: str | None = Query(None, max_length=32),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -321,6 +325,59 @@ async def list_watched_items(
     trakt_sync = aliased(WatchSync)
     simkl_sync = aliased(WatchSync)
     stremio_sync = aliased(WatchSync)
+    filters = [WatchedItem.user_id == current_user.id]
+    if media_type:
+        filters.append(
+            or_(MediaItem.media_type == media_type, show_item.media_type == media_type)
+        )
+    if source:
+        normalized_source = source.strip().lower()
+        if normalized_source:
+            if normalized_source == "manual":
+                source_values = ("manual", "api")
+            elif normalized_source in {"trakt", "simkl", "stremio", "letterboxd"}:
+                source_values = (normalized_source, f"{normalized_source}_import")
+            else:
+                source_values = (normalized_source,)
+            filters.append(WatchedItem.source.in_(source_values))
+    if search:
+        normalized_search = search.strip()
+    else:
+        normalized_search = ""
+    if normalized_search:
+        like_value = f"%{normalized_search}%"
+        search_clauses = [
+            MediaItem.title.ilike(like_value),
+            show_item.title.ilike(like_value),
+            EpisodeItem.title.ilike(like_value),
+            MediaItem.imdb_id.ilike(like_value),
+            MediaItem.tmdb_id.ilike(like_value),
+            MediaItem.tvdb_id.ilike(like_value),
+            MediaItem.tvmaze_id.ilike(like_value),
+            MediaItem.kitsu_id.ilike(like_value),
+            MediaItem.myanimelist_id.ilike(like_value),
+            EpisodeItem.imdb_id.ilike(like_value),
+            EpisodeItem.tmdb_id.ilike(like_value),
+            EpisodeItem.tvdb_id.ilike(like_value),
+            EpisodeItem.tvmaze_id.ilike(like_value),
+        ]
+        if normalized_search.isdigit() and len(normalized_search) == 4:
+            year_value = int(normalized_search)
+            search_clauses.extend(
+                [MediaItem.year == year_value, show_item.year == year_value]
+            )
+        filters.append(or_(*search_clauses))
+
+    total_result = await db.execute(
+        select(func.count(WatchedItem.id))
+        .select_from(WatchedItem)
+        .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
+        .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .outerjoin(show_item, EpisodeItem.show_media_item_id == show_item.id)
+        .where(*filters)
+    )
+    total = int(total_result.scalar() or 0)
+
     result = await db.execute(
         select(
             WatchedItem,
@@ -363,8 +420,9 @@ async def list_watched_items(
                 stremio_sync.provider == "stremio",
             ),
         )
-        .where(WatchedItem.user_id == current_user.id)
+        .where(*filters)
         .order_by(WatchedItem.watched_at.desc())
+        .offset(offset)
         .limit(limit)
     )
     items = []
@@ -452,7 +510,12 @@ async def list_watched_items(
                 metadata=metadata,
             ).model_dump()
         )
-    return {"items": _merge_history_items(items)}
+    return {
+        "items": _merge_history_items(items),
+        "limit": limit,
+        "offset": offset,
+        "total": total,
+    }
 
 
 @router.post(
