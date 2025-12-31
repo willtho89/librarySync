@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
+          cache-dependency-path: |
+            backend/pyproject.toml
+            worker/pyproject.toml
+
+      - name: Install dependencies
+        env:
+          PIP_IGNORE_REQUIRES_PYTHON: "1"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e backend -e worker
+          pip install ruff
+
+      - name: Ruff
+        run: ruff check backend/src worker/src
+
+      - name: Unit tests
+        env:
+          PYTHONPATH: backend/src
+        run: python -m unittest discover -s backend/tests

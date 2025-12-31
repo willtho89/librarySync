@@ -65,6 +65,15 @@ main {
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
 }
 
+.card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
 form {
   display: grid;
   gap: 1rem;
@@ -197,6 +206,194 @@ button:disabled {
 .history-select input {
   width: 18px;
   height: 18px;
+}
+
+.activity-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.activity-stat {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #f8fafc;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.activity-stat span {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.activity-stat strong {
+  font-size: 1.1rem;
+}
+
+.activity-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.activity-controls input,
+.activity-controls select {
+  min-width: 180px;
+}
+
+.activity-list,
+.schedule-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.schedule-group {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.schedule-group h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: #334155;
+}
+
+.schedule-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.75rem;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #f8fafc;
+}
+
+.schedule-title {
+  font-weight: 600;
+}
+
+.schedule-meta {
+  font-size: 0.9rem;
+  color: #475569;
+}
+
+.schedule-time {
+  text-align: right;
+  font-weight: 600;
+}
+
+.schedule-time small {
+  display: block;
+  font-weight: 400;
+  color: #64748b;
+}
+
+.activity-row {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #f8fafc;
+}
+
+.activity-row summary {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.75rem;
+  align-items: start;
+  cursor: pointer;
+  list-style: none;
+}
+
+.activity-row summary::-webkit-details-marker {
+  display: none;
+}
+
+.activity-main {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.activity-title {
+  font-weight: 600;
+}
+
+.activity-meta {
+  font-size: 0.9rem;
+  color: #475569;
+}
+
+.activity-status {
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+  text-align: right;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.status-pending {
+  background: #fde68a;
+  color: #92400e;
+}
+
+.status-active {
+  background: #bfdbfe;
+  color: #1e3a8a;
+}
+
+.status-success {
+  background: #bbf7d0;
+  color: #166534;
+}
+
+.status-failed {
+  background: #fecaca;
+  color: #991b1b;
+}
+
+.status-unknown {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.activity-detail {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed #e2e8f0;
+  display: grid;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: #475569;
+}
+
+.activity-detail pre {
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  overflow: auto;
+}
+
+.empty-state {
+  color: #64748b;
+  font-size: 0.95rem;
 }
 
 .history-bulk-actions {

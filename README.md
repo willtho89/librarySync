@@ -1,138 +1,85 @@
 # librarySync
 
-Self-hosted, Docker-compose-deployable multi-user sync hub for watch progress. MVP target: sync to Trakt + SIMKL.
+Self-hosted, Docker-compose-deployable sync hub for watch history and ratings across
+multiple services. This project exists because I use multiple services and want to keep
+my watch history in sync.
 
-## Goals (MVP)
-- [x] Integrate MetaData Provider (TVDB, TMDB, IMDB)
-- [x] Add Items to Watch History
-- [x] Show Watch History
-- [x] Ratings
-- [x] Trakt movie/tv sync
-- [x] Trakt movie/tv import
-- [x] Simkl movie/tv sync
-- [x] Simkl movie/tv import
-- [x] Letterbox movie sync (based on @dado3212 https://github.com/dado3212/letterboxd-scripts)
-- [x] Letterbox movie import (based on @dado3212 https://github.com/dado3212/letterboxd-scripts)
-- [x] Merge History Items and sync to all upstream integrations
-- [x] Metadata update for imported Items (TV Shows Episode Poster)
-- [x] Add Watch API
-- [x] Sttremio movie/tv sync (based on @MunifTanjim in StremThru)
-- [x] Stremio movie/tv import (based on @MunifTanjim in StremThru)
-- [x] minimal web UI (plain JS + static HTML).
-- [ ] worker/activity logs
-- [ ] Docker as Non Root User
-- [ ] CI/CD Pipelines
-- [x] Delete history -> delete in integrations.
+## What It Does
 
-## TODOs (Not MVP)
-- [ ] Anime integrations
-- [ ] Setup wizard after register.
-- [ ] scalable & configurable worker system
-- [ ] Overhaul UI/UX (PWA, Mobile Friendly)
-- [ ] Stremio API (Watch History; see Stremthru/dash)
+- Multi-user auth with JWT cookies and optional registration.
+- Manual watch history (add/update/delete) with optional downstream deletion.
+- Ratings support synced where supported.
+- Imports from Trakt, SIMKL, Letterboxd, and Stremio.
+- Outbox-based delivery with retries and per-user rate limiting.
+- Metadata lookup and enrichment with TMDB, TVDB, IMDb, TVMaze, Kitsu, MyAnimeList.
+- Minimal web UI (static HTML + JS).
 
-## Ideas
-- [ ] Catalogs (most watched movies/TV this <intervall>).
+## Quick Start (Docker Compose)
 
-## Repository Layout
-```
-librarySync/
-  agent.md
-  README.md
-  docker-compose.yml
-  .env.example
+1. Copy the env example:
+   `cp .env.example .env`
+2. Edit `.env` with your credentials and secrets.
+3. Start:
+   `docker compose up --build`
+4. Open `http://localhost:8000`.
 
-  backend/
-    Dockerfile
-    pyproject.toml
-    src/librarysync/
-      main.py
-      config.py
-      db/
-        session.py
-        models.py
-        migrations/
-      api/
-        routes_auth.py
-        routes_integrations.py
-        routes_activity.py
-        routes_settings.py
-      core/
-        canonical.py
-        security.py
-        dedupe.py
-        outbox.py
-        matching.py
-      connectors/
-        players/
-          base.py
-        services/
-          base.py
-          trakt.py
-          simkl.py
-      jobs/
-        process_outbox.py
-        drift_daily.py
-      static/
-        index.html
-        login.html
-        integrations.html
-        activity.html
-        settings.html
-        app.js
-        styles.css
-      templates/
+## Environment Variables (Defaults)
 
-  worker/
-    Dockerfile
-    pyproject.toml
-    src/librarysync_worker/
-      main.py
-```
+All defaults below are from `.env.example`.
 
-## Getting Started (Local)
-1. Copy env example: `cp .env.example .env` and adjust values.
-2. Build and run: `docker compose up --build`.
-3. Open `http://localhost:8000`.
+### Database
+- `POSTGRES_DB` (default `librarysync`): database name for the Postgres container.
+- `POSTGRES_USER` (default `librarysync`): database user for the Postgres container.
+- `POSTGRES_PASSWORD` (default `librarysync`): database password for the Postgres container.
+- `DATABASE_URL`
+  (default `postgresql+psycopg://librarysync:librarysync@db:5432/librarysync`):
+  SQLAlchemy connection string used by API/worker.
+
+### App
+- `LIBRARYSYNC_SECRET_KEY` (default `change_me`): encryption key for stored secrets.
+  Change this in production.
+- `LIBRARYSYNC_ADMIN_API_KEY` (default `your_admin_api_key`): required for admin endpoints.
+- `LIBRARYSYNC_BASE_URL` (default `http://localhost:8000`): base URL for OAuth callbacks.
+- `LOG_LEVEL` (default `INFO`): logging level.
+- `HISTORY_LOOKBACK_DAYS` (default `30`): import lookback window.
+- `LIBRARYSYNC_JWT_ACCESS_TOKEN_MINUTES` (default `60`): access token lifetime.
+- `LIBRARYSYNC_JWT_ALGORITHM` (default `HS256`): JWT signing algorithm.
+- `LIBRARYSYNC_ALLOW_REGISTRATION` (default `true`): enable `/api/auth/register`.
+
+### OAuth
+- `TRAKT_CLIENT_ID` (default `your_trakt_client_id`): Trakt OAuth app client ID.
+- `TRAKT_CLIENT_SECRET` (default `your_trakt_client_secret`): Trakt OAuth app secret.
+- `SIMKL_CLIENT_ID` (default `your_simkl_client_id`): SIMKL OAuth app client ID.
+- `SIMKL_CLIENT_SECRET` (default `your_simkl_client_secret`): SIMKL OAuth app secret.
+
+### Worker Modes
+- `LIBRARYSYNC_WORKER_MODES` (default `all`): comma-separated list of worker loops.
+  Options: `outbox`, `metadata`, `imports`, `import_all`, `merge`.
+- `LIBRARYSYNC_WORKER_OUTBOX_CONCURRENCY` (default `1`): outbox loop concurrency.
+- `LIBRARYSYNC_WORKER_METADATA_CONCURRENCY` (default `1`): metadata loop concurrency.
+- `LIBRARYSYNC_WORKER_IMPORTS_CONCURRENCY` (default `1`): imports loop concurrency.
+- `LIBRARYSYNC_WORKER_IMPORT_ALL_CONCURRENCY` (default `1`): import-all loop concurrency.
+- `LIBRARYSYNC_WORKER_MERGE_CONCURRENCY` (default `1`): merge loop concurrency.
+
+### Rate Limits (per user, per provider, per minute)
+- `LIBRARYSYNC_TRAKT_RATE_LIMIT_PER_MINUTE` (default `60`).
+- `LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE` (default `60`).
+- `LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE` (default `30`).
+- `LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE` (default `120`).
 
 ## Development (uv + Ruff)
-1. Install Python 3.14 and `uv` (see `.python-version`).
-2. Sync dependencies:
-   - `cd backend && uv sync`
-   - `cd worker && uv sync`
-3. Run the API: `cd backend && uv run uvicorn librarysync.main:app --reload`.
-4. Run the worker: `cd worker && uv run python -m librarysync_worker.main`.
-5. Lint: `cd backend && uv run ruff check ../backend/src ../worker/src`.
 
-## Database Migrations
-- Ensure Postgres is running: `docker compose up -d db`
-- Generate a revision (uses the Docker DB + .env):
-  `docker compose run --rm -v "$PWD:/app" -w /app api alembic -c backend/alembic.ini revision --autogenerate -m "init"`
-- Apply migrations: `docker compose run --rm -v "$PWD:/app" -w /app api alembic -c backend/alembic.ini upgrade head`
+1. Install Python 3.14 and `uv`.
+2. Sync deps:
+   - `uv sync`
+3. Run API:
+   `cd backend && uv run uvicorn librarysync.main:app --reload`
+4. Run worker:
+   `cd worker && uv run python -m librarysync_worker.main`
+5. Lint:
+   `uv run ruff check ./backend/ ./worker/`
 
-## Auth Bootstrap
-- Default auth is username + password with JWT cookies.
-- Registration is enabled by default via `POST /api/auth/register`.
-- Disable registration by setting `LIBRARYSYNC_ALLOW_REGISTRATION=false`.
+## Credits
 
-## Environment Variables
-The following are required for the MVP (see `.env.example` for defaults):
-- `DATABASE_URL`
-- `LIBRARYSYNC_SECRET_KEY`
-- `LIBRARYSYNC_BASE_URL`
-- `TRAKT_CLIENT_ID`, `TRAKT_CLIENT_SECRET`
-- `SIMKL_CLIENT_ID`, `SIMKL_CLIENT_SECRET`
-- `HISTORY_LOOKBACK_DAYS`
-- `LOG_LEVEL`
-- `LIBRARYSYNC_JWT_ACCESS_TOKEN_MINUTES`
-- `LIBRARYSYNC_JWT_ALGORITHM`
-- `LIBRARYSYNC_ALLOW_REGISTRATION`
-
-## Notes
-- The backend and worker share the `librarysync` package.
-- Connectors are kept pure (no DB writes inside connectors).
-- Outbox and canonical models are the backbone for syncing.
-- Ruff handles linting and import sorting with a 100-character line length.
-- The root `pyproject.toml` defines the uv workspace.
-- Letterboxd credentials: thanks to https://github.com/dado3212/letterboxd-scripts/tree/main
-  for guidance on retrieving the `client_id` and `client_secret`.
+Thanks to @MunifTanjim with [https://github.com/MunifTanjim/stremthru.git](Stremthru) for the inspiration behind the
+Stremio sync workflow.

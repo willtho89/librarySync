@@ -1,193 +1,42 @@
 # librarySync — AGENTS.md
 
-## 1) Mission / Summary
+## 1) Mission / Current Snapshot
 
-Build **librarySync**, a self-hosted, Docker-compose-deployable, **multi-user** synchronization hub that:
-
-- **Ingests watch activity** from configured sources.
-- Normalizes events into a **canonical progress/watched model**.
-- **Syncs watched/progress** to downstream tracking services (MVP: **Trakt + SIMKL**).
-- Runs background jobs for polling, syncing, retries, and (later) drift reconciliation.
-- Provides a **minimal web UI** (no frontend frameworks; plain JS + server-served static HTML).
-
-Scope for MVP: **watched + progress only** (no collection/library syncing, no deletes).
-
-Core requirements:
-- **Pluggable connectors** for players and services.
-- **OAuth** for downstream services where possible (Trakt, SIMKL).
-- Credentials stored in DB, **encrypted at rest**.
-- Observable and debuggable: event log, outbox status, last errors.
-
-Repository style: **monorepo** named `librarySync`.
+Build **librarySync**, a self-hosted, Docker-compose-deployable, **multi-user** hub for
+watch history + ratings. The current code base focuses on **watched history** (manual and
+imported) and syncs that history to **Trakt, SIMKL, Letterboxd, and Stremio**, backed by
+an async metadata lookup/enrichment pipeline.
 
 ---
 
-## 2) MVP Feature Set (Must Have)
+## 2) Current Feature Set (Implemented)
 
-### Downstream sync (MVP)
-- Trakt OAuth connect + token refresh + push:
-  - progress/scrobble if supported reasonably
-  - watched/completed marking on completion
-- SIMKL OAuth connect + push:
-  - watched/completed marking
-  - progress where supported (fallback to watched-only if needed)
-- Outbox-based delivery with retries and per-provider rate limiting.
-
-### Multi-user (MVP)
-- Multi-user data model from day one.
-- Local authentication for the web UI (simple username + password for MVP).
-- Each user configures their own integrations (OAuth connections and metadata providers).
-
-### UI (MVP)
-- Very small set of pages; plain JS (no frameworks):
-  - Login
-  - Integrations (connect/disconnect, test connection)
-  - Settings (search preferences, source-of-truth placeholders)
-  - Activity (recent events + sync status)
+- Multi-user auth with JWT cookies; optional registration toggle.
+- Manual history management: add, update, delete, bulk delete; optional delete in integrations.
+- Ratings support (0.5–5.0 stars) synced to providers where supported.
+- Metadata providers (per user): TMDB, TVDB, IMDb, TVMaze, Kitsu, MyAnimeList.
+- Async metadata lookup and enrichment (posters/IDs), with local cache reuse.
+- Imports from Trakt, SIMKL, Letterboxd, Stremio (scheduled or on-demand).
+- Import-all queue (priority-ordered per user) + history merge dedupe job.
+- Outbox-based delivery with retries + per-user rate limiting.
+- Minimal UI (static HTML + JS): login, integrations, settings, activity, history, add-watched.
 
 ---
 
-## 3) Non-Goals (MVP)
+## 3) Architecture / Data Flow
 
-- No deletions/unwatch actions pushed to services.
-- No full "collection/library" sync (only watched/progress).
-- No fancy UI frameworks.
-- No mobile app.
-- No universal metadata perfection. Use pragmatic ID mapping (IMDb-first) and cache results.
-
----
-
-## 4) Architecture Overview
-
-### Components
-- **Backend API**: Python (FastAPI recommended)
-- **Worker**: background processing loop(s) for:
-  - processing import jobs
-  - processing outbox jobs
-  - retries/backoff
-  - (later) daily drift reconciliation
-- **DB**: PostgreSQL
-- **Web UI**: static HTML + plain JS served by backend (or via lightweight static route)
-- **Deployment**: Docker + Docker Compose
-
-### Core patterns
-- **Connector plugin interfaces**:
-  - Players: "read sessions/progress"
-  - Services: "OAuth + push watched/progress + optional pull later"
-- **Canonical models** between connectors and orchestration code.
-- **Outbox pattern**:
-  - Ingest creates canonical `ProgressEvent`
-  - Orchestrator enqueues outbox jobs
-  - Worker delivers jobs to Trakt/SIMKL, records attempts
+- **API**: FastAPI serves JSON endpoints and static UI under `/static`.
+- **Worker**: async loops for outbox, metadata lookups, imports, import-all, and merges.
+- **Canonical flow**:
+  1. Manual add or import -> `MediaItem`/`EpisodeItem` + `WatchedItem`
+  2. Append `WatchEvent` for auditing.
+  3. Enqueue internal outbox job -> provider sync jobs + `WatchSync` rows.
+  4. Worker delivers jobs and records `SyncAttempt` + `WatchSync` status.
+  5. Metadata enrichment fills missing IDs/posters when possible.
 
 ---
 
-## 5) Canonical Domain Model (Conceptual)
-
-### PlaybackSession (from player connector)
-- `session_key`: stable identifier for a session (prefer requestId; otherwise hash of key fields)
-- `user_id`
-- `provider`: player connector id (e.g. `stremio`)
-- `imdb_id_raw`: e.g. `tt0472954:10:7`
-- `imdb_id`: base IMDb ID e.g. `tt0472954`
-- `media_type`: `movie` | `episode`
-- `season`: int? (nullable)
-- `episode`: int? (nullable)
-- `progress_percent`: float (0–100)
-- `first_seen_at`: datetime
-- `last_seen_at`: datetime
-- `url`, `filename`, `raw`
-
-### ProgressEvent (append-only)
-- `event_id`
-- `user_id`
-- `source_provider`: player connector id
-- `item_key`: canonical key (e.g. `imdb:tt123` or `imdb:tt123:s10e7`)
-- `event_type`: `progress` | `completed`
-- `progress_percent`: float?
-- `occurred_at`: datetime (prefer lastSeen)
-- `session_key`
-- `raw` json
-
-### ItemState (derived state)
-- `user_id`
-- `item_key`
-- `last_progress_percent`
-- `completed_at` (nullable)
-- `last_seen_at`
-
-### OutboxJob
-- `job_id`
-- `user_id`
-- `target_provider`: `trakt` | `simkl`
-- `job_type`: `push_progress` | `push_completed`
-- `payload` (canonical)
-- `status`: `pending` | `in_progress` | `succeeded` | `failed_permanent` | `failed_retryable`
-- `run_after`, `attempts`, `last_error`
-
-### ItemMapping (provider ID cache)
-- `item_key`
-- `provider` (`trakt`/`simkl`)
-- provider-specific IDs needed to perform updates
-- `raw` json
-- `updated_at`
-
----
-
-## 6) Sync Rules (MVP)
-
-### Dedupe/coalescing rules
-- Progress events should not be emitted on every poll.
-- Emit `progress` only if:
-  - progress increased by at least `Δp` (default 1.0%), OR
-  - time since last emitted progress >= `T` seconds (default 60s)
-- Never decrease stored progress: `effective_progress = max(previous, current)`.
-
-### Completion rule
-- When `progress_percent >= completion_threshold` (default 85%):
-  - emit a `completed` event once per item/user
-  - enqueue watched marking for Trakt and SIMKL
-- If session disappears:
-  - optional grace completion if last progress was near threshold (configurable later)
-
-### Add-only guarantee
-- Never unwatch or delete on downstream services in MVP.
-
----
-
-## 7) Connectors (Pluggable Interfaces)
-
-### ServiceConnector interface (conceptual)
-- OAuth:
-  - `oauth_start(user) -> redirect_url`
-  - `oauth_callback(user, code/state) -> store tokens`
-  - `refresh_token_if_needed(user)`
-- Push:
-  - `push_progress(user, event)`
-  - `push_completed(user, event)`
-- Optional later:
-  - `pull_watched_state(user, since)`
-
-MVP service connectors: `TraktConnector`, `SimklConnector`
-
----
-
-## 7b) Metadata Providers (Sprint 2)
-
-Add a new connector category: metadata providers.
-
-### MetadataProvider interface (conceptual)
-- `search_movie(query, user) -> list[MovieCandidate]`
-- `find_movie_by_external_id(external_id, user) -> list[MovieCandidate]`
-- `get_movie_details(provider_id, user) -> MovieCandidate`
-- `normalize_candidate(raw) -> MovieCandidate`
-
-MVP metadata provider: `TmdbMetadataProvider`
-Optional stub (no functionality required in Sprint 2): `TvdbMetadataProvider`
-
----
-
-## 8) Repository Layout (Monorepo)
+## 4) Repository Layout (Actual)
 
 ```
 librarySync/
@@ -197,305 +46,240 @@ librarySync/
   .env.example
 
   backend/
+    Dockerfile
+    alembic.ini
     pyproject.toml
     src/librarysync/
       main.py                  # FastAPI app entry
       config.py                # env/config handling
       db/
-        session.py
         models.py
-        migrations/            # Alembic
+        session.py
+        migrations/
       api/
         routes_auth.py
         routes_integrations.py
+        routes_history.py
+        routes_metadata.py
         routes_activity.py
         routes_settings.py
+        routes_admin.py
       core/
-        canonical.py           # canonical dataclasses/types
-        security.py            # encryption helpers for tokens
-        dedupe.py              # progress dedupe/coalesce logic
-        outbox.py              # enqueue helpers
-        matching.py            # ID mapping cache and lookup
+        auth.py
+        watch_pipeline.py
+        import_schedule.py
+        import_all.py
+        metadata_lookup_engine.py
+        metadata_enrichment.py
+        metadata_providers.py
+        rate_limiter.py
+        ratings.py
+        security.py
+        outbox.py
+        dedupe.py
+        matching.py
       connectors/
-        players/
-          base.py
         services/
-          base.py
           trakt.py
           simkl.py
+          letterboxd.py
+          stremio.py
+          stremio_watched_bitfield.py
         metadata/
-          base.py
           tmdb.py
           tvdb.py
+          imdb.py
+          tvmaze.py
+          kitsu.py
+          myanimelist.py
       jobs/
         process_outbox.py
-        drift_daily.py         # stub for MVP, can be disabled initially
+        metadata_lookup.py
+        imports.py
+        trakt_import.py
+        simkl_import.py
+        letterboxd_import.py
+        stremio_import.py
+        merge_history.py
       static/
         index.html
         login.html
         integrations.html
-        activity.html
         settings.html
+        activity.html
+        history.html
+        add-watched.html
         app.js
         styles.css
-      templates/               # optional (if server-rendered pages are used)
 
   worker/
-    pyproject.toml             # can share backend package or separate
+    Dockerfile
+    pyproject.toml
     src/librarysync_worker/
-      main.py                  # worker entrypoint that imports backend modules
+      main.py
 ```
 
-Notes:
-- Prefer a single Python package shared by API + worker to avoid duplication.
-- Worker can be a separate entrypoint that reuses `librarysync.*`.
+---
+
+## 5) Data Model (DB Highlights)
+
+- `users`: auth + per-user settings (e.g., include adult in search).
+- `integrations` + `integration_secrets`: per-user provider config + encrypted secrets.
+- `media_items` + `episode_items`: canonical media catalog.
+- `watched_items`: per-user watch history (watched_at, rating, source).
+- `watch_events`: append-only event log for imports/manual changes.
+- `watch_syncs`: per-provider sync status + external IDs/errors.
+- `outbox` + `sync_attempts`: delivery queue and attempt history.
+- `metadata_lookup_requests` + `metadata_lookup_candidates`: async lookup pipeline.
+- `scheduled_jobs`: leases for recurring jobs (e.g., merge history).
+- `rate_limit_buckets`: per-user/provider token buckets.
+- `progress_events`: legacy progress model (not wired to outbox yet).
 
 ---
 
-## 9) Tech Stack Decisions (Default)
+## 6) Integrations & Metadata Providers
 
-- Python 3.14+ (managed with uv)
-- FastAPI + Uvicorn
-- Async-first: use async/await in API endpoints, worker loops, and connectors; avoid
-  blocking I/O in request handlers and jobs.
-- SQLAlchemy 2.x + Alembic
-- PostgreSQL 16+
-- Plain JS frontend (served from `/static`)
-- Docker + Docker Compose
-
-Queue/backing store:
-- MVP can do DB-backed outbox polling (simpler).
-- Optional later: Redis-based queue if needed, but not required for MVP.
+- **Downstream + import**: Trakt (OAuth), SIMKL (OAuth), Letterboxd (client + refresh token),
+  Stremio (auth key).
+- **Metadata providers**: TMDB (API key), TVDB (API key + optional PIN), IMDb, TVMaze,
+  Kitsu, MyAnimeList (no secrets).
+- Provider configs live in `integrations`; sensitive fields in `integration_secrets`.
 
 ---
 
-## 10) Security Requirements
+## 7) Worker Modes & Jobs
 
-- Store OAuth tokens/API keys **encrypted at rest**.
-  - Encryption key provided via environment variable (e.g., `LIBRARYSYNC_SECRET_KEY`).
-- Passwords hashed (bcrypt/argon2).
-- CSRF/State protection for OAuth flows.
-- Do not log sensitive tokens.
-- Ensure endpoints are authenticated (except OAuth callbacks and health).
-
-### Password Handling (Required)
-- Enforce minimum length (>= 8 characters) and reject empty/too-short passwords.
-- Enforce bcrypt input limit: reject passwords > 72 bytes when UTF-8 encoded; **do not truncate**.
-- Hash with a modern KDF (bcrypt for MVP; prefer Argon2id when feasible).
-- Verify with constant-time helpers (passlib) and treat any verify errors as auth failures.
-- Never log, echo, or return raw passwords; return clear validation errors only on registration.
+- `LIBRARYSYNC_WORKER_MODES`: `outbox`, `metadata`, `imports`, `import_all`, `merge`.
+- `process_outbox` handles `push_watched`, `push_rating`, `update_history`,
+  `remove_history`, `update_log_entry`, `delete_log_entry`, `remove_watched`,
+  and internal `new_item_added`.
+- `metadata_lookup` resolves lookup requests into candidates.
+- `imports` runs provider strategies; `import_all` sequences providers per user.
+- `merge_history` dedupes same-day movie entries and repoints sync/outbox rows.
 
 ---
 
-## 11) Observability / Debuggability Requirements
-
-- Store raw payload snapshots for:
-  - player session entries (sanitized, when applicable)
-  - downstream API responses (sanitized)
-- Expose in UI:
-  - last poll time per user
-  - outbox queue size
-  - last error per integration
-- Provide structured logs (JSON preferred) for container logs.
-
----
-
-## 12) Configuration (Env Vars)
-
-MVP env vars (example names; finalize during implementation):
-- `DATABASE_URL`
-- `LIBRARYSYNC_SECRET_KEY` (encryption)
-- `LIBRARYSYNC_BASE_URL` (for OAuth callback URLs)
-- `TRAKT_CLIENT_ID`, `TRAKT_CLIENT_SECRET`
-- `SIMKL_CLIENT_ID`, `SIMKL_CLIENT_SECRET`
-- `POLL_INTERVAL_SECONDS` (default 60)
-- `COMPLETION_THRESHOLD_PERCENT` (default 85)
-- `LOG_LEVEL`
-
----
-
-## 13) API Endpoints (MVP Target)
+## 8) API Surface (Current)
 
 ### Auth
+- `POST /api/auth/register` (if enabled)
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
-- `GET /api/me`
+- `GET /api/auth/me`
+
+### Settings
+- `GET /api/settings`
+- `POST /api/settings`
 
 ### Integrations
 - `GET /api/integrations`
+- `POST /api/integrations/letterboxd`
+- `POST /api/integrations/letterboxd/test`
+- `POST /api/integrations/letterboxd/disconnect`
 - `GET /api/integrations/trakt/start`
 - `GET /api/integrations/trakt/callback`
 - `POST /api/integrations/trakt/disconnect`
 - `GET /api/integrations/simkl/start`
 - `GET /api/integrations/simkl/callback`
 - `POST /api/integrations/simkl/disconnect`
+- `POST /api/integrations/stremio/login`
+- `POST /api/integrations/stremio/disconnect`
+- `POST /api/integrations/{provider}/import/schedule`
+- `POST /api/integrations/{provider}/import/now`
+- `POST /api/integrations/import/all`
+
+### Metadata
+- `GET /api/metadata/providers`
+- `POST /api/metadata/providers/{tmdb|tvdb|kitsu|tvmaze|imdb|myanimelist}`
+- `POST /api/metadata/providers/{provider}/test`
+- `POST /api/metadata/lookup`
+- `GET /api/metadata/lookup/{lookup_id}`
+- `GET /api/metadata/tv/{provider}/{provider_item_id}/seasons`
+- `GET /api/metadata/tv/{provider}/{provider_item_id}/seasons/{season_number}/episodes`
+
+### History
+- `POST /api/history/items`
+- `GET /api/history/items`
+- `PATCH /api/history/items/{watched_id}`
+- `DELETE /api/history/items`
+- `DELETE /api/history/items/{watched_id}`
+- `POST /api/history/items/bulk-delete`
+- `POST /api/history/items/sync`
 
 ### Activity / Status
-- `GET /api/activity/events?limit=100`
+- `GET /api/activity/events`
 - `GET /api/activity/sessions`
-- `GET /api/outbox?status=pending|failed|succeeded`
-- `GET /api/status` (poller stats, last run times)
+- `GET /api/outbox`
+- `GET /api/status`
+
+### Admin (requires `X-API-Key`)
+- `POST /api/admin/reset-outbox-jobs`
+- `DELETE /api/admin/purge-jobs`
 
 ---
 
-## 14) Implementation Plan (Execution Order)
+## 9) Configuration (Env Vars)
 
-1. **Repo bootstrap**: docker compose, backend skeleton, DB connectivity, migrations.
-2. **Multi-user auth**: login, user model, session/JWT.
-3. **Integrations framework**: `integrations` table, encryption helpers, UI wiring.
-4. **Trakt OAuth**: connect + test call.
-5. **SIMKL OAuth**: connect + test call.
-6. **History imports**:
-   - Stremio/Trakt/SIMKL/Letterboxd history ingestion
-7. **Outbox + delivery worker**:
-   - enqueue jobs per event per provider
-   - implement Trakt push (completed first; progress second)
-   - implement SIMKL push (completed first; progress second)
-8. **UI activity + status**: show what’s happening; show failures.
-9. **Hardening**: retries/backoff, rate limiting, mapping cache, logging.
-10. (Optional MVP+) **Daily drift job** (watched-only add-only) once push pipeline is stable.
+- `DATABASE_URL`
+- `LIBRARYSYNC_SECRET_KEY`
+- `LIBRARYSYNC_ADMIN_API_KEY`
+- `LIBRARYSYNC_BASE_URL`
+- `LOG_LEVEL`
+- `HISTORY_LOOKBACK_DAYS`
+- `LIBRARYSYNC_JWT_ACCESS_TOKEN_MINUTES`
+- `LIBRARYSYNC_JWT_ALGORITHM`
+- `LIBRARYSYNC_ALLOW_REGISTRATION`
+- `TRAKT_CLIENT_ID`, `TRAKT_CLIENT_SECRET`
+- `SIMKL_CLIENT_ID`, `SIMKL_CLIENT_SECRET`
+- `LIBRARYSYNC_WORKER_MODES`
+- `LIBRARYSYNC_WORKER_OUTBOX_CONCURRENCY`
+- `LIBRARYSYNC_WORKER_METADATA_CONCURRENCY`
+- `LIBRARYSYNC_WORKER_IMPORTS_CONCURRENCY`
+- `LIBRARYSYNC_WORKER_IMPORT_ALL_CONCURRENCY`
+- `LIBRARYSYNC_WORKER_MERGE_CONCURRENCY`
+- `LIBRARYSYNC_TRAKT_RATE_LIMIT_PER_MINUTE`
+- `LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE`
+- `LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE`
+- `LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE`
 
 ---
 
-## 15) Coding Standards / Agent Guidance
+## 10) Security Requirements
+
+- Encrypt secrets at rest using `LIBRARYSYNC_SECRET_KEY` (see `core/security.py`).
+- Passwords hashed with bcrypt; enforce 8+ chars and 72-byte max (no truncation).
+- OAuth state validation for Trakt/SIMKL.
+- Never log raw secrets or tokens.
+
+---
+
+## 11) Observability / Debuggability
+
+- `watch_events`, `outbox`, `sync_attempts`, and `watch_syncs` are the primary audit trail.
+- `/api/status` surfaces schedule/queue state for UI.
+- Provider responses and payloads are sanitized before storage/logging.
+
+---
+
+## 12) Developer Guidance
 
 - Keep connectors pure: **no DB writes inside connectors**.
-- Canonicalize early:
-  - normalize source payload -> canonical session (when applicable)
-  - canonical session -> canonical event
-  - canonical event -> outbox jobs
-- Use Ruff for linting/import sorting with a 100-character line length.
-- Always run `ruff check .` after changes and report results.
-- Prefer deterministic keys:
-  - `item_key` format:
-    - movie: `imdb:tt1234567`
-    - episode: `imdb:tt1234567:s10e07` (zero-pad episode)
-- Never spam downstream:
-  - coalesce progress updates
-  - prefer completion accuracy over frequent progress writes
-- Always record:
-  - what was attempted
-  - provider response status
-  - sanitized error body (if safe)
-- Write integration tests for:
-  - dedupe logic
-  - item_key parsing
-  - outbox retry transitions
+- Use `watch_pipeline.py` helpers to enqueue sync jobs.
+- Store secrets in `integration_secrets` (encrypted), not `integrations.config`.
+- Ruff is the linter; line length is 100 (see `pyproject.toml`).
 
 ---
 
-## 16) Known Risks / Open Items
+## 13) Tests
 
-- Trakt/SIMKL episode mapping may require search calls and caching.
-- Some services have different semantics for "scrobble" vs "watched". Implement watched first, then progress.
-
----
-
-## 17) Definition of Done (MVP)
-
-A user can:
-
-- Deploy with `docker compose up`.
-- Log in to the web UI.
-- Configure integrations and connect Trakt + SIMKL via OAuth.
-- Import or add watched history; librarySync records events.
-- On completion, librarySync marks the item watched in Trakt and SIMKL.
-- UI shows recent events and whether sync succeeded or failed.
-- Failures are retried and visible; tokens are stored encrypted.
+- `backend/tests/test_routes_history.py`
+- `backend/tests/test_stremio_watched_bitfield.py`
+- Add tests around outbox transitions, import scheduling, and metadata lookups when changing those.
 
 ---
 
-## 18) Sprint 2 - Manual Watched Movies + Single Lookup Flow
+## 14) Known Gaps / Open Items
 
-### Sprint 2 outcome
-Logged-in users can manually add a watched movie through a single, consistent flow:
-
-1. User input: user enters either a title (free text) or a known ID (IMDb `tt...`, TMDB ID).
-2. Get info: system performs an asynchronous metadata lookup against the user's enabled
-   metadata providers (start with TMDB).
-3. User selects + confirms: user picks the correct match from a candidate list and confirms
-   a watch date.
-   - DateTime input optional.
-   - If None: default to "started watching now" (use server time).
-4. System stores the result locally as the user's watched history (future sprint: sync out).
-
-### Scope now vs. later
-Now (Sprint 2):
-- Local source of truth for watched movies inside the app.
-- Metadata lookup pipeline (async, provider-pluggable).
-- UI and API stable enough that future downstream syncing is another consumer.
-
-Later (future sprints):
-- Add Trakt/SIMKL connectors + sync worker that pushes local watched events.
-- Add player ingestion as another source of watch events.
-- Add drift detection and reconciliation.
-
-### User-facing features (Sprint 2)
-1) Metadata provider settings (per user)
-- Enable/disable TMDB metadata provider.
-- Provide credentials per user (no instance-wide keys).
-- Optional: provider preferences like language/region (minimal in MVP).
-
-2) Manual "Add watched movie" page
-- Input field: "Title or ID".
-- Search button.
-- Results area: shows candidates (title/year/poster if available).
-- User selects one candidate.
-- Confirmation step:
-  - Watch date input optional.
-  - If empty: default to "now" as started watching time.
-  - Confirm button.
-
-3) History page
-- Shows the user's watched movies added manually (most recent first).
-
-### System behavior (Sprint 2)
-Single flow, multiple query strategies:
-- Looks like IMDb ID (`tt\\d+`) -> use provider "find by external ID" where available (TMDB).
-- Otherwise treat as title query -> use provider search (TMDB movie search).
-
-TMDB workflow (MVP-friendly):
-- Search first, then fetch details for the selected candidate (or top N candidates).
-
-Async lookup (required):
-- Create lookup request -> poll status endpoint until ready -> render candidates.
-- Keep the UI flow consistent across providers.
-
-### Minimal API surface (Sprint 2)
-Settings:
-- List enabled metadata providers for current user.
-- Enable/disable provider + save credentials (per user).
-- Test provider (optional but helpful).
-
-Lookup flow:
-- Create lookup request from user input (title or ID).
-- Get lookup status + candidates.
-- Confirm selection + watch date.
-
-History:
-- List watched movies for the logged-in user.
-
-### Persistence goals (Sprint 2)
-Store:
-- Canonical representation of a movie (with common IDs like IMDb/TMDB).
-- Per-user watched record (including optional watch datetime; default to now).
-- Append-only log/event representing "user marked movie watched manually".
-- Lookup requests + candidate results (for async polling and debugging).
-
-### Worker responsibilities (Sprint 2)
-- Pick up pending lookup requests.
-- Call enabled metadata providers for that user.
-- Store candidates.
-- Mark lookup request as complete or failed.
-
-### Acceptance criteria (Sprint 2)
-- A user can enable TMDB provider and store their credentials (per user).
-- A user can input a movie title, get candidates, pick one, confirm watch datetime (or leave blank).
-- The watched movie appears in the user's history.
-- The lookup flow is asynchronous (request -> poll -> results).
-- Provider design is extensible (adding TVDB later doesn't change the UI flow).
-
-### TMDB notes (Sprint 2)
-- Use TMDB movie search endpoint for title-based searches.
-- Use TMDB external-ID find capability when user supplies an IMDb ID.
-- Prefer the "search then query details" workflow for better confirmation data.
+- CI/CD pipeline still missing (see README TODO).
+- UI/UX polish is still pending.
+- Progress/scrobble ingestion exists in canonical models but is not wired to the outbox yet.

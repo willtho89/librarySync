@@ -1,3 +1,25 @@
+x-worker-base: &worker-base
+  build:
+    context: .
+    dockerfile: worker/Dockerfile
+  env_file: .env
+  depends_on:
+    db:
+      condition: service_healthy
+    api:
+      condition: service_healthy
+  restart: unless-stopped
+  healthcheck:
+    test:
+      [
+        "CMD-SHELL",
+        "python -c \"import urllib.request,sys; urllib.request.urlopen('http://api:8000/health', timeout=2); sys.exit(0)\"",
+      ]
+    interval: 10s
+    timeout: 3s
+    retries: 6
+    start_period: 10s
+
 services:
   db:
     image: postgres:16-alpine
@@ -39,26 +61,39 @@ services:
       start_period: 10s
 
   worker:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    env_file: .env
-    depends_on:
-      db:
-        condition: service_healthy
-      api:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python -c \"import urllib.request,sys; urllib.request.urlopen('http://api:8000/health', timeout=2); sys.exit(0)\"",
-        ]
-      interval: 10s
-      timeout: 3s
-      retries: 6
-      start_period: 10s
+    <<: *worker-base
+    environment:
+      LIBRARYSYNC_WORKER_MODES: ${LIBRARYSYNC_WORKER_MODES:-all}
+
+  worker-outbox:
+    <<: *worker-base
+    profiles: ["scaled-workers"]
+    environment:
+      LIBRARYSYNC_WORKER_MODES: outbox
+
+  worker-metadata:
+    <<: *worker-base
+    profiles: ["scaled-workers"]
+    environment:
+      LIBRARYSYNC_WORKER_MODES: metadata
+
+  worker-imports:
+    <<: *worker-base
+    profiles: ["scaled-workers"]
+    environment:
+      LIBRARYSYNC_WORKER_MODES: imports
+
+  worker-import-all:
+    <<: *worker-base
+    profiles: ["scaled-workers"]
+    environment:
+      LIBRARYSYNC_WORKER_MODES: import_all
+
+  worker-merge:
+    <<: *worker-base
+    profiles: ["scaled-workers"]
+    environment:
+      LIBRARYSYNC_WORKER_MODES: merge
 
 volumes:
   pgdata:

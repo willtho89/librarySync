@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -46,6 +47,8 @@ class Integration(Base):
     __tablename__ = "integrations"
     __table_args__ = (
         UniqueConstraint("user_id", "provider", name="uq_integrations_user_provider"),
+        Index("ix_integrations_next_import_at", "next_import_at"),
+        Index("ix_integrations_import_lease_until", "import_lease_until"),
     )
 
     id: Mapped[str] = mapped_column(
@@ -57,6 +60,13 @@ class Integration(Base):
     provider: Mapped[str] = mapped_column(String(50), index=True)
     status: Mapped[str] = mapped_column(String(32), default="configured")
     config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    next_import_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    import_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    import_lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -82,6 +92,30 @@ class IntegrationSecret(Base):
         String(36), ForeignKey("integrations.id", ondelete="CASCADE"), index=True
     )
     secret_data: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class ScheduledJob(Base):
+    __tablename__ = "scheduled_jobs"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -361,6 +395,16 @@ class ProgressEvent(Base):
 
 class OutboxJob(Base):
     __tablename__ = "outbox"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_outbox_dedupe_key"),
+        Index(
+            "ix_outbox_user_status_run_after",
+            "user_id",
+            "status",
+            "run_after",
+        ),
+        Index("ix_outbox_user_provider", "user_id", "target_provider"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
@@ -377,6 +421,7 @@ class OutboxJob(Base):
     )
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -402,3 +447,34 @@ class SyncAttempt(Base):
     )
     response_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class RateLimitBucket(Base):
+    __tablename__ = "rate_limit_buckets"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "provider",
+            name="uq_rate_limit_buckets_user_provider",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    tokens: Mapped[float] = mapped_column(Float, default=0.0)
+    last_refill_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )

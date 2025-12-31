@@ -51,6 +51,8 @@ from librarysync.core.import_all import (
     import_all_active,
 )
 from librarysync.core.import_schedule import (
+    DEFAULT_IMPORT_INTERVAL_SECONDS,
+    compute_next_import_at,
     normalize_interval_seconds,
     set_import_interval,
     set_import_requested,
@@ -106,6 +108,14 @@ def _normalize_optional(value: str | None) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+def _refresh_next_import_at(integration: Integration, now: datetime) -> None:
+    integration.next_import_at = compute_next_import_at(
+        integration.config,
+        now,
+        default_interval_seconds=DEFAULT_IMPORT_INTERVAL_SECONDS,
+    )
 
 
 def _normalize_cookies(cookies: dict[str, str] | None) -> dict[str, str] | None:
@@ -271,8 +281,12 @@ async def save_letterboxd(
 
     config = dict(integration.config or {})
     config["api_base_url"] = api_base_url
+    if is_new:
+        config = set_import_interval(config, 0)
     integration.config = config
     integration.status = "configured"
+    now = datetime.now(timezone.utc)
+    _refresh_next_import_at(integration, now)
     db.add(integration)
     await db.flush()
 
@@ -429,6 +443,7 @@ async def letterboxd_disconnect(
     config = dict(integration.config or {})
     config.pop("member_id", None)
     integration.config = config
+    integration.next_import_at = None
     db.add(integration)
     await db.commit()
     return {"status": "ok"}
@@ -469,6 +484,8 @@ async def update_import_schedule(
         )
     interval_seconds = normalize_interval_seconds(payload.interval_seconds)
     integration.config = set_import_interval(integration.config, interval_seconds)
+    now = datetime.now(timezone.utc)
+    _refresh_next_import_at(integration, now)
     db.add(integration)
     await db.commit()
 
@@ -521,6 +538,7 @@ async def trigger_import_now(
         )
     config = set_import_requested(integration.config, datetime.now(timezone.utc))
     integration.config = config
+    _refresh_next_import_at(integration, datetime.now(timezone.utc))
     db.add(integration)
     await db.commit()
     return {"status": "queued"}
@@ -575,6 +593,7 @@ async def trakt_start(
         )
     )
     integration = result.scalars().first()
+    is_new = integration is None
     if not integration:
         integration = Integration(
             user_id=current_user.id,
@@ -586,6 +605,8 @@ async def trakt_start(
     config = dict(integration.config or {})
     config["oauth_state"] = state
     config["oauth_state_expires_at"] = expires_at.isoformat()
+    if is_new:
+        config = set_import_interval(config, 0)
     integration.config = config
     integration.status = "pending"
     db.add(integration)
@@ -674,6 +695,7 @@ async def trakt_callback(
         if isinstance(username, str) and username.strip():
             config["trakt_username"] = username.strip()
             integration.config = config
+    _refresh_next_import_at(integration, datetime.now(timezone.utc))
     db.add(integration)
     await db.commit()
     return RedirectResponse(url="/static/integrations.html")
@@ -711,6 +733,7 @@ async def trakt_disconnect(
     config.pop("oauth_state", None)
     config.pop("oauth_state_expires_at", None)
     integration.config = config
+    integration.next_import_at = None
     db.add(integration)
     await db.commit()
     return {"status": "ok"}
@@ -733,6 +756,7 @@ async def simkl_start(
         )
     )
     integration = result.scalars().first()
+    is_new = integration is None
     if not integration:
         integration = Integration(
             user_id=current_user.id,
@@ -744,6 +768,8 @@ async def simkl_start(
     config = dict(integration.config or {})
     config["oauth_state"] = state
     config["oauth_state_expires_at"] = expires_at.isoformat()
+    if is_new:
+        config = set_import_interval(config, 0)
     integration.config = config
     integration.status = "pending"
     db.add(integration)
@@ -831,6 +857,7 @@ async def simkl_callback(
     if username:
         config["simkl_username"] = username
         integration.config = config
+    _refresh_next_import_at(integration, datetime.now(timezone.utc))
     db.add(integration)
     await db.commit()
     return RedirectResponse(url="/static/integrations.html")
@@ -868,6 +895,7 @@ async def simkl_disconnect(
     config.pop("oauth_state", None)
     config.pop("oauth_state_expires_at", None)
     integration.config = config
+    integration.next_import_at = None
     db.add(integration)
     await db.commit()
     return {"status": "ok"}
@@ -922,13 +950,19 @@ async def stremio_login(
             provider="stremio",
             status="connected",
         )
+        is_new = True
+    else:
+        is_new = False
 
     config = dict(integration.config or {})
     config["api_base_url"] = api_base_url
     _clear_stremio_profile(config)
     _apply_stremio_profile(config, login.user, email)
+    if is_new:
+        config = set_import_interval(config, 0)
     integration.status = "connected"
     integration.config = config
+    _refresh_next_import_at(integration, datetime.now(timezone.utc))
     db.add(integration)
     await db.flush()
 
@@ -983,6 +1017,7 @@ async def stremio_disconnect(
     config = dict(integration.config or {})
     _clear_stremio_profile(config)
     integration.config = config
+    integration.next_import_at = None
     db.add(integration)
     await db.commit()
     return {"status": "ok"}

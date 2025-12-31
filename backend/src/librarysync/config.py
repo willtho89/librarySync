@@ -22,6 +22,10 @@ class Settings:
     jwt_access_token_minutes: int
     jwt_algorithm: str
     allow_registration: bool
+    trakt_rate_limit_per_minute: int
+    simkl_rate_limit_per_minute: int
+    letterboxd_rate_limit_per_minute: int
+    stremio_rate_limit_per_minute: int
 
 
 def load_settings() -> Settings:
@@ -42,6 +46,18 @@ def load_settings() -> Settings:
         jwt_algorithm=_get_env("LIBRARYSYNC_JWT_ALGORITHM", "HS256") or "HS256",
         allow_registration=(
             (_get_env("LIBRARYSYNC_ALLOW_REGISTRATION", "true") or "true").lower() == "true"
+        ),
+        trakt_rate_limit_per_minute=int(
+            _get_env("LIBRARYSYNC_TRAKT_RATE_LIMIT_PER_MINUTE", "60") or "60"
+        ),
+        simkl_rate_limit_per_minute=int(
+            _get_env("LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE", "60") or "60"
+        ),
+        letterboxd_rate_limit_per_minute=int(
+            _get_env("LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE", "30") or "30"
+        ),
+        stremio_rate_limit_per_minute=int(
+            _get_env("LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE", "120") or "120"
         ),
     )
 

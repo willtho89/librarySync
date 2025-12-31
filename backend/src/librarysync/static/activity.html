@@ -21,12 +21,41 @@
     </header>
     <main>
       <section class="card">
-        <h2>Recent Events</h2>
-        <div id="events">No events yet.</div>
+        <div class="card-header">
+          <h2>Run schedule</h2>
+          <button id="activity-refresh" type="button" class="secondary-button">
+            Refresh
+          </button>
+        </div>
+        <p id="activity-message" class="form-message" hidden></p>
+        <div id="activity-summary" class="activity-summary">Loading...</div>
+        <div id="activity-schedule" class="schedule-list">Loading...</div>
       </section>
       <section class="card">
-        <h2>Outbox</h2>
-        <div id="outbox">No jobs yet.</div>
+        <h2>Sync activity</h2>
+        <div class="activity-controls">
+          <input
+            id="activity-search"
+            type="search"
+            placeholder="Search title or ID"
+          />
+          <select id="activity-status-filter">
+            <option value="all">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="in_progress">In progress</option>
+            <option value="succeeded">Succeeded</option>
+            <option value="failed_retryable">Retrying</option>
+            <option value="failed_permanent">Failed</option>
+          </select>
+          <select id="activity-provider-filter">
+            <option value="all">All providers</option>
+          </select>
+        </div>
+        <div id="sync-activity" class="activity-list">Loading...</div>
+      </section>
+      <section class="card">
+        <h2>Recent events</h2>
+        <div id="events" class="activity-list">Loading...</div>
       </section>
     </main>
   </body>

@@ -503,7 +503,12 @@ async def sync_watched_items(
         if not resolved_media and not resolved_episode:
             continue
         await strategy.enqueue_new(
-            db, watched, resolved_media, resolved_episode, is_rewatch=False
+            db,
+            watched,
+            resolved_media,
+            resolved_episode,
+            is_rewatch=False,
+            force=True,
         )
         requested += 1
     await db.commit()

@@ -3,15 +3,24 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from librarysync.core.scheduler import (
+    claim_scheduled_job,
+    complete_scheduled_job,
+    release_scheduled_job,
+)
 from librarysync.db.models import MediaItem, OutboxJob, WatchedItem, WatchSync
 from librarysync.db.session import SessionLocal, init_session_factory
 
 logger = logging.getLogger(__name__)
+MERGE_HISTORY_JOB = "merge_history"
+MERGE_HISTORY_INTERVAL = timedelta(hours=6)
+MERGE_HISTORY_LEASE = timedelta(minutes=30)
+MERGE_HISTORY_RETRY_DELAY = timedelta(minutes=10)
 
 
 @dataclass
@@ -23,6 +32,16 @@ class WatchedRow:
 async def process_history_merges_once() -> int:
     init_session_factory()
     async with SessionLocal() as db:
+        now = datetime.now(timezone.utc)
+        job = await claim_scheduled_job(
+            db,
+            MERGE_HISTORY_JOB,
+            MERGE_HISTORY_INTERVAL,
+            MERGE_HISTORY_LEASE,
+            now=now,
+        )
+        if not job:
+            return 0
         result = await db.execute(
             select(WatchedItem, MediaItem)
             .join(MediaItem, WatchedItem.media_item_id == MediaItem.id)
@@ -30,12 +49,18 @@ async def process_history_merges_once() -> int:
             .order_by(WatchedItem.user_id, WatchedItem.watched_at)
         )
         rows = [WatchedRow(watched, media) for watched, media in result.all()]
-        if not rows:
-            return 0
-        merged_count = await _merge_movie_history(db, rows)
-        if merged_count:
-            logger.info("Merged %s watched entries", merged_count)
-        return merged_count
+        try:
+            if not rows:
+                await complete_scheduled_job(db, job, MERGE_HISTORY_INTERVAL, now=now)
+                return 0
+            merged_count = await _merge_movie_history(db, rows)
+            if merged_count:
+                logger.info("Merged %s watched entries", merged_count)
+            await complete_scheduled_job(db, job, MERGE_HISTORY_INTERVAL, now=now)
+            return merged_count
+        except Exception:
+            await release_scheduled_job(db, job, MERGE_HISTORY_RETRY_DELAY, now=now)
+            raise
 
 
 async def _merge_movie_history(

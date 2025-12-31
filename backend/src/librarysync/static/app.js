@@ -12,6 +12,18 @@ const episodeState = {
   tmdbId: null,
   seasonNumber: null,
 };
+const activityState = {
+  status: null,
+  jobs: [],
+  events: [],
+  lastRefresh: null,
+  timer: null,
+  filters: {
+    status: "all",
+    provider: "all",
+    search: "",
+  },
+};
 const DEFAULT_IMPORT_INTERVAL_SECONDS = 86400;
 
 function bindForm(id, handler) {
@@ -1890,6 +1902,120 @@ function formatMetadataValue(value) {
   return String(value);
 }
 
+function formatLabel(value) {
+  if (!value) {
+    return "";
+  }
+  return String(value)
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatProvider(value) {
+  if (!value) {
+    return "Unknown";
+  }
+  const normalized = String(value).toLowerCase();
+  const overrides = {
+    simkl: "SIMKL",
+    trakt: "Trakt",
+    stremio: "Stremio",
+    letterboxd: "Letterboxd",
+    manual: "Manual",
+    internal: "Internal",
+  };
+  return overrides[normalized] || formatLabel(normalized);
+}
+
+function formatInterval(seconds) {
+  if (!seconds) {
+    return "Manual";
+  }
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "Manual";
+  }
+  if (value < 60) {
+    return `Every ${Math.round(value)}s`;
+  }
+  if (value < 3600) {
+    return `Every ${Math.round(value / 60)}m`;
+  }
+  if (value < 86400) {
+    return `Every ${Math.round(value / 3600)}h`;
+  }
+  return `Every ${Math.round(value / 86400)}d`;
+}
+
+function formatRelativeTime(value) {
+  if (!value) {
+    return "Not scheduled";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return "Unknown";
+  }
+  const diffSeconds = Math.round((date.getTime() - Date.now()) / 1000);
+  const absSeconds = Math.abs(diffSeconds);
+  if (absSeconds < 30) {
+    return "now";
+  }
+  let unit = "sec";
+  let amount = absSeconds;
+  if (absSeconds >= 86400) {
+    unit = "day";
+    amount = Math.round(absSeconds / 86400);
+  } else if (absSeconds >= 3600) {
+    unit = "hr";
+    amount = Math.round(absSeconds / 3600);
+  } else if (absSeconds >= 60) {
+    unit = "min";
+    amount = Math.round(absSeconds / 60);
+  }
+  const label = amount === 1 ? unit : `${unit}s`;
+  return diffSeconds >= 0 ? `in ${amount} ${label}` : `${amount} ${label} ago`;
+}
+
+function statusBadgeClass(status) {
+  if (!status) {
+    return "status-unknown";
+  }
+  const normalized = String(status);
+  if (normalized === "in_progress") {
+    return "status-active";
+  }
+  if (normalized === "succeeded" || normalized.startsWith("synced_")) {
+    return "status-success";
+  }
+  if (normalized.includes("fail")) {
+    return "status-failed";
+  }
+  return "status-pending";
+}
+
+function formatActivityTitle(item) {
+  if (!item) {
+    return "Unknown item";
+  }
+  const title = item.title || "Unknown title";
+  const yearLabel = item.year ? ` (${item.year})` : "";
+  const seasonLabel = formatSeasonEpisode(item.season_number, item.episode_number);
+  if (seasonLabel) {
+    const episodeTitle = item.episode_title ? ` - ${item.episode_title}` : "";
+    return `${title}${yearLabel} ${seasonLabel}${episodeTitle}`;
+  }
+  return `${title}${yearLabel}`;
+}
+
+function createStatusBadge(label, status) {
+  const badge = document.createElement("span");
+  badge.className = `status-badge ${statusBadgeClass(status)}`;
+  badge.textContent = label;
+  return badge;
+}
+
 function renderMetadataSection(title, rows) {
   const section = document.createElement("section");
   section.className = "metadata-section";
@@ -2358,6 +2484,546 @@ function bindHistoryClear() {
   });
 }
 
+function renderStatCard(label, value, title) {
+  const card = document.createElement("div");
+  card.className = "activity-stat";
+  const labelEl = document.createElement("span");
+  labelEl.textContent = label;
+  const valueEl = document.createElement("strong");
+  valueEl.textContent = value;
+  if (title) {
+    valueEl.title = title;
+  }
+  card.appendChild(labelEl);
+  card.appendChild(valueEl);
+  return card;
+}
+
+function renderActivitySummary(statusData) {
+  const container = document.getElementById("activity-summary");
+  if (!container) {
+    return;
+  }
+  container.innerHTML = "";
+  if (!statusData) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No status data yet.";
+    container.appendChild(empty);
+    return;
+  }
+  const outbox = statusData.outbox || {};
+  const counts = outbox.counts || {};
+  const metadata = statusData.metadata || {};
+  const metadataCounts = metadata.counts || {};
+  const pending = (counts.pending || 0) + (counts.failed_retryable || 0);
+  const inProgress = counts.in_progress || 0;
+  const nextOutbox = outbox.next_run_at || null;
+  const importSchedules = statusData.import_schedules || [];
+  let nextImport = null;
+  importSchedules.forEach((schedule) => {
+    if (!schedule.next_import_at) {
+      return;
+    }
+    if (!nextImport) {
+      nextImport = schedule.next_import_at;
+      return;
+    }
+    if (new Date(schedule.next_import_at) < new Date(nextImport)) {
+      nextImport = schedule.next_import_at;
+    }
+  });
+  const lastRefresh = activityState.lastRefresh
+    ? activityState.lastRefresh.toLocaleTimeString()
+    : "Unknown";
+
+  const stats = [
+    {
+      label: "Outbox pending",
+      value: String(pending),
+    },
+    {
+      label: "Outbox in progress",
+      value: String(inProgress),
+    },
+    {
+      label: "Next outbox run",
+      value: formatRelativeTime(nextOutbox),
+      title: formatMetadataDate(nextOutbox),
+    },
+    {
+      label: "Next import",
+      value: formatRelativeTime(nextImport),
+      title: formatMetadataDate(nextImport),
+    },
+    {
+      label: "Metadata pending",
+      value: String(metadataCounts.pending || 0),
+    },
+    {
+      label: "Last refresh",
+      value: lastRefresh,
+    },
+  ];
+
+  stats.forEach((stat) => {
+    container.appendChild(renderStatCard(stat.label, stat.value, stat.title));
+  });
+}
+
+function renderScheduleGroup(title, rows) {
+  const group = document.createElement("div");
+  group.className = "schedule-group";
+  const header = document.createElement("h3");
+  header.textContent = title;
+  group.appendChild(header);
+  rows.forEach((row) => {
+    group.appendChild(row);
+  });
+  return group;
+}
+
+function buildIntegrationScheduleRow(schedule) {
+  const row = document.createElement("div");
+  row.className = "schedule-row";
+
+  const main = document.createElement("div");
+  const title = document.createElement("div");
+  title.className = "schedule-title";
+  title.textContent = `${formatProvider(schedule.provider)} import`;
+  const meta = document.createElement("div");
+  meta.className = "schedule-meta";
+  const metaParts = [formatInterval(schedule.interval_seconds)];
+  if (schedule.status) {
+    metaParts.push(formatLabel(schedule.status));
+  }
+  if (schedule.last_import_at) {
+    metaParts.push(`Last run ${formatMetadataDate(schedule.last_import_at)}`);
+  }
+  if (schedule.requested_at) {
+    metaParts.push(`Requested ${formatMetadataDate(schedule.requested_at)}`);
+  }
+  if (schedule.lease_until && new Date(schedule.lease_until) > new Date()) {
+    metaParts.push(`Leased until ${formatMetadataDate(schedule.lease_until)}`);
+  }
+  meta.textContent = metaParts.join(" · ");
+  main.appendChild(title);
+  main.appendChild(meta);
+
+  const time = document.createElement("div");
+  time.className = "schedule-time";
+  const nextLabel = schedule.next_import_at
+    ? formatRelativeTime(schedule.next_import_at)
+    : "Not scheduled";
+  time.textContent = nextLabel;
+  if (schedule.next_import_at) {
+    const details = document.createElement("small");
+    details.textContent = formatMetadataDate(schedule.next_import_at);
+    time.appendChild(details);
+  }
+  if (schedule.lease_until && new Date(schedule.lease_until) > new Date()) {
+    time.prepend(createStatusBadge("Running", "in_progress"));
+  }
+
+  row.appendChild(main);
+  row.appendChild(time);
+  return row;
+}
+
+function buildJobScheduleRow(job) {
+  const row = document.createElement("div");
+  row.className = "schedule-row";
+  const main = document.createElement("div");
+  const title = document.createElement("div");
+  title.className = "schedule-title";
+  title.textContent = formatLabel(job.name);
+  const meta = document.createElement("div");
+  meta.className = "schedule-meta";
+  const parts = [];
+  if (job.last_run_at) {
+    parts.push(`Last run ${formatMetadataDate(job.last_run_at)}`);
+  }
+  if (job.lease_until && new Date(job.lease_until) > new Date()) {
+    parts.push(`Leased until ${formatMetadataDate(job.lease_until)}`);
+  }
+  meta.textContent = parts.join(" · ");
+  main.appendChild(title);
+  main.appendChild(meta);
+
+  const time = document.createElement("div");
+  time.className = "schedule-time";
+  const nextLabel = job.next_run_at
+    ? formatRelativeTime(job.next_run_at)
+    : "Not scheduled";
+  time.textContent = nextLabel;
+  if (job.next_run_at) {
+    const details = document.createElement("small");
+    details.textContent = formatMetadataDate(job.next_run_at);
+    time.appendChild(details);
+  }
+  if (job.lease_until && new Date(job.lease_until) > new Date()) {
+    time.prepend(createStatusBadge("Running", "in_progress"));
+  }
+
+  row.appendChild(main);
+  row.appendChild(time);
+  return row;
+}
+
+function renderSchedule(statusData) {
+  const container = document.getElementById("activity-schedule");
+  if (!container) {
+    return;
+  }
+  container.innerHTML = "";
+  if (!statusData) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No schedules yet.";
+    container.appendChild(empty);
+    return;
+  }
+  const importSchedules = (statusData.import_schedules || []).filter(
+    (schedule) => schedule.provider !== "system"
+  );
+  const scheduledJobs = statusData.scheduled_jobs || [];
+
+  const rows = [];
+  if (importSchedules.length) {
+    rows.push(
+      renderScheduleGroup(
+        "Imports",
+        importSchedules.map((schedule) => buildIntegrationScheduleRow(schedule))
+      )
+    );
+  }
+  if (scheduledJobs.length) {
+    rows.push(
+      renderScheduleGroup(
+        "Maintenance",
+        scheduledJobs.map((job) => buildJobScheduleRow(job))
+      )
+    );
+  }
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No schedules yet.";
+    container.appendChild(empty);
+    return;
+  }
+  rows.forEach((row) => {
+    container.appendChild(row);
+  });
+}
+
+function buildDetailRow(label, value) {
+  const row = document.createElement("div");
+  const safeValue =
+    value === null || value === undefined || value === "" ? "Unknown" : String(value);
+  row.textContent = `${label}: ${safeValue}`;
+  return row;
+}
+
+function buildOutboxSearchText(job) {
+  const parts = [];
+  if (job.target_provider) {
+    parts.push(job.target_provider);
+  }
+  if (job.source_provider) {
+    parts.push(job.source_provider);
+  }
+  if (job.job_type) {
+    parts.push(job.job_type);
+  }
+  if (job.status) {
+    parts.push(job.status);
+  }
+  if (job.item) {
+    if (job.item.title) {
+      parts.push(job.item.title);
+    }
+    if (job.item.episode_title) {
+      parts.push(job.item.episode_title);
+    }
+    if (job.item.year) {
+      parts.push(String(job.item.year));
+    }
+  }
+  if (job.payload) {
+    try {
+      parts.push(JSON.stringify(job.payload));
+    } catch (error) {
+      parts.push(String(job.payload));
+    }
+  }
+  return parts.join(" ").toLowerCase();
+}
+
+function applyOutboxFilters(jobs) {
+  const statusFilter = activityState.filters.status;
+  const providerFilter = activityState.filters.provider;
+  const searchFilter = activityState.filters.search.toLowerCase();
+  return jobs.filter((job) => {
+    if (statusFilter !== "all" && job.status !== statusFilter) {
+      return false;
+    }
+    if (providerFilter !== "all" && job.target_provider !== providerFilter) {
+      return false;
+    }
+    if (searchFilter) {
+      const haystack = buildOutboxSearchText(job);
+      if (!haystack.includes(searchFilter)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function renderOutboxList() {
+  const container = document.getElementById("sync-activity");
+  if (!container) {
+    return;
+  }
+  container.innerHTML = "";
+  const jobs = applyOutboxFilters(activityState.jobs);
+  if (!jobs.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No sync jobs match your filters.";
+    container.appendChild(empty);
+    return;
+  }
+  jobs.forEach((job) => {
+    const details = document.createElement("details");
+    details.className = "activity-row";
+    const summary = document.createElement("summary");
+
+    const main = document.createElement("div");
+    main.className = "activity-main";
+    const title = document.createElement("div");
+    title.className = "activity-title";
+    title.textContent = formatActivityTitle(job.item);
+    const meta = document.createElement("div");
+    meta.className = "activity-meta";
+    const metaParts = [
+      `${formatProvider(job.source_provider)} -> ${formatProvider(job.target_provider)}`,
+    ];
+    if (job.job_type) {
+      metaParts.push(formatLabel(job.job_type));
+    }
+    if (job.attempts) {
+      metaParts.push(`${job.attempts} attempt${job.attempts === 1 ? "" : "s"}`);
+    }
+    meta.textContent = metaParts.join(" · ");
+    main.appendChild(title);
+    main.appendChild(meta);
+
+    const status = document.createElement("div");
+    status.className = "activity-status";
+    status.appendChild(createStatusBadge(formatLabel(job.status), job.status));
+    const time = document.createElement("span");
+    const timeValue = job.updated_at || job.created_at;
+    time.textContent = formatRelativeTime(timeValue);
+    time.title = formatMetadataDate(timeValue);
+    status.appendChild(time);
+
+    summary.appendChild(main);
+    summary.appendChild(status);
+    details.appendChild(summary);
+
+    const detail = document.createElement("div");
+    detail.className = "activity-detail";
+    detail.appendChild(buildDetailRow("Job ID", job.id));
+    detail.appendChild(buildDetailRow("Source", formatProvider(job.source_provider)));
+    detail.appendChild(buildDetailRow("Target", formatProvider(job.target_provider)));
+    detail.appendChild(buildDetailRow("Job type", formatLabel(job.job_type)));
+    detail.appendChild(buildDetailRow("Status", formatLabel(job.status)));
+    detail.appendChild(buildDetailRow("Attempts", job.attempts));
+    detail.appendChild(buildDetailRow("Run after", formatMetadataDate(job.run_after)));
+    detail.appendChild(buildDetailRow("Created", formatMetadataDate(job.created_at)));
+    detail.appendChild(buildDetailRow("Updated", formatMetadataDate(job.updated_at)));
+    if (job.last_error) {
+      detail.appendChild(buildDetailRow("Last error", job.last_error));
+    }
+    if (job.payload && Object.keys(job.payload).length) {
+      const pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(job.payload, null, 2);
+      detail.appendChild(pre);
+    }
+    details.appendChild(detail);
+    container.appendChild(details);
+  });
+}
+
+function renderEventsList() {
+  const container = document.getElementById("events");
+  if (!container) {
+    return;
+  }
+  container.innerHTML = "";
+  if (!activityState.events.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No recent events.";
+    container.appendChild(empty);
+    return;
+  }
+  activityState.events.forEach((event) => {
+    const details = document.createElement("details");
+    details.className = "activity-row";
+    const summary = document.createElement("summary");
+
+    const main = document.createElement("div");
+    main.className = "activity-main";
+    const title = document.createElement("div");
+    title.className = "activity-title";
+    title.textContent = formatActivityTitle(event.item);
+    const meta = document.createElement("div");
+    meta.className = "activity-meta";
+    const parts = [];
+    if (event.source_provider) {
+      parts.push(formatProvider(event.source_provider));
+    }
+    if (event.event_type) {
+      parts.push(formatLabel(event.event_type));
+    }
+    meta.textContent = parts.join(" · ");
+    main.appendChild(title);
+    main.appendChild(meta);
+
+    const status = document.createElement("div");
+    status.className = "activity-status";
+    status.appendChild(createStatusBadge("Event", "succeeded"));
+    const time = document.createElement("span");
+    time.textContent = formatRelativeTime(event.occurred_at);
+    time.title = formatMetadataDate(event.occurred_at);
+    status.appendChild(time);
+
+    summary.appendChild(main);
+    summary.appendChild(status);
+    details.appendChild(summary);
+
+    const detail = document.createElement("div");
+    detail.className = "activity-detail";
+    detail.appendChild(buildDetailRow("Event type", formatLabel(event.event_type)));
+    detail.appendChild(buildDetailRow("Occurred", formatMetadataDate(event.occurred_at)));
+    detail.appendChild(buildDetailRow("Recorded", formatMetadataDate(event.created_at)));
+    if (event.raw) {
+      const pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(event.raw, null, 2);
+      detail.appendChild(pre);
+    }
+    details.appendChild(detail);
+    container.appendChild(details);
+  });
+}
+
+function updateProviderFilterOptions(jobs) {
+  const select = document.getElementById("activity-provider-filter");
+  if (!select) {
+    return;
+  }
+  const current = select.value || "all";
+  const providers = Array.from(
+    new Set(jobs.map((job) => job.target_provider).filter(Boolean))
+  ).sort();
+  select.innerHTML = "";
+  const allOption = document.createElement("option");
+  allOption.value = "all";
+  allOption.textContent = "All providers";
+  select.appendChild(allOption);
+  providers.forEach((provider) => {
+    const option = document.createElement("option");
+    option.value = provider;
+    option.textContent = formatProvider(provider);
+    select.appendChild(option);
+  });
+  select.value = providers.includes(current) ? current : "all";
+}
+
+async function loadActivity(silent = false) {
+  const summary = document.getElementById("activity-summary");
+  const schedule = document.getElementById("activity-schedule");
+  const outbox = document.getElementById("sync-activity");
+  const events = document.getElementById("events");
+  if (!summary && !schedule && !outbox && !events) {
+    return;
+  }
+  if (!silent) {
+    if (summary) {
+      summary.textContent = "Loading...";
+    }
+    if (schedule) {
+      schedule.textContent = "Loading...";
+    }
+    if (outbox) {
+      outbox.textContent = "Loading...";
+    }
+    if (events) {
+      events.textContent = "Loading...";
+    }
+  }
+  setMessage("activity-message", "");
+  try {
+    const [statusData, outboxData, eventsData] = await Promise.all([
+      requestJSON("/api/status"),
+      requestJSON("/api/outbox?limit=100"),
+      requestJSON("/api/activity/events?limit=100"),
+    ]);
+    activityState.status = statusData;
+    activityState.jobs = outboxData && outboxData.jobs ? outboxData.jobs : [];
+    activityState.events =
+      eventsData && eventsData.events ? eventsData.events : [];
+    activityState.lastRefresh = new Date();
+    updateProviderFilterOptions(activityState.jobs);
+    renderActivitySummary(statusData);
+    renderSchedule(statusData);
+    renderOutboxList();
+    renderEventsList();
+  } catch (error) {
+    setMessage("activity-message", error.message, true);
+  }
+}
+
+function bindActivityControls() {
+  const searchInput = document.getElementById("activity-search");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      activityState.filters.search = searchInput.value || "";
+      renderOutboxList();
+    });
+  }
+  const statusSelect = document.getElementById("activity-status-filter");
+  if (statusSelect) {
+    statusSelect.addEventListener("change", () => {
+      activityState.filters.status = statusSelect.value || "all";
+      renderOutboxList();
+    });
+  }
+  const providerSelect = document.getElementById("activity-provider-filter");
+  if (providerSelect) {
+    providerSelect.addEventListener("change", () => {
+      activityState.filters.provider = providerSelect.value || "all";
+      renderOutboxList();
+    });
+  }
+  const refreshButton = document.getElementById("activity-refresh");
+  if (refreshButton) {
+    refreshButton.addEventListener("click", () => loadActivity());
+  }
+}
+
+function startActivityAutoRefresh() {
+  if (activityState.timer) {
+    return;
+  }
+  activityState.timer = window.setInterval(() => {
+    loadActivity(true);
+  }, 30000);
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   const body = document.body;
   const requiresAuth = body && body.dataset.requiresAuth === "true";
@@ -2397,6 +3063,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindForm("tvmaze-form", handleTvmazeSave);
   bindForm("imdb-form", handleImdbSave);
   bindHistoryClear();
+  bindActivityControls();
   bindForm("kitsu-form", handleKitsuSave);
   bindForm("myanimelist-form", handleMyAnimeListSave);
   bindForm("lookup-form", handleLookupSubmit);
@@ -2494,7 +3161,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         loadSettings(),
         loadMetadataProviders(),
         loadHistory(),
+        loadActivity(),
       ]);
+      if (document.getElementById("activity-summary")) {
+        startActivityAutoRefresh();
+      }
     } catch (error) {
       console.error("initial load failed", error);
     }

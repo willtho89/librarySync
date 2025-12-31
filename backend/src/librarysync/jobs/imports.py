@@ -18,7 +18,7 @@ from librarysync.core.import_all import (
     mark_import_all_started,
     parse_import_all_state,
 )
-from librarysync.core.import_schedule import record_import_run
+from librarysync.core.import_schedule import compute_next_import_at, record_import_run
 from librarysync.db.models import Integration
 from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.import_base import ImportContext, ImportCoordinator, ImportStrategyRegistry
@@ -35,6 +35,7 @@ DEFAULT_IMPORT_REGISTRY = ImportStrategyRegistry(
         StremioImportStrategy(),
     ]
 )
+IMPORT_CLAIM_LIMIT = 25
 
 
 async def process_imports_once() -> int:
@@ -43,7 +44,13 @@ async def process_imports_once() -> int:
         coordinator = ImportCoordinator(DEFAULT_IMPORT_REGISTRY)
         now = datetime.now(timezone.utc)
         active_users = await load_active_import_all_users(db)
-        return await coordinator.run_once(db, now, skip_user_ids=active_users)
+        await db.rollback()
+        return await coordinator.run_once(
+            db,
+            now,
+            skip_user_ids=active_users,
+            limit=IMPORT_CLAIM_LIMIT,
+        )
 
 
 async def process_import_all_once(limit: int = 1) -> int:
@@ -120,6 +127,11 @@ async def _process_import_all_run(
         )
         if import_result.attempted:
             integration.config = record_import_run(integration.config, now)
+            integration.next_import_at = compute_next_import_at(
+                integration.config,
+                now,
+                default_interval_seconds=strategy.default_interval_seconds,
+            )
             db.add(integration)
         run.config = dict(run.config or {})
         run.config[IMPORT_ALL_ERROR_KEY] = None

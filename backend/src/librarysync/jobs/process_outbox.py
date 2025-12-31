@@ -54,6 +54,7 @@ from librarysync.connectors.services.trakt import (
 )
 from librarysync.core.import_all import load_active_import_all_users
 from librarysync.core.integrations import load_integration_with_secrets
+from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.security import encrypt_value
 from librarysync.core.watch_pipeline import process_new_item_job
@@ -342,8 +343,10 @@ async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
         )
         if active_users:
             query = query.where(~OutboxJob.user_id.in_(active_users))
-        query = query.order_by(OutboxJob.created_at).limit(limit).with_for_update(
-            skip_locked=True
+        query = (
+            query.order_by(OutboxJob.user_id, OutboxJob.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
         )
         result = await db.execute(query)
         jobs = result.scalars().all()
@@ -355,6 +358,33 @@ async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
 
 async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     now = datetime.now(timezone.utc)
+    rate_decision = await RATE_LIMITER.try_acquire(
+        db,
+        job.user_id,
+        job.target_provider,
+        now=now,
+    )
+    if rate_decision and not rate_decision.allowed:
+        job.status = "pending"
+        job.last_error = "rate_limited"
+        job.run_after = rate_decision.retry_at
+        job.updated_at = now
+        await _update_watch_sync(
+            db,
+            job,
+            "pending",
+            job.last_error,
+            None,
+            now,
+        )
+        await db.commit()
+        logger.info(
+            "Outbox job %s %s rate-limited until %s",
+            job.id,
+            f"{job.target_provider}:{job.job_type}",
+            rate_decision.retry_at.isoformat() if rate_decision.retry_at else "unknown",
+        )
+        return
     job.attempts += 1
     status = "succeeded"
     response_code: int | None = None
@@ -396,6 +426,8 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
         job.run_after = now + _next_retry_delay(job.attempts)
     else:
         job.run_after = None
+    if status in {"succeeded", "failed_permanent"}:
+        job.dedupe_key = None
     job.updated_at = now
 
     await _update_watch_sync(

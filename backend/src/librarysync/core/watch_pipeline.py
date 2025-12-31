@@ -31,6 +31,7 @@ SUCCESS_STATUSES = {
     "synced_from_simkl",
     "synced_from_stremio",
 }
+ACTIVE_OUTBOX_STATUSES = {"pending", "failed_retryable", "in_progress"}
 
 
 def is_synced_status(status: str | None) -> bool:
@@ -39,6 +40,60 @@ def is_synced_status(status: str | None) -> bool:
     if status in SUCCESS_STATUSES:
         return True
     return status.startswith("synced_from_")
+
+
+def _build_outbox_dedupe_key(
+    user_id: str,
+    provider: str,
+    job_type: str,
+    payload: dict[str, object],
+) -> str | None:
+    watch_sync_id = payload.get("watch_sync_id")
+    if watch_sync_id:
+        return f"{user_id}:{provider}:{job_type}:{watch_sync_id}"
+    watched_item_id = payload.get("watched_item_id")
+    if watched_item_id:
+        return f"{user_id}:{provider}:{job_type}:{watched_item_id}"
+    return None
+
+
+async def enqueue_outbox_job(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    target_provider: str,
+    job_type: str,
+    payload: dict[str, object],
+    status: str = "pending",
+) -> OutboxJob:
+    dedupe_key = _build_outbox_dedupe_key(user_id, target_provider, job_type, payload)
+    now = datetime.now(timezone.utc)
+    if dedupe_key:
+        result = await db.execute(
+            select(OutboxJob).where(
+                OutboxJob.dedupe_key == dedupe_key,
+                OutboxJob.status.in_(ACTIVE_OUTBOX_STATUSES),
+            )
+        )
+        existing = result.scalars().first()
+        if existing:
+            if existing.status != "in_progress":
+                existing.payload = payload
+                existing.status = status
+                existing.run_after = None
+                existing.last_error = None
+                existing.updated_at = now
+            return existing
+    job = OutboxJob(
+        user_id=user_id,
+        target_provider=target_provider,
+        job_type=job_type,
+        payload=payload,
+        status=status,
+        dedupe_key=dedupe_key,
+    )
+    db.add(job)
+    return job
 
 
 class SyncStrategy(ABC):
@@ -52,6 +107,7 @@ class SyncStrategy(ABC):
         media_item: MediaItem | None,
         episode_item: EpisodeItem | None,
         is_rewatch: bool,
+        force: bool = False,
     ) -> None:
         raise NotImplementedError
 
@@ -98,9 +154,12 @@ class SyncCoordinator:
         media_item: MediaItem | None,
         episode_item: EpisodeItem | None,
         is_rewatch: bool,
+        force: bool = False,
     ) -> None:
         for strategy in self._registry.list():
-            await strategy.enqueue_new(db, watched, media_item, episode_item, is_rewatch)
+            await strategy.enqueue_new(
+                db, watched, media_item, episode_item, is_rewatch, force=force
+            )
 
     async def enqueue_update(
         self,
@@ -169,15 +228,14 @@ async def enqueue_new_item_job(
         payload["is_rewatch"] = bool(is_rewatch)
     if source:
         payload["source"] = source
-    job = OutboxJob(
+    return await enqueue_outbox_job(
+        db,
         user_id=user_id,
         target_provider="internal",
         job_type="new_item_added",
         payload=payload,
         status="pending",
     )
-    db.add(job)
-    return job
 
 
 async def process_new_item_job(db: AsyncSession, job: OutboxJob) -> None:
@@ -226,6 +284,7 @@ class LetterboxdSyncStrategy(SyncStrategy):
         media_item: MediaItem | None,
         episode_item: EpisodeItem | None,
         is_rewatch: bool,
+        force: bool = False,
     ) -> None:
         if episode_item:
             return
@@ -241,9 +300,9 @@ class LetterboxdSyncStrategy(SyncStrategy):
         if not has_required_letterboxd_fields(secret_data):
             return
         watch_sync = await _get_watch_sync(db, watched.id, "letterboxd")
-        if watch_sync and is_synced_status(watch_sync.status):
+        if watch_sync and is_synced_status(watch_sync.status) and not force:
             return
-        if watch_sync and watch_sync.status in {"pending", "in_progress"}:
+        if watch_sync and watch_sync.status in {"pending", "in_progress"} and not force:
             return
         if not watch_sync:
             watch_sync = WatchSync(
@@ -261,7 +320,8 @@ class LetterboxdSyncStrategy(SyncStrategy):
 
         imdb_id = media_item.imdb_id.lower() if media_item.imdb_id else None
         tmdb_id = media_item.tmdb_id if media_item.tmdb_id else None
-        job = OutboxJob(
+        await enqueue_outbox_job(
+            db,
             user_id=watched.user_id,
             target_provider="letterboxd",
             job_type="push_watched",
@@ -277,7 +337,6 @@ class LetterboxdSyncStrategy(SyncStrategy):
             },
             status="pending",
         )
-        db.add(job)
 
     async def enqueue_update(
         self,
@@ -322,14 +381,14 @@ class LetterboxdSyncStrategy(SyncStrategy):
         watch_sync.status = "pending"
         watch_sync.last_error = None
 
-        job = OutboxJob(
+        await enqueue_outbox_job(
+            db,
             user_id=watched.user_id,
             target_provider="letterboxd",
             job_type="update_log_entry",
             payload=payload,
             status="pending",
         )
-        db.add(job)
 
     async def enqueue_delete(
         self,
@@ -362,14 +421,14 @@ class LetterboxdSyncStrategy(SyncStrategy):
             "entry_id": watch_sync.external_id,
             "watched_item_id": watched.id,
         }
-        job = OutboxJob(
+        await enqueue_outbox_job(
+            db,
             user_id=watched.user_id,
             target_provider="letterboxd",
             job_type="delete_log_entry",
             payload=payload,
             status="pending",
         )
-        db.add(job)
 
 
 @dataclass(frozen=True)
@@ -409,6 +468,7 @@ class HistorySyncStrategy(SyncStrategy):
         media_item: MediaItem | None,
         episode_item: EpisodeItem | None,
         is_rewatch: bool,
+        force: bool = False,
     ) -> None:
         if not media_item:
             return
@@ -426,9 +486,9 @@ class HistorySyncStrategy(SyncStrategy):
             return
 
         watch_sync = await _get_watch_sync(db, watched.id, self.provider)
-        if watch_sync and is_synced_status(watch_sync.status):
+        if watch_sync and is_synced_status(watch_sync.status) and not force:
             return
-        if watch_sync and watch_sync.status in {"pending", "in_progress"}:
+        if watch_sync and watch_sync.status in {"pending", "in_progress"} and not force:
             return
 
         same_day_duplicate = await _has_same_day_watch(
@@ -465,25 +525,25 @@ class HistorySyncStrategy(SyncStrategy):
         payload["watch_sync_id"] = watch_sync.id
         payload["watched_item_id"] = watched.id
         if watch_status != "assumed_tracked" and not same_day_duplicate:
-            job = OutboxJob(
+            await enqueue_outbox_job(
+                db,
                 user_id=watched.user_id,
                 target_provider=self.provider,
                 job_type="push_watched",
                 payload=payload,
                 status="pending",
             )
-            db.add(job)
         if watched.rating is not None:
             rating_payload = dict(payload)
             rating_payload["rating"] = watched.rating
-            rating_job = OutboxJob(
+            await enqueue_outbox_job(
+                db,
                 user_id=watched.user_id,
                 target_provider=self.provider,
                 job_type="push_rating",
                 payload=rating_payload,
                 status="pending",
             )
-            db.add(rating_job)
 
     async def enqueue_update(
         self,
@@ -530,25 +590,25 @@ class HistorySyncStrategy(SyncStrategy):
         db.add(watch_sync)
 
         if watched_at_updated:
-            job = OutboxJob(
+            await enqueue_outbox_job(
+                db,
                 user_id=watched.user_id,
                 target_provider=self.provider,
                 job_type="update_history",
                 payload=payload,
                 status="pending",
             )
-            db.add(job)
         if rating_updated and watched.rating is not None:
             rating_payload = dict(payload)
             rating_payload["rating"] = watched.rating
-            job = OutboxJob(
+            await enqueue_outbox_job(
+                db,
                 user_id=watched.user_id,
                 target_provider=self.provider,
                 job_type="push_rating",
                 payload=rating_payload,
                 status="pending",
             )
-            db.add(job)
 
     async def enqueue_delete(
         self,
@@ -578,14 +638,14 @@ class HistorySyncStrategy(SyncStrategy):
             if watch_sync and watch_sync.external_id:
                 payload["history_id"] = watch_sync.external_id
         payload["watched_item_id"] = watched.id
-        job = OutboxJob(
+        await enqueue_outbox_job(
+            db,
             user_id=watched.user_id,
             target_provider=self.provider,
             job_type="remove_history",
             payload=payload,
             status="pending",
         )
-        db.add(job)
 
 
 class TraktSyncStrategy(HistorySyncStrategy):
@@ -625,6 +685,7 @@ class StremioSyncStrategy(SyncStrategy):
         media_item: MediaItem | None,
         episode_item: EpisodeItem | None,
         is_rewatch: bool,
+        force: bool = False,
     ) -> None:
         if not media_item:
             return
@@ -640,9 +701,9 @@ class StremioSyncStrategy(SyncStrategy):
             return
 
         watch_sync = await _get_watch_sync(db, watched.id, "stremio")
-        if watch_sync and is_synced_status(watch_sync.status):
+        if watch_sync and is_synced_status(watch_sync.status) and not force:
             return
-        if watch_sync and watch_sync.status in {"pending", "in_progress"}:
+        if watch_sync and watch_sync.status in {"pending", "in_progress"} and not force:
             return
 
         if not watch_sync:
@@ -661,14 +722,14 @@ class StremioSyncStrategy(SyncStrategy):
 
         payload["watch_sync_id"] = watch_sync.id
         payload["watched_item_id"] = watched.id
-        job = OutboxJob(
+        await enqueue_outbox_job(
+            db,
             user_id=watched.user_id,
             target_provider="stremio",
             job_type="push_watched",
             payload=payload,
             status="pending",
         )
-        db.add(job)
 
     async def enqueue_delete(
         self,
@@ -691,14 +752,14 @@ class StremioSyncStrategy(SyncStrategy):
             return
         payload.pop("watched_at", None)
         payload["watched_item_id"] = watched.id
-        job = OutboxJob(
+        await enqueue_outbox_job(
+            db,
             user_id=watched.user_id,
             target_provider="stremio",
             job_type="remove_watched",
             payload=payload,
             status="pending",
         )
-        db.add(job)
 
 
 async def _get_watch_sync(

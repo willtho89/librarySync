@@ -55,6 +55,26 @@ def should_run_import(
     return now - last_run >= timedelta(seconds=interval)
 
 
+def compute_next_import_at(
+    config: dict | None,
+    now: datetime,
+    default_interval_seconds: int | None = DEFAULT_IMPORT_INTERVAL_SECONDS,
+) -> datetime | None:
+    config = config or {}
+    interval = normalize_interval_seconds(config.get(IMPORT_INTERVAL_KEY))
+    if interval is None:
+        interval = default_interval_seconds
+    requested_at = parse_datetime(config.get(IMPORT_REQUESTED_KEY))
+    last_run = parse_datetime(config.get(IMPORT_LAST_RUN_KEY))
+    if requested_at and (last_run is None or requested_at > last_run):
+        return requested_at
+    if not interval:
+        return None
+    if last_run is None:
+        return now
+    return last_run + timedelta(seconds=interval)
+
+
 def record_import_run(config: dict | None, now: datetime) -> dict:
     updated = dict(config or {})
     updated[IMPORT_LAST_RUN_KEY] = now.isoformat()
