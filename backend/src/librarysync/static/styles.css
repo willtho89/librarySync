@@ -183,9 +183,24 @@ button:disabled {
 }
 
 .history-card {
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto auto 1fr;
   align-items: start;
   cursor: default;
+}
+
+.history-select {
+  display: grid;
+  place-items: start;
+  padding-top: 0.2rem;
+}
+
+.history-select input {
+  width: 18px;
+  height: 18px;
+}
+
+.history-bulk-actions {
+  align-items: center;
 }
 
 .candidate-option input {

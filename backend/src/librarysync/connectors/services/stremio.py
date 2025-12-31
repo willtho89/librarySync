@@ -3,12 +3,17 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 
 DEFAULT_STREMIO_API_BASE_URL = "https://api.strem.io"
+DEFAULT_CINEMETA_API_BASE_URL = "https://v3-cinemeta.strem.io"
+CINEMETA_CACHE_TTL = timedelta(hours=2)
 STREMIO_REQUIRED_FIELDS = ("auth_key",)
+
+_cinemeta_cache: dict[str, tuple[datetime, list[str]]] = {}
 
 
 @dataclass(frozen=True)
@@ -161,3 +166,59 @@ def _safe_body(value: str | None, limit: int = 500) -> str | None:
     if len(trimmed) > limit:
         return f"{trimmed[:limit]}..."
     return trimmed
+
+
+async def fetch_cinemeta_video_ids(series_id: str) -> list[str]:
+    series_id = series_id.strip()
+    if not series_id:
+        return []
+    now = datetime.now(timezone.utc)
+    cached = _cinemeta_cache.get(series_id)
+    if cached and now - cached[0] < CINEMETA_CACHE_TTL:
+        return cached[1]
+    base_url = DEFAULT_CINEMETA_API_BASE_URL.rstrip("/")
+    url = f"{base_url}/meta/series/{series_id}.json"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        payload = response.json()
+    meta = payload.get("meta") if isinstance(payload, dict) else None
+    videos = meta.get("videos") if isinstance(meta, dict) else None
+    if not isinstance(videos, list):
+        return []
+    entries: list[tuple[int, int, str]] = []
+    for video in videos:
+        if not isinstance(video, dict):
+            continue
+        video_id = video.get("id") or video.get("_id")
+        if not isinstance(video_id, str) or not video_id:
+            continue
+        season = _coerce_int(video.get("season"))
+        episode = _coerce_int(video.get("episode"))
+        entries.append((season or 0, episode or 0, video_id))
+    entries.sort(key=lambda entry: (entry[0], entry[1]))
+    video_ids = [entry[2] for entry in entries]
+    _cinemeta_cache[series_id] = (now, video_ids)
+    return video_ids
+
+
+def _coerce_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if cleaned.isdigit():
+            return int(cleaned)
+        try:
+            return int(float(cleaned))
+        except ValueError:
+            return None
+    return None

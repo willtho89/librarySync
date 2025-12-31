@@ -34,11 +34,19 @@ class ImportStrategy(ABC):
     provider: ClassVar[str]
     default_interval_seconds: ClassVar[int | None] = DEFAULT_IMPORT_INTERVAL_SECONDS
 
-    async def run_once(self, db: AsyncSession, now: datetime) -> int:
+    async def run_once(
+        self, db: AsyncSession, now: datetime, skip_user_ids: set[str] | None = None
+    ) -> int:
         result = await db.execute(
             select(Integration).where(Integration.provider == self.provider)
         )
         integrations = result.scalars().all()
+        if skip_user_ids:
+            integrations = [
+                integration
+                for integration in integrations
+                if integration.user_id not in skip_user_ids
+            ]
         if not integrations:
             return 0
         context = ImportContext(db=db, now=now)
@@ -88,8 +96,10 @@ class ImportCoordinator:
     def __init__(self, registry: ImportStrategyRegistry) -> None:
         self._registry = registry
 
-    async def run_once(self, db: AsyncSession, now: datetime) -> int:
+    async def run_once(
+        self, db: AsyncSession, now: datetime, skip_user_ids: set[str] | None = None
+    ) -> int:
         total = 0
         for strategy in self._registry.list():
-            total += await strategy.run_once(db, now)
+            total += await strategy.run_once(db, now, skip_user_ids=skip_user_ids)
         return total

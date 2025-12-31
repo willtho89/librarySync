@@ -333,6 +333,14 @@ async function loadIntegrations() {
     }
   }
   applyImportControls("stremio", stremio);
+
+  const importAllButton = document.getElementById("import-all-button");
+  if (importAllButton) {
+    const hasAnyImports = integrations.some((item) => item.has_secrets);
+    importAllButton.disabled = !hasAnyImports;
+  }
+
+  renderHistorySyncButtons(integrations);
 }
 
 function parseCookieString(cookieHeader) {
@@ -741,6 +749,31 @@ async function handleImportNow(provider) {
     await loadIntegrations();
   } catch (error) {
     setMessage(`${provider}-import-message`, error.message, true);
+  }
+}
+
+async function handleImportAll() {
+  const button = document.getElementById("import-all-button");
+  if (button) {
+    button.disabled = true;
+  }
+  setMessage("import-all-message", "Requesting import...");
+  try {
+    const response = await requestJSON("/api/integrations/import/all", {
+      method: "POST",
+    });
+    const providers = response && response.providers ? response.providers : [];
+    const label = providers.length
+      ? `Import queued: ${providers.join(", ")}.`
+      : "Import requested.";
+    setMessage("import-all-message", label);
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("import-all-message", error.message, true);
+  } finally {
+    if (button) {
+      button.disabled = false;
+    }
   }
 }
 
@@ -1603,7 +1636,78 @@ function formatProviderLabel(value) {
   return normalized.toUpperCase();
 }
 
+function formatIntegrationName(value) {
+  if (!value) {
+    return "";
+  }
+  const normalized = value.toLowerCase();
+  if (normalized === "simkl") {
+    return "SIMKL";
+  }
+  if (normalized === "trakt") {
+    return "Trakt";
+  }
+  if (normalized === "letterboxd") {
+    return "Letterboxd";
+  }
+  if (normalized === "stremio") {
+    return "Stremio";
+  }
+  return normalized.toUpperCase();
+}
+
 let historyUiBound = false;
+const historySelectionState = {
+  items: [],
+  selectedIds: new Set(),
+};
+
+function updateHistoryBulkControls() {
+  const selectAll = document.getElementById("history-select-all");
+  const deleteButton = document.getElementById("history-delete-selected");
+  const total = historySelectionState.items.length;
+  const selectedCount = historySelectionState.selectedIds.size;
+
+  if (selectAll) {
+    selectAll.disabled = total === 0;
+    if (total === 0 || selectedCount === 0) {
+      selectAll.checked = false;
+      selectAll.indeterminate = false;
+    } else if (selectedCount === total) {
+      selectAll.checked = true;
+      selectAll.indeterminate = false;
+    } else {
+      selectAll.checked = false;
+      selectAll.indeterminate = true;
+    }
+  }
+
+  if (deleteButton) {
+    deleteButton.disabled = selectedCount === 0;
+    deleteButton.textContent = selectedCount
+      ? `Delete selected (${selectedCount})`
+      : "Delete selected";
+  }
+
+  updateHistorySyncControls();
+}
+
+function updateHistorySyncControls() {
+  const container = document.getElementById("history-sync-actions");
+  if (!container) {
+    return;
+  }
+  const hasItems = historySelectionState.items.length > 0;
+  container.querySelectorAll("button[data-history-sync]").forEach((button) => {
+    button.disabled = !hasItems;
+  });
+}
+
+function resetHistorySelection(items) {
+  historySelectionState.items = items;
+  historySelectionState.selectedIds.clear();
+  updateHistoryBulkControls();
+}
 
 function bindHistoryUi() {
   if (historyUiBound) {
@@ -1628,7 +1732,135 @@ function bindHistoryUi() {
       closeMetadataModal();
     }
   });
+  const selectAll = document.getElementById("history-select-all");
+  if (selectAll) {
+    selectAll.addEventListener("change", () => {
+      const shouldSelect = selectAll.checked;
+      historySelectionState.selectedIds.clear();
+      document.querySelectorAll("input[data-history-select]").forEach((input) => {
+        input.checked = shouldSelect;
+        if (shouldSelect) {
+          historySelectionState.selectedIds.add(input.value);
+        }
+      });
+      updateHistoryBulkControls();
+    });
+  }
+  const deleteSelectedButton = document.getElementById("history-delete-selected");
+  if (deleteSelectedButton) {
+    deleteSelectedButton.addEventListener("click", async () => {
+      const selectedIds = Array.from(historySelectionState.selectedIds);
+      if (!selectedIds.length) {
+        return;
+      }
+      const deleteIntegrationsToggle = document.getElementById(
+        "history-delete-integrations"
+      );
+      const deleteIntegrations =
+        deleteIntegrationsToggle && deleteIntegrationsToggle.checked;
+      const confirmed = window.confirm(
+        deleteIntegrations
+          ? `Delete ${selectedIds.length} selected items from history and ` +
+              "connected integrations? This cannot be undone."
+          : `Delete ${selectedIds.length} selected items from history?`
+      );
+      if (!confirmed) {
+        return;
+      }
+      try {
+        setMessage("history-message", "Deleting selected...");
+        const data = await requestJSON("/api/history/items/bulk-delete", {
+          method: "POST",
+          body: JSON.stringify({
+            watched_ids: selectedIds,
+            delete_integrations: deleteIntegrations,
+          }),
+        });
+        const deletedCount = data && typeof data.deleted === "number" ? data.deleted : 0;
+        setMessage("history-message", `Deleted ${deletedCount} entries.`);
+        await loadHistory();
+      } catch (error) {
+        setMessage("history-message", error.message, true);
+      }
+    });
+  }
   historyUiBound = true;
+}
+
+function renderHistorySyncButtons(integrations) {
+  const container = document.getElementById("history-sync-actions");
+  if (!container) {
+    return;
+  }
+  const note = document.getElementById("history-sync-note");
+  container.innerHTML = "";
+  const supported = new Set(["letterboxd", "trakt", "simkl", "stremio"]);
+  const enabled = (integrations || []).filter(
+    (integration) =>
+      integration &&
+      supported.has(integration.provider) &&
+      isIntegrationConnected(integration)
+  );
+  if (!enabled.length) {
+    container.hidden = true;
+    if (note) {
+      note.hidden = true;
+    }
+    return;
+  }
+  enabled.forEach((integration) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button";
+    button.dataset.historySync = integration.provider;
+    const label = formatIntegrationName(integration.provider);
+    button.textContent = `Sync to ${label}`;
+    button.addEventListener("click", () => handleHistorySync(integration.provider));
+    container.appendChild(button);
+  });
+  container.hidden = false;
+  if (note) {
+    note.hidden = false;
+  }
+  updateHistorySyncControls();
+}
+
+async function handleHistorySync(provider) {
+  const label = formatIntegrationName(provider);
+  const totalItems = historySelectionState.items.length;
+  if (!totalItems) {
+    setMessage("history-message", "No history items to sync.", true);
+    return;
+  }
+  const selectedIds = Array.from(historySelectionState.selectedIds);
+  const hasSelection = selectedIds.length > 0;
+  const count = hasSelection ? selectedIds.length : totalItems;
+  const prompt = hasSelection
+    ? `Sync ${count} selected item${count === 1 ? "" : "s"} to ${label}?`
+    : `Sync all ${count} item${count === 1 ? "" : "s"} to ${label}?`;
+  if (!window.confirm(prompt)) {
+    return;
+  }
+  const payload = { provider };
+  if (hasSelection) {
+    payload.watched_ids = selectedIds;
+  }
+  try {
+    setMessage("history-message", "Queueing sync...");
+    const data = await requestJSON("/api/history/items/sync", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const requested =
+      data && typeof data.requested === "number" ? data.requested : count;
+    setMessage(
+      "history-message",
+      `Sync requested for ${requested} item${requested === 1 ? "" : "s"} to ${label}.`
+    );
+    await loadHistory();
+  } catch (error) {
+    setMessage("history-message", error.message, true);
+  }
 }
 
 function closeHistoryMenus() {
@@ -1808,6 +2040,7 @@ async function loadHistory() {
   const clearButton = document.getElementById("history-clear");
   const data = await requestJSON("/api/history/items");
   const items = data && data.items ? data.items : [];
+  resetHistorySelection(items);
   if (clearButton) {
     clearButton.disabled = !items.length;
   }
@@ -1819,6 +2052,22 @@ async function loadHistory() {
   items.forEach((item) => {
     const card = document.createElement("div");
     card.className = "history-card";
+    const selectWrap = document.createElement("label");
+    selectWrap.className = "history-select";
+    const selectInput = document.createElement("input");
+    selectInput.type = "checkbox";
+    selectInput.value = item.id;
+    selectInput.setAttribute("aria-label", `Select ${item.title}`);
+    selectInput.setAttribute("data-history-select", "true");
+    selectInput.addEventListener("change", () => {
+      if (selectInput.checked) {
+        historySelectionState.selectedIds.add(item.id);
+      } else {
+        historySelectionState.selectedIds.delete(item.id);
+      }
+      updateHistoryBulkControls();
+    });
+    selectWrap.appendChild(selectInput);
     const poster = document.createElement("img");
     poster.className = "candidate-poster";
     if (item.poster_url) {
@@ -2079,6 +2328,7 @@ async function loadHistory() {
     meta.appendChild(header);
     meta.appendChild(detail);
     meta.appendChild(editRow);
+    card.appendChild(selectWrap);
     card.appendChild(poster);
     card.appendChild(meta);
     container.appendChild(card);
@@ -2178,6 +2428,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   const letterboxdTest = document.getElementById("letterboxd-test");
   if (letterboxdTest) {
     letterboxdTest.addEventListener("click", handleLetterboxdTest);
+  }
+  const importAllButton = document.getElementById("import-all-button");
+  if (importAllButton) {
+    importAllButton.addEventListener("click", handleImportAll);
   }
   const letterboxdImportNow = document.getElementById("letterboxd-import-now");
   if (letterboxdImportNow) {

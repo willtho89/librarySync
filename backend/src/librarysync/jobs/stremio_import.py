@@ -14,7 +14,12 @@ from librarysync.connectors.services.stremio import (
     DEFAULT_STREMIO_API_BASE_URL,
     StremioClient,
     StremioError,
+    fetch_cinemeta_video_ids,
     has_required_stremio_fields,
+)
+from librarysync.connectors.services.stremio_watched_bitfield import (
+    WatchedBitFieldError,
+    watched_bitfield_from_string,
 )
 from librarysync.core.import_schedule import IMPORT_LAST_RUN_KEY, parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
@@ -30,7 +35,7 @@ from librarysync.db.models import (
 from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
-LOOKBACK_HOURS = settings.history_lookback_days * 24
+LOOKBACK_DAYS = settings.history_lookback_days
 COMPLETION_THRESHOLD = 0.85
 BATCH_SIZE = 50
 IMDB_ID_RE = re.compile(r"(tt\d{3,10})", re.IGNORECASE)
@@ -39,6 +44,14 @@ TMDB_SIMPLE_RE = re.compile(r"tmdb[:/](\d+)", re.IGNORECASE)
 TVDB_ID_RE = re.compile(r"tvdb[:/](\d+)", re.IGNORECASE)
 EPISODE_HINT_RE = re.compile(r":(\d+):(\d+)")
 logger = logging.getLogger(__name__)
+SOURCE_PRIORITY = {
+    "trakt": 4,
+    "letterboxd": 3,
+    "simkl": 2,
+    "api": 1,
+    "manual": 1,
+    "stremio": 0,
+}
 
 
 @dataclass(frozen=True)
@@ -79,10 +92,10 @@ class StremioImportStrategy(ImportStrategy):
 
     def __init__(
         self,
-        lookback_hours: int = LOOKBACK_HOURS,
+        lookback_days: int = LOOKBACK_DAYS,
         batch_size: int = BATCH_SIZE,
     ) -> None:
-        self._lookback_hours = lookback_hours
+        self._lookback_days = lookback_days
         self._batch_size = batch_size
 
     async def import_for_integration(
@@ -94,20 +107,20 @@ class StremioImportStrategy(ImportStrategy):
         return await _import_for_integration(
             context.db,
             integration,
-            self._lookback_hours,
+            self._lookback_days,
             self._batch_size,
             requested_at,
         )
 
 
 async def process_stremio_imports_once(
-    lookback_hours: int = LOOKBACK_HOURS,
+    lookback_days: int = LOOKBACK_DAYS,
     batch_size: int = BATCH_SIZE,
 ) -> int:
     init_session_factory()
     async with SessionLocal() as db:
         strategy = StremioImportStrategy(
-            lookback_hours=lookback_hours,
+            lookback_days=lookback_days,
             batch_size=batch_size,
         )
         now = datetime.now(timezone.utc)
@@ -117,7 +130,7 @@ async def process_stremio_imports_once(
 async def _import_for_integration(
     db: AsyncSession,
     integration: Integration,
-    lookback_hours: int,
+    lookback_days: int,
     batch_size: int,
     requested_at: datetime | None,
 ) -> ImportResult:
@@ -137,9 +150,10 @@ async def _import_for_integration(
     client = StremioClient(api_base_url=api_base_url)
 
     now = datetime.now(timezone.utc)
-    since = now - timedelta(hours=lookback_hours)
+    since = now - timedelta(days=lookback_days)
     last_run = parse_datetime((integration.config or {}).get(IMPORT_LAST_RUN_KEY))
     force_full = bool(requested_at and (last_run is None or requested_at > last_run))
+    rewatch_cutoff = _compute_rewatch_cutoff(now, last_run)
     if force_full:
         since = None
     elif last_run and last_run > since:
@@ -174,7 +188,12 @@ async def _import_for_integration(
             imported = 0
             for item in items:
                 try:
-                    if await _import_library_item(db, integration.user_id, item):
+                    if await _import_library_item(
+                        db,
+                        integration.user_id,
+                        item,
+                        rewatch_cutoff,
+                    ):
                         imported += 1
                 except Exception:
                     logger.exception(
@@ -208,7 +227,12 @@ async def _import_for_integration(
             continue
         for item in items:
             try:
-                if await _import_library_item(db, integration.user_id, item):
+                if await _import_library_item(
+                    db,
+                    integration.user_id,
+                    item,
+                    rewatch_cutoff,
+                ):
                     imported += 1
             except Exception:
                 logger.exception("Stremio item import failed for user %s", integration.user_id)
@@ -222,25 +246,47 @@ async def _import_for_integration(
     return ImportResult(imported=imported, attempted=True)
 
 
-async def _import_library_item(db: AsyncSession, user_id: str, item: dict[str, Any]) -> bool:
+async def _import_library_item(
+    db: AsyncSession,
+    user_id: str,
+    item: dict[str, Any],
+    rewatch_cutoff: datetime | None,
+) -> bool:
     item_id = _coerce_str(item.get("_id") or item.get("id"))
     if not item_id:
         return False
     item_type = (_coerce_str(item.get("type")) or "").lower()
     state = item.get("state")
     state_data = state if isinstance(state, dict) else {}
+    has_bitfield = item_type in {"series", "show", "tv"} and _state_has_bitfield(state_data)
     watched_at = _parse_state_watched_at(state_data)
     if not watched_at:
-        if not _state_indicates_watched(state_data):
-            return False
-        watched_at = _parse_item_timestamp(item)
-    if not watched_at:
-        return False
+        if not has_bitfield:
+            if not _state_indicates_watched(state_data):
+                return False
+            watched_at = _parse_item_timestamp(item) or datetime.now(timezone.utc)
 
     if item_type == "movie":
         movie = _build_movie_summary(item_id, item, state_data)
         if not movie:
             return False
+        media_item = await _get_or_create_movie_item(db, movie)
+        if not media_item:
+            return False
+        existing_watch = await _load_latest_movie_watch(db, user_id, media_item.id)
+        is_rewatch = False
+        if existing_watch:
+            if rewatch_cutoff is None or existing_watch.watched_at >= rewatch_cutoff:
+                touched = await _ensure_stremio_watch_sync(
+                    db,
+                    user_id,
+                    existing_watch.id,
+                    item_id,
+                )
+                if touched:
+                    await db.commit()
+                return False
+            is_rewatch = True
         entry_key = _build_entry_key(
             "movie",
             movie.imdb_id or movie.stremio_id or item_id,
@@ -250,9 +296,6 @@ async def _import_library_item(db: AsyncSession, user_id: str, item: dict[str, A
         if not entry_key:
             return False
         if await _entry_already_imported(db, user_id, entry_key):
-            return False
-        media_item = await _get_or_create_movie_item(db, movie)
-        if not media_item:
             return False
         watched = WatchedItem(
             user_id=user_id,
@@ -277,7 +320,7 @@ async def _import_library_item(db: AsyncSession, user_id: str, item: dict[str, A
             watched_item_id=watched.id,
             provider="stremio",
             status="synced_from_stremio",
-            is_rewatch=False,
+            is_rewatch=is_rewatch,
             external_id=item_id,
             last_synced_at=datetime.now(timezone.utc),
         )
@@ -286,7 +329,7 @@ async def _import_library_item(db: AsyncSession, user_id: str, item: dict[str, A
             db,
             user_id,
             watched.id,
-            is_rewatch=False,
+            is_rewatch=is_rewatch,
             source="stremio_import",
         )
         await db.commit()
@@ -297,8 +340,41 @@ async def _import_library_item(db: AsyncSession, user_id: str, item: dict[str, A
         show = _build_show_summary(item_id, item, state_data)
         if not show:
             return False
+        bitfield_imported = await _import_series_bitfield(
+            db,
+            user_id,
+            item,
+            state_data,
+            show,
+            item_id,
+        )
+        if bitfield_imported is not None:
+            return bitfield_imported
         episode = _build_episode_summary(state_data, hint_video_id)
         if not episode:
+            return False
+        if not watched_at:
+            watched_at = _parse_item_timestamp(item) or datetime.now(timezone.utc)
+        show_item = await _get_or_create_show_item(db, show)
+        if not show_item:
+            return False
+        episode_item = await _get_or_create_episode_item(db, show_item, episode)
+        if not episode_item:
+            return False
+        existing_watch = await _load_latest_episode_watch(
+            db,
+            user_id,
+            episode_item.id,
+        )
+        if existing_watch:
+            touched = await _ensure_stremio_watch_sync(
+                db,
+                user_id,
+                existing_watch.id,
+                episode.stremio_video_id or item_id,
+            )
+            if touched:
+                await db.commit()
             return False
         entry_key = _build_entry_key(
             "episode",
@@ -311,12 +387,6 @@ async def _import_library_item(db: AsyncSession, user_id: str, item: dict[str, A
         if not entry_key:
             return False
         if await _entry_already_imported(db, user_id, entry_key):
-            return False
-        show_item = await _get_or_create_show_item(db, show)
-        if not show_item:
-            return False
-        episode_item = await _get_or_create_episode_item(db, show_item, episode)
-        if not episode_item:
             return False
         watched = WatchedItem(
             user_id=user_id,
@@ -482,6 +552,183 @@ def _build_episode_summary(
     )
 
 
+async def _import_series_bitfield(
+    db: AsyncSession,
+    user_id: str,
+    item: dict[str, Any],
+    state: dict[str, Any],
+    show: ShowSummary,
+    item_id: str,
+) -> bool | None:
+    watched_value = _coerce_str(state.get("watched"))
+    if not watched_value or _looks_like_watch_flag(watched_value):
+        return None
+    imdb_id = show.imdb_id or show.stremio_id or item_id
+    if not imdb_id:
+        return None
+    try:
+        video_ids = await fetch_cinemeta_video_ids(imdb_id)
+    except Exception as exc:  # pragma: no cover - network path
+        logger.warning(
+            "Cinemeta fetch failed for %s: %s",
+            imdb_id,
+            exc,
+        )
+        return None
+    if not video_ids:
+        return None
+    try:
+        wbf = watched_bitfield_from_string(watched_value, video_ids)
+    except WatchedBitFieldError as exc:
+        logger.warning("Stremio watched bitfield parse failed for %s: %s", imdb_id, exc)
+        return None
+    watched_video_ids = [video_id for video_id in video_ids if wbf.get_video(video_id)]
+    if not watched_video_ids:
+        return False
+    show_item = await _get_or_create_show_item(db, show)
+    if not show_item:
+        return False
+    existing_ids = await _load_existing_stremio_sync_ids(db, user_id, watched_video_ids)
+    existing_watches = await _load_existing_episode_watches(db, user_id, show_item.id)
+    existing_syncs = await _load_stremio_syncs(db, user_id, existing_watches.values())
+
+    watched_at = _infer_bitfield_watched_at(item, state)
+    imported_any = False
+    touched_any = False
+    now = datetime.now(timezone.utc)
+    for video_id in watched_video_ids:
+        if video_id in existing_ids:
+            continue
+        parsed = _parse_video_id_episode(video_id)
+        if not parsed:
+            continue
+        season_number, episode_number = parsed
+        existing_watch = existing_watches.get((season_number, episode_number))
+        if existing_watch:
+            sync = existing_syncs.get(existing_watch.id)
+            if sync:
+                if _touch_stremio_sync(sync, video_id, now):
+                    touched_any = True
+            else:
+                db.add(
+                    WatchSync(
+                        user_id=user_id,
+                        watched_item_id=existing_watch.id,
+                        provider="stremio",
+                        status="synced_from_stremio",
+                        is_rewatch=False,
+                        external_id=video_id,
+                        last_synced_at=now,
+                    )
+                )
+                touched_any = True
+            continue
+        episode = _build_episode_summary_from_video_id(
+            video_id,
+            season_number,
+            episode_number,
+            state,
+        )
+        episode_item = await _get_or_create_episode_item(db, show_item, episode)
+        if not episode_item:
+            continue
+        entry_key = _build_entry_key(
+            "episode",
+            show.imdb_id or show.stremio_id or item_id,
+            video_id,
+            watched_at,
+            season_number,
+            episode_number,
+        )
+        if not entry_key:
+            continue
+        watched = WatchedItem(
+            user_id=user_id,
+            media_item_id=None,
+            episode_item_id=episode_item.id,
+            watched_at=watched_at,
+            rating=None,
+            source="stremio",
+        )
+        event = WatchEvent(
+            user_id=user_id,
+            media_item_id=None,
+            episode_item_id=episode_item.id,
+            event_type="stremio_imported",
+            occurred_at=watched_at,
+            raw=_build_event_raw(
+                entry_key,
+                item_id,
+                watched_at,
+                show.raw,
+                episode.raw,
+                video_id,
+            ),
+        )
+        db.add_all([watched, event])
+        await db.flush()
+        db.add(
+            WatchSync(
+                user_id=user_id,
+                watched_item_id=watched.id,
+                provider="stremio",
+                status="synced_from_stremio",
+                is_rewatch=False,
+                external_id=video_id,
+                last_synced_at=datetime.now(timezone.utc),
+            )
+        )
+        await enqueue_new_item_job(
+            db,
+            user_id,
+            watched.id,
+            is_rewatch=False,
+            source="stremio_import",
+        )
+        imported_any = True
+    if imported_any or touched_any:
+        await db.commit()
+    return imported_any
+
+
+def _parse_video_id_episode(video_id: str) -> tuple[int, int] | None:
+    parts = video_id.split(":")
+    if len(parts) < 3:
+        return None
+    season = _coerce_int(parts[1])
+    episode = _coerce_int(parts[2])
+    if not season or not episode:
+        return None
+    if season < 1 or episode < 1:
+        return None
+    return season, episode
+
+
+def _build_episode_summary_from_video_id(
+    video_id: str, season_number: int, episode_number: int, state: dict[str, Any]
+) -> EpisodeSummary:
+    raw = {
+        "season": season_number,
+        "episode": episode_number,
+        "video_id": video_id,
+        "state": _sanitize_state(state),
+    }
+    return EpisodeSummary(
+        season_number=season_number,
+        episode_number=episode_number,
+        title=None,
+        stremio_video_id=video_id,
+        raw=raw,
+    )
+
+
+def _infer_bitfield_watched_at(item: dict[str, Any], state: dict[str, Any]) -> datetime:
+    watched_at = _parse_state_watched_at(state)
+    if not watched_at:
+        watched_at = _parse_item_timestamp(item)
+    return watched_at or datetime.now(timezone.utc)
+
+
 async def _get_or_create_movie_item(db: AsyncSession, movie: MovieSummary) -> MediaItem | None:
     item = await _find_media_item(
         db,
@@ -618,6 +865,162 @@ async def _entry_already_imported(db: AsyncSession, user_id: str, entry_key: str
         )
     )
     return result.scalars().first() is not None
+
+
+async def _load_existing_stremio_sync_ids(
+    db: AsyncSession, user_id: str, external_ids: list[str]
+) -> set[str]:
+    if not external_ids:
+        return set()
+    existing: set[str] = set()
+    for chunk in _chunked(external_ids, 200):
+        result = await db.execute(
+            select(WatchSync.external_id).where(
+                WatchSync.user_id == user_id,
+                WatchSync.provider == "stremio",
+                WatchSync.external_id.in_(chunk),
+            )
+        )
+        for external_id in result.scalars().all():
+            if external_id:
+                existing.add(str(external_id))
+    return existing
+
+
+async def _load_latest_movie_watch(
+    db: AsyncSession, user_id: str, media_item_id: str
+) -> WatchedItem | None:
+    result = await db.execute(
+        select(WatchedItem)
+        .where(
+            WatchedItem.user_id == user_id,
+            WatchedItem.media_item_id == media_item_id,
+        )
+        .order_by(WatchedItem.watched_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def _load_latest_episode_watch(
+    db: AsyncSession, user_id: str, episode_item_id: str
+) -> WatchedItem | None:
+    result = await db.execute(
+        select(WatchedItem)
+        .where(
+            WatchedItem.user_id == user_id,
+            WatchedItem.episode_item_id == episode_item_id,
+        )
+        .order_by(WatchedItem.watched_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def _load_existing_episode_watches(
+    db: AsyncSession, user_id: str, show_item_id: str
+) -> dict[tuple[int, int], WatchedItem]:
+    result = await db.execute(
+        select(EpisodeItem.season_number, EpisodeItem.episode_number, WatchedItem)
+        .join(WatchedItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .where(
+            WatchedItem.user_id == user_id,
+            EpisodeItem.show_media_item_id == show_item_id,
+        )
+    )
+    existing: dict[tuple[int, int], WatchedItem] = {}
+    for season_number, episode_number, watched in result.all():
+        key = (season_number, episode_number)
+        current = existing.get(key)
+        if not current or _watch_score(watched) > _watch_score(current):
+            existing[key] = watched
+    return existing
+
+
+async def _load_stremio_syncs(
+    db: AsyncSession, user_id: str, watched_items: Iterable[WatchedItem]
+) -> dict[str, WatchSync]:
+    watched_ids = [watched.id for watched in watched_items]
+    if not watched_ids:
+        return {}
+    result = await db.execute(
+        select(WatchSync).where(
+            WatchSync.user_id == user_id,
+            WatchSync.provider == "stremio",
+            WatchSync.watched_item_id.in_(watched_ids),
+        )
+    )
+    return {sync.watched_item_id: sync for sync in result.scalars().all()}
+
+
+async def _ensure_stremio_watch_sync(
+    db: AsyncSession,
+    user_id: str,
+    watched_item_id: str,
+    external_id: str | None,
+) -> bool:
+    result = await db.execute(
+        select(WatchSync).where(
+            WatchSync.user_id == user_id,
+            WatchSync.provider == "stremio",
+            WatchSync.watched_item_id == watched_item_id,
+        )
+    )
+    sync = result.scalars().first()
+    now = datetime.now(timezone.utc)
+    if sync:
+        return _touch_stremio_sync(sync, external_id, now)
+    db.add(
+        WatchSync(
+            user_id=user_id,
+            watched_item_id=watched_item_id,
+            provider="stremio",
+            status="synced_from_stremio",
+            is_rewatch=False,
+            external_id=external_id,
+            last_synced_at=now,
+        )
+    )
+    return True
+
+
+def _touch_stremio_sync(sync: WatchSync, external_id: str | None, now: datetime) -> bool:
+    changed = False
+    if sync.status != "synced_from_stremio":
+        sync.status = "synced_from_stremio"
+        changed = True
+    if external_id and not sync.external_id:
+        sync.external_id = external_id
+        changed = True
+    if sync.last_error:
+        sync.last_error = None
+        changed = True
+    if sync.is_rewatch:
+        sync.is_rewatch = False
+        changed = True
+    if not sync.last_synced_at or sync.last_synced_at < now:
+        sync.last_synced_at = now
+        changed = True
+    return changed
+
+
+def _source_priority(source: str | None) -> int:
+    if not source:
+        return 0
+    return SOURCE_PRIORITY.get(source.lower(), 0)
+
+
+def _watch_score(watched: WatchedItem) -> tuple[int, datetime]:
+    return (_source_priority(watched.source), watched.watched_at)
+
+
+def _compute_rewatch_cutoff(now: datetime, last_run: datetime | None) -> datetime | None:
+    if not last_run:
+        return None
+    delta = now - last_run
+    if delta.total_seconds() <= 0:
+        return now
+    return now - (delta * 2)
 
 
 def _select_item_ids(timestamps: list[Any], since: datetime | None) -> list[str]:
@@ -793,6 +1196,15 @@ def _parse_state_watched_at(state: dict[str, Any]) -> datetime | None:
     if _looks_like_watch_flag(watched_value):
         return None
     return _parse_datetime(watched_value)
+
+
+def _state_has_bitfield(state: dict[str, Any]) -> bool:
+    watched_value = state.get("watched")
+    if not isinstance(watched_value, str):
+        return False
+    if _looks_like_watch_flag(watched_value):
+        return False
+    return ":" in watched_value
 
 
 def _state_indicates_watched(state: dict[str, Any]) -> bool:

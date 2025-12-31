@@ -36,10 +36,13 @@ from librarysync.db.models import (
 from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
-LOOKBACK_HOURS = settings.history_lookback_days * 24
-MAX_PAGES = 8
-PER_PAGE = 50
+LOOKBACK_DAYS = settings.history_lookback_days
 logger = logging.getLogger(__name__)
+SIMKL_ACTIVITY_KEYS = {
+    "movies": "movies",
+    "shows": "tv_shows",
+    "anime": "anime",
+}
 
 
 @dataclass(frozen=True)
@@ -80,13 +83,9 @@ class SimklImportStrategy(ImportStrategy):
 
     def __init__(
         self,
-        lookback_hours: int = LOOKBACK_HOURS,
-        per_page: int = PER_PAGE,
-        max_pages: int = MAX_PAGES,
+        lookback_days: int = LOOKBACK_DAYS,
     ) -> None:
-        self._lookback_hours = lookback_hours
-        self._per_page = per_page
-        self._max_pages = max_pages
+        self._lookback_days = lookback_days
 
     async def import_for_integration(
         self,
@@ -97,24 +96,16 @@ class SimklImportStrategy(ImportStrategy):
         return await _import_for_integration(
             context.db,
             integration,
-            self._lookback_hours,
-            self._per_page,
-            self._max_pages,
+            self._lookback_days,
         )
 
 
 async def process_simkl_imports_once(
-    lookback_hours: int = LOOKBACK_HOURS,
-    per_page: int = PER_PAGE,
-    max_pages: int = MAX_PAGES,
+    lookback_days: int = LOOKBACK_DAYS,
 ) -> int:
     init_session_factory()
     async with SessionLocal() as db:
-        strategy = SimklImportStrategy(
-            lookback_hours=lookback_hours,
-            per_page=per_page,
-            max_pages=max_pages,
-        )
+        strategy = SimklImportStrategy(lookback_days=lookback_days)
         now = datetime.now(timezone.utc)
         return await strategy.run_once(db, now)
 
@@ -122,9 +113,7 @@ async def process_simkl_imports_once(
 async def _import_for_integration(
     db: AsyncSession,
     integration: Integration,
-    lookback_hours: int,
-    per_page: int,
-    max_pages: int,
+    lookback_days: int,
 ) -> ImportResult:
     if not settings.simkl_client_id or not settings.simkl_client_secret:
         return ImportResult(imported=0, attempted=False)
@@ -157,7 +146,7 @@ async def _import_for_integration(
     )
     has_history = await _has_simkl_import_history(db, integration.user_id)
     date_from, initial_sync = _select_date_from(
-        integration.config, activities, now, lookback_hours, has_history
+        integration.config, activities, now, lookback_days, has_history
     )
     if initial_sync:
         logger.info(
@@ -173,45 +162,57 @@ async def _import_for_integration(
         )
     imported = 0
 
-    movies_payload = await client.fetch_all_items(
-        access_token,
-        category="movies",
-        date_from=date_from,
-    )
-    imported += await _import_movies_payload(
-        db, integration.user_id, movies_payload, date_from
-    )
+    categories = _select_simkl_categories(integration.config, activities, has_history)
+    if not categories:
+        _update_simkl_activity_config(integration, activities)
+        await db.commit()
+        return ImportResult(imported=0, attempted=True)
 
-    shows_payload = await client.fetch_all_items(
-        access_token,
-        category="shows",
-        date_from=date_from,
-        extended="full",
-        episode_watched_at=True,
-    )
-    imported += await _import_shows_payload(
-        db, integration.user_id, shows_payload, date_from, label="shows"
-    )
+    history_payload: dict[str, dict[str, Any]] = {}
+    if "movies" in categories:
+        history_payload["movies"] = await client.fetch_all_items(
+            access_token,
+            category="movies",
+            date_from=date_from,
+        )
+        imported += await _import_movies_payload(
+            db, integration.user_id, history_payload.get("movies", {}), date_from
+        )
 
-    anime_payload = await client.fetch_all_items(
-        access_token,
-        category="anime",
-        date_from=date_from,
-        extended="full",
-        episode_watched_at=True,
-    )
-    imported += await _import_shows_payload(
-        db, integration.user_id, anime_payload, date_from, label="anime"
-    )
+    if "shows" in categories:
+        history_payload["shows"] = await client.fetch_all_items(
+            access_token,
+            category="shows",
+            date_from=date_from,
+            extended="full",
+            episode_watched_at=True,
+        )
+        imported += await _import_shows_payload(
+            db,
+            integration.user_id,
+            history_payload.get("shows", {}),
+            date_from,
+            label="shows",
+        )
 
-    if isinstance(activities, dict):
-        activity_all = _extract_activity_timestamp(activities)
-        if activity_all:
-            config = dict(integration.config or {})
-            config["simkl_activity_all"] = activity_all.isoformat()
-            integration.config = config
-            db.add(integration)
-            await db.commit()
+    if "anime" in categories:
+        history_payload["anime"] = await client.fetch_all_items(
+            access_token,
+            category="anime",
+            date_from=date_from,
+            extended="full",
+            episode_watched_at=True,
+        )
+        imported += await _import_shows_payload(
+            db,
+            integration.user_id,
+            history_payload.get("anime", {}),
+            date_from,
+            label="anime",
+        )
+
+    _update_simkl_activity_config(integration, activities)
+    await db.commit()
 
     if imported:
         logger.info(
@@ -220,51 +221,6 @@ async def _import_for_integration(
             integration.user_id,
         )
     return ImportResult(imported=imported, attempted=True)
-
-
-async def _fetch_history_entries(
-    client: SimklClient,
-    access_token: str,
-    history_type: str,
-    since: datetime,
-    per_page: int,
-    max_pages: int,
-) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    page = 1
-    while page <= max_pages:
-        items, headers, payload = await client.fetch_history(
-            access_token,
-            history_type=history_type,
-            start_at=since,
-            page=page,
-            limit=per_page,
-        )
-        if not items:
-            _log_empty_history_payload(history_type, payload)
-            break
-        entries.extend(item for item in items if isinstance(item, dict))
-        page_count = _parse_page_count(headers)
-        if page_count is None:
-            break
-        if page >= page_count:
-            break
-        if len(items) < per_page:
-            break
-        page += 1
-    return entries
-
-
-def _parse_page_count(headers: dict[str, str]) -> int | None:
-    value = headers.get("x-pagination-page-count") or headers.get(
-        "X-Pagination-Page-Count"
-    )
-    if not value:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
 
 
 async def _fetch_simkl_activities(
@@ -281,16 +237,16 @@ def _select_date_from(
     config: dict | None,
     activities: dict[str, Any] | None,
     now: datetime,
-    lookback_hours: int,
+    lookback_days: int,
     has_history: bool,
 ) -> tuple[datetime | None, bool]:
     config = config or {}
     if not has_history:
-        return now - timedelta(hours=lookback_hours), True
+        return now - timedelta(days=lookback_days), True
     last_activity = parse_datetime(config.get("simkl_activity_all"))
     if last_activity:
         return last_activity, False
-    fallback = now - timedelta(hours=lookback_hours)
+    fallback = now - timedelta(days=lookback_days)
     activity_all = _extract_activity_timestamp(activities)
     if activity_all and activity_all < fallback:
         return activity_all, True
@@ -310,6 +266,64 @@ def _extract_activity_timestamp(payload: dict[str, Any] | None) -> datetime | No
             if parsed:
                 return parsed
     return None
+
+
+def _extract_activity_block_timestamp(
+    payload: dict[str, Any] | None, key: str
+) -> datetime | None:
+    if not isinstance(payload, dict):
+        return None
+    block = payload.get(key)
+    if not isinstance(block, dict):
+        return None
+    for candidate in ("all", key, key.rstrip("s")):
+        parsed = parse_datetime(block.get(candidate))
+        if parsed:
+            return parsed
+    return None
+
+
+def _select_simkl_categories(
+    config: dict | None,
+    activities: dict[str, Any] | None,
+    has_history: bool,
+) -> list[str]:
+    if not has_history:
+        return list(SIMKL_ACTIVITY_KEYS.keys())
+    if not isinstance(activities, dict):
+        return list(SIMKL_ACTIVITY_KEYS.keys())
+
+    last_activity = parse_datetime((config or {}).get("simkl_activity_all"))
+    activity_all = _extract_activity_timestamp(activities)
+    if activity_all and last_activity and activity_all <= last_activity:
+        return []
+
+    selected: list[str] = []
+    for category, activity_key in SIMKL_ACTIVITY_KEYS.items():
+        activity_time = _extract_activity_block_timestamp(activities, activity_key)
+        last_time = parse_datetime((config or {}).get(f"simkl_activity_{category}"))
+        if activity_time and last_time and activity_time <= last_time:
+            continue
+        selected.append(category)
+    return selected if selected else list(SIMKL_ACTIVITY_KEYS.keys())
+
+
+def _update_simkl_activity_config(
+    integration: Integration, activities: dict[str, Any] | None
+) -> None:
+    if not isinstance(activities, dict):
+        return
+    config = dict(integration.config or {})
+    activity_all = _extract_activity_timestamp(activities)
+    if activity_all:
+        config["simkl_activity_all"] = activity_all.isoformat()
+    for category, activity_key in SIMKL_ACTIVITY_KEYS.items():
+        activity_time = _extract_activity_block_timestamp(activities, activity_key)
+        if activity_time:
+            config[f"simkl_activity_{category}"] = activity_time.isoformat()
+    integration.config = config
+    integration.updated_at = datetime.now(timezone.utc)
+    # Caller is responsible for committing.
 
 
 async def _has_simkl_import_history(db: AsyncSession, user_id: str) -> bool:

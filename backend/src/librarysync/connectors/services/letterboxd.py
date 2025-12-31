@@ -2,7 +2,7 @@ import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -413,6 +413,41 @@ class LetterboxdClient:
             cursor = next_cursor
         return entries
 
+    async def get_history(
+        self,
+        access_token: str,
+        days: int | None = None,
+        since: datetime | None = None,
+        member_id: str | None = None,
+        per_page: int = 20,
+        max_pages: int = 10,
+    ) -> list[dict[str, Any]]:
+        if since is None and days is not None:
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+        if since is None:
+            since = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        resolved_member_id = member_id
+        if not resolved_member_id:
+            me_payload = await self.fetch_me(access_token=access_token)
+            resolved_member_id = _extract_member_id(me_payload)
+        if not resolved_member_id:
+            raise LetterboxdError("Letterboxd /me response missing member id")
+        entries: list[dict[str, Any]] = []
+        for year, month in _month_range(since.date(), now.date()):
+            entries.extend(
+                await self.fetch_recent_log_entries(
+                    access_token,
+                    since,
+                    member_id=resolved_member_id,
+                    per_page=per_page,
+                    max_pages=max_pages,
+                    year=year,
+                    month=month,
+                )
+            )
+        return entries
+
     async def _resolve_log_entries_strategy(
         self,
         access_token: str,
@@ -804,6 +839,22 @@ def _parse_datetime_value(value: Any) -> datetime | None:
         date_value.day,
         tzinfo=timezone.utc,
     )
+
+
+def _month_range(start: date, end: date) -> list[tuple[int, int]]:
+    if start > end:
+        start, end = end, start
+    months: list[tuple[int, int]] = []
+    year = start.year
+    month = start.month
+    while (year, month) <= (end.year, end.month):
+        months.append((year, month))
+        if month == 12:
+            year += 1
+            month = 1
+        else:
+            month += 1
+    return months
 
 
 def extract_member_id(payload: Any) -> str | None:

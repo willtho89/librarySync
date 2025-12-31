@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -18,6 +18,7 @@ from librarysync.connectors.services.letterboxd import (
     extract_member_id,
     has_required_letterboxd_fields,
 )
+from librarysync.core.import_schedule import IMPORT_LAST_RUN_KEY, parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.watch_pipeline import enqueue_new_item_job
@@ -31,7 +32,7 @@ from librarysync.db.models import (
 from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
-LOOKBACK_HOURS = settings.history_lookback_days * 24
+LOOKBACK_DAYS = settings.history_lookback_days
 MAX_PAGES = 6
 PER_PAGE = 20
 IMDB_ID_RE = re.compile(r"(tt\d{3,10})", re.IGNORECASE)
@@ -55,11 +56,11 @@ class LetterboxdImportStrategy(ImportStrategy):
 
     def __init__(
         self,
-        lookback_hours: int = LOOKBACK_HOURS,
+        lookback_days: int = LOOKBACK_DAYS,
         per_page: int = PER_PAGE,
         max_pages: int = MAX_PAGES,
     ) -> None:
-        self._lookback_hours = lookback_hours
+        self._lookback_days = lookback_days
         self._per_page = per_page
         self._max_pages = max_pages
 
@@ -72,21 +73,21 @@ class LetterboxdImportStrategy(ImportStrategy):
         return await _import_for_integration(
             context.db,
             integration,
-            self._lookback_hours,
+            self._lookback_days,
             self._per_page,
             self._max_pages,
         )
 
 
 async def process_letterboxd_imports_once(
-    lookback_hours: int = LOOKBACK_HOURS,
+    lookback_days: int = LOOKBACK_DAYS,
     per_page: int = PER_PAGE,
     max_pages: int = MAX_PAGES,
 ) -> int:
     init_session_factory()
     async with SessionLocal() as db:
         strategy = LetterboxdImportStrategy(
-            lookback_hours=lookback_hours,
+            lookback_days=lookback_days,
             per_page=per_page,
             max_pages=max_pages,
         )
@@ -97,7 +98,7 @@ async def process_letterboxd_imports_once(
 async def _import_for_integration(
     db: AsyncSession,
     integration: Integration,
-    lookback_hours: int,
+    lookback_days: int,
     per_page: int,
     max_pages: int,
 ) -> ImportResult:
@@ -124,9 +125,6 @@ async def _import_for_integration(
         refresh_token=str(secret_data.get("refresh_token")),
         cookies=cookies,
     )
-    now = datetime.now(timezone.utc)
-    since = now - timedelta(hours=lookback_hours)
-    month_filters = _month_range(since.date(), now.date())
     try:
         access_token = await client.refresh_access_token()
         if not member_id:
@@ -146,19 +144,16 @@ async def _import_for_integration(
                     integration.config = config
                     db.add(integration)
                     await db.commit()
-        entries: list[dict[str, Any]] = []
-        for year, month in month_filters:
-            entries.extend(
-                await client.fetch_recent_log_entries(
-                    access_token,
-                    since,
-                    member_id=member_id,
-                    per_page=per_page,
-                    max_pages=max_pages,
-                    year=year,
-                    month=month,
-                )
-            )
+        now = datetime.now(timezone.utc)
+        last_run = parse_datetime((integration.config or {}).get(IMPORT_LAST_RUN_KEY))
+        since = _select_letterboxd_since(now, lookback_days, last_run)
+        entries = await client.get_history(
+            access_token,
+            since=since,
+            member_id=member_id,
+            per_page=per_page,
+            max_pages=max_pages,
+        )
     except LetterboxdError as exc:
         logger.warning(
             "Letterboxd import failed for user %s: %s", integration.user_id, exc
@@ -182,6 +177,15 @@ async def _import_for_integration(
             integration.user_id,
         )
     return ImportResult(imported=imported, attempted=True)
+
+
+def _select_letterboxd_since(
+    now: datetime, lookback_days: int, last_run: datetime | None
+) -> datetime:
+    window_start = now - timedelta(days=lookback_days)
+    if last_run and last_run > window_start:
+        return last_run - timedelta(minutes=5)
+    return window_start
 
 
 async def _import_entry(db: AsyncSession, user_id: str, entry: dict[str, Any]) -> bool:
@@ -710,19 +714,3 @@ def _parse_datetime(value: Any) -> datetime | None:
     except ValueError:
         return None
     return parsed_date.replace(tzinfo=timezone.utc)
-
-
-def _month_range(start: date, end: date) -> list[tuple[int, int]]:
-    if start > end:
-        start, end = end, start
-    months: list[tuple[int, int]] = []
-    year = start.year
-    month = start.month
-    while (year, month) <= (end.year, end.month):
-        months.append((year, month))
-        if month == 12:
-            year += 1
-            month = 1
-        else:
-            month += 1
-    return months

@@ -22,6 +22,28 @@
     <main>
       <section class="card">
         <h2>Watched items</h2>
+        <div class="button-row history-bulk-actions">
+          <label class="inline-label">
+            <span>Select all</span>
+            <input id="history-select-all" type="checkbox" />
+          </label>
+          <label class="inline-label">
+            <span>Also delete from integrations</span>
+            <input id="history-delete-integrations" type="checkbox" />
+          </label>
+          <button
+            id="history-delete-selected"
+            type="button"
+            class="danger-button"
+            disabled
+          >
+            Delete selected
+          </button>
+        </div>
+        <div id="history-sync-actions" class="button-row" hidden></div>
+        <p id="history-sync-note" class="helper-text" hidden>
+          Select items to sync just those, or sync everything if nothing is selected.
+        </p>
         <div class="button-row">
           <button id="history-clear" type="button" class="danger-button">
             Clear history

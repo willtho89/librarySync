@@ -108,8 +108,19 @@ class MetadataLookupEngine:
             if not strategy.supports(provider, request):
                 continue
             candidates = await strategy.lookup(provider, request)
-            return await self._enrich_candidates(provider, candidates)
+            if self._should_enrich(provider, request):
+                return await self._enrich_candidates(provider, candidates)
+            return candidates
         return []
+
+    def _should_enrich(self, provider: MetadataProvider, request: LookupRequest) -> bool:
+        if not provider.capabilities.supports_details:
+            return False
+        if request.query_type == provider.provider:
+            return False
+        if provider.provider == "tmdb":
+            return False
+        return True
 
     async def _enrich_candidates(
         self, provider: MetadataProvider, candidates: list[MediaCandidate]

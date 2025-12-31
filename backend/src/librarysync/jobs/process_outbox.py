@@ -37,7 +37,12 @@ from librarysync.connectors.services.stremio import (
     DEFAULT_STREMIO_API_BASE_URL,
     StremioClient,
     StremioError,
+    fetch_cinemeta_video_ids,
     has_required_stremio_fields,
+)
+from librarysync.connectors.services.stremio_watched_bitfield import (
+    WatchedBitFieldError,
+    watched_bitfield_from_array,
 )
 from librarysync.connectors.services.trakt import (
     TraktClient,
@@ -47,12 +52,15 @@ from librarysync.connectors.services.trakt import (
     parse_expires_at,
     token_to_secret_payload,
 )
+from librarysync.core.import_all import load_active_import_all_users
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.security import encrypt_value
 from librarysync.core.watch_pipeline import process_new_item_job
 from librarysync.db.models import (
+    EpisodeItem,
     IntegrationSecret,
+    MediaItem,
     OutboxJob,
     SyncAttempt,
     WatchedItem,
@@ -61,6 +69,8 @@ from librarysync.db.models import (
 from librarysync.db.session import SessionLocal, init_session_factory
 
 RETRYABLE_STATUSES = ("pending", "failed_retryable")
+BATCHABLE_PROVIDERS = {"trakt", "simkl"}
+BATCHABLE_JOB_TYPES = {"push_watched", "push_rating"}
 logger = logging.getLogger(__name__)
 
 
@@ -194,31 +204,148 @@ OUTBOX_HANDLER_REGISTRY = OutboxHandlerRegistry(
 OUTBOX_DISPATCHER = OutboxDispatcher(OUTBOX_HANDLER_REGISTRY)
 
 
-async def process_outbox_once(limit: int = 10) -> int:
+async def process_outbox_once(limit: int = 50) -> int:
     init_session_factory()
     async with SessionLocal() as db:
         jobs = await _claim_jobs(db, limit)
         if not jobs:
             return 0
         logger.info("Processing %s outbox job(s)", len(jobs))
-        for job in jobs:
+        batch_groups, remaining = _group_batchable_jobs(jobs)
+        for group in batch_groups:
+            await _process_job_batch(db, group)
+        for job in remaining:
             await _process_job(db, job)
         return len(jobs)
+
+
+def _group_batchable_jobs(jobs: list[OutboxJob]) -> tuple[list[list[OutboxJob]], list[OutboxJob]]:
+    grouped: dict[tuple[str, str, str], list[OutboxJob]] = {}
+    remaining: list[OutboxJob] = []
+    for job in jobs:
+        if (
+            job.target_provider in BATCHABLE_PROVIDERS
+            and job.job_type in BATCHABLE_JOB_TYPES
+        ):
+            key = (job.user_id, job.target_provider, job.job_type)
+            grouped.setdefault(key, []).append(job)
+        else:
+            remaining.append(job)
+    batch_groups: list[list[OutboxJob]] = []
+    for group in grouped.values():
+        if len(group) < 2:
+            remaining.extend(group)
+            continue
+        group.sort(key=lambda entry: entry.created_at)
+        batch_groups.append(group)
+    batch_groups.sort(key=lambda group: group[0].created_at)
+    remaining.sort(key=lambda entry: entry.created_at)
+    return batch_groups, remaining
+
+
+async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
+    if not jobs:
+        return
+    now = datetime.now(timezone.utc)
+    for job in jobs:
+        job.attempts += 1
+    status = "succeeded"
+    response_code: int | None = None
+    error_message: str | None = None
+
+    try:
+        response_code = await _deliver_batch(db, jobs)
+    except LetterboxdError as exc:
+        response_code = exc.status_code
+        error_message = _format_letterboxd_error(exc)
+        status = _classify_failure(exc.status_code, error_message)
+    except TraktError as exc:
+        response_code = exc.status_code
+        error_message = _format_trakt_error(exc)
+        status = _classify_failure(exc.status_code, error_message)
+    except SimklError as exc:
+        response_code = exc.status_code
+        error_message = _format_simkl_error(exc)
+        status = _classify_failure(exc.status_code, error_message)
+    except StremioError as exc:
+        response_code = exc.status_code
+        error_message = _format_stremio_error(exc)
+        status = _classify_failure(exc.status_code, error_message)
+    except ValueError as exc:
+        error_message = str(exc)
+        status = "failed_permanent"
+    except Exception as exc:
+        error_message = str(exc)
+        status = "failed_retryable"
+
+    for job in jobs:
+        job.status = status
+        job.last_error = error_message
+        if status == "failed_retryable":
+            job.run_after = now + _next_retry_delay(job.attempts)
+        else:
+            job.run_after = None
+        job.updated_at = now
+        await _update_watch_sync(
+            db,
+            job,
+            status,
+            error_message,
+            None,
+            now,
+        )
+        db.add(
+            SyncAttempt(
+                job_id=job.id,
+                status=status,
+                response_code=response_code,
+                error=error_message,
+            )
+        )
+        logger.info(
+            "Outbox job %s %s -> %s (attempt %s)",
+            job.id,
+            f"{job.target_provider}:{job.job_type}",
+            status,
+            job.attempts,
+        )
+        if error_message:
+            logger.warning("Outbox job %s error: %s", job.id, error_message)
+    await db.commit()
+
+
+async def _deliver_batch(db: AsyncSession, jobs: list[OutboxJob]) -> int | None:
+    job = jobs[0]
+    if job.target_provider == "trakt":
+        if job.job_type == "push_watched":
+            return await _deliver_trakt_watch_batch(db, jobs)
+        if job.job_type == "push_rating":
+            return await _deliver_trakt_rating_batch(db, jobs)
+    if job.target_provider == "simkl":
+        if job.job_type == "push_watched":
+            return await _deliver_simkl_watch_batch(db, jobs)
+        if job.job_type == "push_rating":
+            return await _deliver_simkl_rating_batch(db, jobs)
+    raise ValueError(f"Unsupported outbox job batch {job.target_provider}:{job.job_type}")
 
 
 async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
     now = datetime.now(timezone.utc)
     async with db.begin():
-        result = await db.execute(
+        active_users = await load_active_import_all_users(db)
+        query = (
             select(OutboxJob)
             .where(
                 OutboxJob.status.in_(RETRYABLE_STATUSES),
                 or_(OutboxJob.run_after.is_(None), OutboxJob.run_after <= now),
             )
-            .order_by(OutboxJob.created_at)
-            .limit(limit)
-            .with_for_update(skip_locked=True)
         )
+        if active_users:
+            query = query.where(~OutboxJob.user_id.in_(active_users))
+        query = query.order_by(OutboxJob.created_at).limit(limit).with_for_update(
+            skip_locked=True
+        )
+        result = await db.execute(query)
         jobs = result.scalars().all()
         for job in jobs:
             job.status = "in_progress"
@@ -447,6 +574,132 @@ async def _deliver_letterboxd_delete(
     return response_code, str(entry_id)
 
 
+def _merge_payload_list(
+    payloads: list[dict[str, Any]], keys: tuple[str, ...]
+) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for payload in payloads:
+        for key in keys:
+            items = payload.get(key)
+            if isinstance(items, list) and items:
+                merged.setdefault(key, []).extend(items)
+    if not merged:
+        raise ValueError("Batch payload did not include any items")
+    return merged
+
+
+async def _deliver_trakt_watch_batch(
+    db: AsyncSession, jobs: list[OutboxJob]
+) -> int | None:
+    integration, secret_data = await load_integration_with_secrets(
+        db, jobs[0].user_id, "trakt"
+    )
+    if not integration or not secret_data:
+        raise TraktError("Trakt credentials are missing", status_code=401)
+    if not has_required_trakt_fields(secret_data):
+        raise TraktError("Trakt credentials are incomplete", status_code=401)
+    if not settings.trakt_client_id or not settings.trakt_client_secret:
+        raise ValueError("Trakt client ID/secret are not configured")
+
+    client = TraktClient(
+        client_id=settings.trakt_client_id,
+        client_secret=settings.trakt_client_secret,
+    )
+    access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
+    payloads: list[dict[str, Any]] = []
+    for job in jobs:
+        payload = job.payload or {}
+        watched_at = _parse_datetime(payload.get("watched_at"))
+        payloads.append(_build_trakt_history_payload(payload, watched_at))
+    merged = _merge_payload_list(payloads, ("movies", "episodes", "shows"))
+    _, response_code = await client.add_history(merged, access_token)
+    return response_code
+
+
+async def _deliver_trakt_rating_batch(
+    db: AsyncSession, jobs: list[OutboxJob]
+) -> int | None:
+    integration, secret_data = await load_integration_with_secrets(
+        db, jobs[0].user_id, "trakt"
+    )
+    if not integration or not secret_data:
+        raise TraktError("Trakt credentials are missing", status_code=401)
+    if not has_required_trakt_fields(secret_data):
+        raise TraktError("Trakt credentials are incomplete", status_code=401)
+    if not settings.trakt_client_id or not settings.trakt_client_secret:
+        raise ValueError("Trakt client ID/secret are not configured")
+
+    client = TraktClient(
+        client_id=settings.trakt_client_id,
+        client_secret=settings.trakt_client_secret,
+    )
+    access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
+    payloads: list[dict[str, Any]] = []
+    for job in jobs:
+        payload = job.payload or {}
+        rating = _normalize_trakt_rating(payload.get("rating"))
+        payloads.append(_build_trakt_rating_payload(payload, rating))
+    merged = _merge_payload_list(payloads, ("movies", "episodes", "shows"))
+    _, response_code = await client.add_ratings(merged, access_token)
+    return response_code
+
+
+async def _deliver_simkl_watch_batch(
+    db: AsyncSession, jobs: list[OutboxJob]
+) -> int | None:
+    integration, secret_data = await load_integration_with_secrets(
+        db, jobs[0].user_id, "simkl"
+    )
+    if not integration or not secret_data:
+        raise SimklError("SIMKL credentials are missing", status_code=401)
+    if not has_required_simkl_fields(secret_data):
+        raise SimklError("SIMKL credentials are incomplete", status_code=401)
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise ValueError("SIMKL client ID/secret are not configured")
+
+    client = SimklClient(
+        client_id=settings.simkl_client_id,
+        client_secret=settings.simkl_client_secret,
+    )
+    access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
+    payloads: list[dict[str, Any]] = []
+    for job in jobs:
+        payload = job.payload or {}
+        watched_at = _parse_datetime(payload.get("watched_at"))
+        payloads.append(_build_simkl_history_payload(payload, watched_at))
+    merged = _merge_payload_list(payloads, ("movies", "episodes", "shows"))
+    _, response_code = await client.add_history(merged, access_token)
+    return response_code
+
+
+async def _deliver_simkl_rating_batch(
+    db: AsyncSession, jobs: list[OutboxJob]
+) -> int | None:
+    integration, secret_data = await load_integration_with_secrets(
+        db, jobs[0].user_id, "simkl"
+    )
+    if not integration or not secret_data:
+        raise SimklError("SIMKL credentials are missing", status_code=401)
+    if not has_required_simkl_fields(secret_data):
+        raise SimklError("SIMKL credentials are incomplete", status_code=401)
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise ValueError("SIMKL client ID/secret are not configured")
+
+    client = SimklClient(
+        client_id=settings.simkl_client_id,
+        client_secret=settings.simkl_client_secret,
+    )
+    access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
+    payloads: list[dict[str, Any]] = []
+    for job in jobs:
+        payload = job.payload or {}
+        rating = _normalize_simkl_rating(payload.get("rating"))
+        payloads.append(_build_simkl_rating_payload(payload, rating))
+    merged = _merge_payload_list(payloads, ("movies", "episodes", "shows"))
+    _, response_code = await client.add_ratings(merged, access_token)
+    return response_code
+
+
 async def _deliver_trakt_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     watched_at = _parse_datetime(payload.get("watched_at"))
@@ -465,14 +718,15 @@ async def _deliver_trakt_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | 
     access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
     existing_history_id = None
     existing_watched_at = None
-    try:
-        existing = await _find_trakt_history_for_day(
-            client, access_token, payload, watched_at
-        )
-        if existing:
-            existing_history_id, existing_watched_at = existing
-    except TraktError as exc:
-        logger.info("Trakt history precheck failed: %s", exc)
+    if job.attempts > 1:
+        try:
+            existing = await _find_trakt_history_for_day(
+                client, access_token, payload, watched_at
+            )
+            if existing:
+                existing_history_id, existing_watched_at = existing
+        except TraktError as exc:
+            logger.info("Trakt history precheck failed: %s", exc)
     if existing_history_id:
         if existing_watched_at:
             await _sync_local_watched_at(db, payload, existing_watched_at)
@@ -663,9 +917,28 @@ async def _deliver_stremio_watch(
     if integration.config and integration.config.get("api_base_url"):
         api_base_url = str(integration.config["api_base_url"])
     client = StremioClient(api_base_url=api_base_url)
-    change = _build_stremio_library_change(payload, watched_at)
+    if _is_series_payload(payload):
+        if await _has_newer_stremio_series_job(db, job, item_id):
+            external_id = _coerce_str(payload.get("video_id")) or item_id
+            return 200, external_id
+        change = await _build_stremio_series_change(
+            db,
+            client,
+            auth_key,
+            job.user_id,
+            payload,
+            watched_at,
+            allow_empty=False,
+        )
+        if change is None:
+            external_id = _coerce_str(payload.get("video_id")) or item_id
+            return 200, external_id
+        external_id = _coerce_str(payload.get("video_id")) or item_id
+    else:
+        change = _build_stremio_library_change(payload, watched_at)
+        external_id = item_id
     await client.update_library_items(auth_key, [change])
-    return 200, item_id
+    return 200, external_id
 
 
 async def _deliver_stremio_remove(
@@ -689,9 +962,28 @@ async def _deliver_stremio_remove(
     if integration.config and integration.config.get("api_base_url"):
         api_base_url = str(integration.config["api_base_url"])
     client = StremioClient(api_base_url=api_base_url)
-    change = _build_stremio_remove_change(payload)
+    if _is_series_payload(payload):
+        if await _has_newer_stremio_series_job(db, job, item_id):
+            external_id = _coerce_str(payload.get("video_id")) or item_id
+            return 200, external_id
+        change = await _build_stremio_series_change(
+            db,
+            client,
+            auth_key,
+            job.user_id,
+            payload,
+            datetime.now(timezone.utc),
+            allow_empty=True,
+        )
+        if change is None:
+            external_id = _coerce_str(payload.get("video_id")) or item_id
+            return 200, external_id
+        external_id = _coerce_str(payload.get("video_id")) or item_id
+    else:
+        change = _build_stremio_remove_change(payload)
+        external_id = item_id
     await client.update_library_items(auth_key, [change])
-    return 200, item_id
+    return 200, external_id
 
 
 def _build_stremio_library_change(
@@ -749,6 +1041,115 @@ def _build_stremio_library_change(
     return change
 
 
+def _is_series_payload(payload: dict[str, object]) -> bool:
+    media_type = _coerce_str(payload.get("media_type")) or ""
+    if media_type in {"tv", "series"}:
+        return True
+    if _coerce_str(payload.get("video_id")):
+        return True
+    if _coerce_int(payload.get("season_number")) is not None:
+        return True
+    if _coerce_int(payload.get("episode_number")) is not None:
+        return True
+    return False
+
+
+async def _build_stremio_series_change(
+    db: AsyncSession,
+    client: StremioClient,
+    auth_key: str,
+    user_id: str,
+    payload: dict[str, object],
+    watched_at: datetime,
+    allow_empty: bool = False,
+) -> dict[str, object] | None:
+    item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
+    if not item_id:
+        raise ValueError("Stremio sync requires item_id")
+    video_ids = await fetch_cinemeta_video_ids(item_id)
+    if not video_ids:
+        raise StremioError("Cinemeta returned no episodes")
+
+    watched_ids, latest_watched_at = await _load_series_watched_ids(
+        db,
+        user_id,
+        item_id,
+        _coerce_str(payload.get("watched_item_id")),
+    )
+    if not watched_ids and not allow_empty:
+        return None
+    wbf = watched_bitfield_from_array([False] * len(video_ids), video_ids)
+    watched_set = set(watched_ids)
+    for idx, video_id in enumerate(video_ids):
+        if video_id in watched_set:
+            wbf.set(idx, True)
+    try:
+        watched_str = wbf.to_string()
+    except WatchedBitFieldError as exc:
+        raise StremioError("Failed to serialize Stremio watched bitfield") from exc
+
+    change_timestamp = _format_stremio_datetime(watched_at)
+
+    existing_item = await _fetch_stremio_library_item(client, auth_key, item_id)
+    existing_state = _coerce_mapping(existing_item.get("state")) if existing_item else None
+    state = dict(existing_state or {})
+    state["watched"] = watched_str
+
+    last_watched = _parse_stremio_datetime(state.get("lastWatched"))
+    if latest_watched_at and (not last_watched or latest_watched_at > last_watched):
+        state["lastWatched"] = _format_stremio_datetime(latest_watched_at)
+
+    next_video_id = wbf.get_next_unwatched_video_id()
+    if next_video_id != _coerce_str(state.get("video_id")):
+        state["video_id"] = next_video_id
+        state["timeOffset"] = 0
+
+    change: dict[str, object] = {
+        "_id": item_id,
+        "type": "series",
+        "state": state,
+        "_ctime": _select_stremio_ctime(existing_item, change_timestamp),
+        "_mtime": change_timestamp,
+    }
+    title = _coerce_str(payload.get("title"))
+    if title:
+        change["name"] = title
+    year = payload.get("year")
+    if isinstance(year, int):
+        change["year"] = str(year)
+    elif isinstance(year, str):
+        cleaned = year.strip()
+        if cleaned:
+            change["year"] = cleaned
+    poster = _coerce_str(payload.get("poster"))
+    if poster:
+        change["poster"] = poster
+    return change
+
+
+async def _has_newer_stremio_series_job(
+    db: AsyncSession,
+    job: OutboxJob,
+    item_id: str,
+) -> bool:
+    result = await db.execute(
+        select(OutboxJob.id)
+        .where(
+            OutboxJob.user_id == job.user_id,
+            OutboxJob.target_provider == "stremio",
+            OutboxJob.job_type.in_(("push_watched", "remove_watched")),
+            OutboxJob.status.in_(RETRYABLE_STATUSES),
+            OutboxJob.created_at > job.created_at,
+            or_(
+                OutboxJob.payload["item_id"].as_string() == item_id,
+                OutboxJob.payload["stremio_item_id"].as_string() == item_id,
+            ),
+        )
+        .limit(1)
+    )
+    return result.scalars().first() is not None
+
+
 def _build_stremio_remove_change(payload: dict[str, object]) -> dict[str, object]:
     item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
     if not item_id:
@@ -763,6 +1164,135 @@ def _build_stremio_remove_change(payload: dict[str, object]) -> dict[str, object
         "_ctime": timestamp,
         "_mtime": timestamp,
     }
+
+
+async def _fetch_stremio_library_item(
+    client: StremioClient, auth_key: str, item_id: str
+) -> dict[str, object] | None:
+    items = await client.get_library_items(auth_key, ids=[item_id])
+    for item in items:
+        if _coerce_str(item.get("_id") or item.get("id")) == item_id:
+            return item
+    return items[0] if items else None
+
+
+async def _load_series_watched_ids(
+    db: AsyncSession,
+    user_id: str,
+    item_id: str,
+    watched_item_id: str | None,
+) -> tuple[set[str], datetime | None]:
+    show_media_item_id = await _resolve_show_media_item_id(db, item_id, watched_item_id)
+    if not show_media_item_id:
+        return set(), None
+    result = await db.execute(
+        select(
+            EpisodeItem.season_number,
+            EpisodeItem.episode_number,
+            WatchedItem.watched_at,
+        )
+        .join(WatchedItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .where(
+            WatchedItem.user_id == user_id,
+            EpisodeItem.show_media_item_id == show_media_item_id,
+        )
+    )
+    watched_ids: set[str] = set()
+    latest: datetime | None = None
+    for season, episode, watched_at in result.all():
+        if season is None or episode is None:
+            continue
+        if season < 1 or episode < 1:
+            continue
+        video_id = f"{item_id}:{season}:{episode}"
+        watched_ids.add(video_id)
+        if watched_at and (latest is None or watched_at > latest):
+            latest = watched_at
+    return watched_ids, latest
+
+
+async def _resolve_show_media_item_id(
+    db: AsyncSession,
+    item_id: str,
+    watched_item_id: str | None,
+) -> str | None:
+    if watched_item_id:
+        result = await db.execute(
+            select(EpisodeItem.show_media_item_id)
+            .join(WatchedItem, WatchedItem.episode_item_id == EpisodeItem.id)
+            .where(WatchedItem.id == watched_item_id)
+            .limit(1)
+        )
+        show_media_item_id = result.scalars().first()
+        if show_media_item_id:
+            return str(show_media_item_id)
+    result = await db.execute(
+        select(MediaItem.id).where(MediaItem.imdb_id == item_id).limit(1)
+    )
+    media_id = result.scalars().first()
+    if media_id:
+        return str(media_id)
+    result = await db.execute(
+        select(MediaItem.id)
+        .where(MediaItem.raw["stremio_id"].as_string() == item_id)
+        .limit(1)
+    )
+    media_id = result.scalars().first()
+    if media_id:
+        return str(media_id)
+    return None
+
+
+def _coerce_mapping(value: object) -> dict[str, object] | None:
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _parse_stremio_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, (int, float)):
+        return _parse_stremio_timestamp(float(value))
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if cleaned.isdigit():
+            try:
+                return _parse_stremio_timestamp(float(cleaned))
+            except ValueError:
+                return None
+        if cleaned.endswith("Z"):
+            cleaned = f"{cleaned[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(cleaned)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _parse_stremio_timestamp(value: float) -> datetime:
+    if value > 10_000_000_000:
+        value /= 1000.0
+    return datetime.fromtimestamp(value, tz=timezone.utc)
+
+
+def _select_stremio_ctime(existing_item: dict[str, object] | None, fallback: str) -> str:
+    if not existing_item:
+        return fallback
+    existing_ctime = existing_item.get("_ctime")
+    if isinstance(existing_ctime, str):
+        cleaned = existing_ctime.strip()
+        if cleaned:
+            return cleaned
+    parsed = _parse_stremio_datetime(existing_ctime)
+    if parsed:
+        return _format_stremio_datetime(parsed)
+    return fallback
 
 
 def _build_trakt_history_payload(

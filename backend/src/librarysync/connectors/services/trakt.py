@@ -241,6 +241,40 @@ class TraktClient:
             items = []
         return items, dict(response.headers)
 
+    async def get_history(
+        self,
+        access_token: str,
+        history_type: str | None = None,
+        days: int | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        per_page: int = 50,
+        max_pages: int = 10,
+    ) -> list[dict[str, Any]]:
+        if start_at is None and days is not None:
+            start_at = datetime.now(timezone.utc) - timedelta(days=days)
+        entries: list[dict[str, Any]] = []
+        page = 1
+        while page <= max_pages:
+            items, headers = await self.fetch_history(
+                access_token,
+                history_type=history_type,
+                start_at=start_at,
+                end_at=end_at,
+                page=page,
+                limit=per_page,
+            )
+            if not items:
+                break
+            entries.extend(item for item in items if isinstance(item, dict))
+            page_count = _parse_page_count(headers)
+            if page_count and page >= page_count:
+                break
+            if len(items) < per_page:
+                break
+            page += 1
+        return entries
+
     async def fetch_ratings(
         self,
         access_token: str,
@@ -263,6 +297,33 @@ class TraktClient:
         else:
             items = []
         return items, dict(response.headers)
+
+    async def get_ratings(
+        self,
+        access_token: str,
+        rating_type: str | None = None,
+        per_page: int = 50,
+        max_pages: int = 10,
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        page = 1
+        while page <= max_pages:
+            items, headers = await self.fetch_ratings(
+                access_token,
+                rating_type=rating_type,
+                page=page,
+                limit=per_page,
+            )
+            if not items:
+                break
+            entries.extend(item for item in items if isinstance(item, dict))
+            page_count = _parse_page_count(headers)
+            if page_count and page >= page_count:
+                break
+            if len(items) < per_page:
+                break
+            page += 1
+        return entries
 
     async def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
@@ -345,3 +406,15 @@ def _safe_body(value: str | None, limit: int = 500) -> str | None:
     if len(trimmed) > limit:
         return f"{trimmed[:limit]}..."
     return trimmed
+
+
+def _parse_page_count(headers: dict[str, str]) -> int | None:
+    value = headers.get("x-pagination-page-count") or headers.get(
+        "X-Pagination-Page-Count"
+    )
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None

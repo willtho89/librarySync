@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from librarysync.jobs.imports import process_imports_once
+from librarysync.jobs.imports import process_import_all_once, process_imports_once
 from librarysync.jobs.merge_history import process_history_merges_once
 from librarysync.jobs.metadata_lookup import process_metadata_lookups_once
 from librarysync.jobs.process_outbox import process_outbox_once
@@ -21,6 +21,10 @@ async def main() -> None:
             processed += await process_metadata_lookups_once()
         except Exception:
             logger.exception("metadata lookup processing failed")
+        try:
+            processed += await process_import_all_once()
+        except Exception:
+            logger.exception("import-all processing failed")
         try:
             processed += await process_outbox_once()
         except Exception:

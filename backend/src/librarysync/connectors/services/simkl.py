@@ -295,6 +295,41 @@ class SimklClient:
             return {"items": payload}
         return {}
 
+    async def get_history(
+        self,
+        access_token: str,
+        days: int | None = None,
+        date_from: datetime | None = None,
+        extended: str | None = "full",
+        episode_watched_at: bool = True,
+    ) -> dict[str, dict[str, Any]]:
+        if date_from is None and days is not None:
+            date_from = datetime.now(timezone.utc) - timedelta(days=days)
+        movies_payload = await self.fetch_all_items(
+            access_token,
+            category="movies",
+            date_from=date_from,
+        )
+        shows_payload = await self.fetch_all_items(
+            access_token,
+            category="shows",
+            date_from=date_from,
+            extended=extended,
+            episode_watched_at=episode_watched_at,
+        )
+        anime_payload = await self.fetch_all_items(
+            access_token,
+            category="anime",
+            date_from=date_from,
+            extended=extended,
+            episode_watched_at=episode_watched_at,
+        )
+        return {
+            "movies": movies_payload,
+            "shows": shows_payload,
+            "anime": anime_payload,
+        }
+
     async def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         try:

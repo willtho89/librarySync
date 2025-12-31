@@ -33,6 +33,7 @@ from librarysync.connectors.services.stremio import (
     DEFAULT_STREMIO_API_BASE_URL,
     StremioClient,
     StremioError,
+    has_required_stremio_fields,
 )
 from librarysync.connectors.services.trakt import (
     TRAKT_OAUTH_AUTHORIZE_URL,
@@ -41,6 +42,13 @@ from librarysync.connectors.services.trakt import (
     has_required_trakt_fields,
     parse_expires_at,
     token_to_secret_payload,
+)
+from librarysync.core.import_all import (
+    IMPORT_ALL_PRIORITY,
+    IMPORT_ALL_PROVIDER,
+    build_import_all_config,
+    get_or_create_system_integration,
+    import_all_active,
 )
 from librarysync.core.import_schedule import (
     normalize_interval_seconds,
@@ -112,6 +120,38 @@ def _normalize_cookies(cookies: dict[str, str] | None) -> dict[str, str] | None:
     return cleaned
 
 
+async def _build_import_all_queue(
+    db: AsyncSession, user_id: str
+) -> list[str]:
+    queue: list[str] = []
+    for provider in IMPORT_ALL_PRIORITY:
+        integration, secret_data = await load_integration_with_secrets(
+            db, user_id, provider
+        )
+        if not integration or not secret_data:
+            continue
+        if provider == "letterboxd":
+            if not has_required_letterboxd_fields(secret_data):
+                continue
+        elif provider == "trakt":
+            if not settings.trakt_client_id or not settings.trakt_client_secret:
+                continue
+            if not has_required_trakt_fields(secret_data):
+                continue
+        elif provider == "simkl":
+            if not settings.simkl_client_id or not settings.simkl_client_secret:
+                continue
+            if not has_required_simkl_fields(secret_data):
+                continue
+        elif provider == "stremio":
+            if not has_required_stremio_fields(secret_data):
+                continue
+        else:
+            continue
+        queue.append(provider)
+    return queue
+
+
 async def _load_letterboxd_integration(
     db: AsyncSession, user_id: str
 ) -> tuple[Integration | None, dict[str, object] | None]:
@@ -174,7 +214,11 @@ async def list_integrations(
     result = await db.execute(
         select(Integration).where(Integration.user_id == current_user.id)
     )
-    integrations = result.scalars().all()
+    integrations = [
+        integration
+        for integration in result.scalars().all()
+        if integration.provider != IMPORT_ALL_PROVIDER
+    ]
     integration_ids = [integration.id for integration in integrations]
     if integration_ids:
         result = await db.execute(
@@ -480,6 +524,38 @@ async def trigger_import_now(
     db.add(integration)
     await db.commit()
     return {"status": "queued"}
+
+
+@router.post(
+    "/import/all",
+    summary="Trigger a priority-ordered history import",
+    description="Queue a full import sequence across configured integrations.",
+)
+async def trigger_import_all(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    integration = await get_or_create_system_integration(db, current_user.id)
+    if import_all_active(integration.config):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Import all is already in progress",
+        )
+    queue = await _build_import_all_queue(db, current_user.id)
+    if not queue:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No integrations are ready for import",
+        )
+    integration.status = "system"
+    integration.config = build_import_all_config(
+        integration.config,
+        queue,
+        datetime.now(timezone.utc),
+    )
+    db.add(integration)
+    await db.commit()
+    return {"status": "queued", "providers": queue}
 
 
 @router.get(

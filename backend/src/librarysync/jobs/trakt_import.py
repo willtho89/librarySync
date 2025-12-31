@@ -18,6 +18,7 @@ from librarysync.connectors.services.trakt import (
     parse_expires_at,
     token_to_secret_payload,
 )
+from librarysync.core.import_schedule import IMPORT_LAST_RUN_KEY, parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
@@ -34,7 +35,7 @@ from librarysync.db.models import (
 from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
-LOOKBACK_HOURS = settings.history_lookback_days * 24
+LOOKBACK_DAYS = settings.history_lookback_days
 MAX_PAGES = 8
 PER_PAGE = 50
 logger = logging.getLogger(__name__)
@@ -78,11 +79,11 @@ class TraktImportStrategy(ImportStrategy):
 
     def __init__(
         self,
-        lookback_hours: int = LOOKBACK_HOURS,
+        lookback_days: int = LOOKBACK_DAYS,
         per_page: int = PER_PAGE,
         max_pages: int = MAX_PAGES,
     ) -> None:
-        self._lookback_hours = lookback_hours
+        self._lookback_days = lookback_days
         self._per_page = per_page
         self._max_pages = max_pages
 
@@ -95,21 +96,21 @@ class TraktImportStrategy(ImportStrategy):
         return await _import_for_integration(
             context.db,
             integration,
-            self._lookback_hours,
+            self._lookback_days,
             self._per_page,
             self._max_pages,
         )
 
 
 async def process_trakt_imports_once(
-    lookback_hours: int = LOOKBACK_HOURS,
+    lookback_days: int = LOOKBACK_DAYS,
     per_page: int = PER_PAGE,
     max_pages: int = MAX_PAGES,
 ) -> int:
     init_session_factory()
     async with SessionLocal() as db:
         strategy = TraktImportStrategy(
-            lookback_hours=lookback_hours,
+            lookback_days=lookback_days,
             per_page=per_page,
             max_pages=max_pages,
         )
@@ -120,7 +121,7 @@ async def process_trakt_imports_once(
 async def _import_for_integration(
     db: AsyncSession,
     integration: Integration,
-    lookback_hours: int,
+    lookback_days: int,
     per_page: int,
     max_pages: int,
 ) -> ImportResult:
@@ -149,15 +150,15 @@ async def _import_for_integration(
         )
         return ImportResult(imported=0, attempted=True)
 
-    now = datetime.now(timezone.utc)
-    since = now - timedelta(hours=lookback_hours)
     imported = 0
+    now = datetime.now(timezone.utc)
+    last_run = parse_datetime((integration.config or {}).get(IMPORT_LAST_RUN_KEY))
+    start_at = _select_trakt_start_at(now, lookback_days, last_run)
     for history_type in ("movies", "episodes"):
-        entries = await _fetch_history_entries(
-            client,
+        entries = await client.get_history(
             access_token,
-            history_type,
-            since,
+            history_type=history_type,
+            start_at=start_at,
             per_page=per_page,
             max_pages=max_pages,
         )
@@ -198,62 +199,13 @@ async def _import_for_integration(
     return ImportResult(imported=imported, attempted=True)
 
 
-async def _fetch_history_entries(
-    client: TraktClient,
-    access_token: str,
-    history_type: str,
-    since: datetime,
-    per_page: int,
-    max_pages: int,
-) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    page = 1
-    while page <= max_pages:
-        items, headers = await client.fetch_history(
-            access_token,
-            history_type=history_type,
-            start_at=since,
-            page=page,
-            limit=per_page,
-        )
-        if not items:
-            break
-        entries.extend(items)
-        page_count = _parse_page_count(headers)
-        if page_count and page >= page_count:
-            break
-        if len(items) < per_page:
-            break
-        page += 1
-    return entries
-
-
-async def _fetch_ratings_entries(
-    client: TraktClient,
-    access_token: str,
-    rating_type: str,
-    per_page: int,
-    max_pages: int,
-) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    page = 1
-    while page <= max_pages:
-        items, headers = await client.fetch_ratings(
-            access_token,
-            rating_type=rating_type,
-            page=page,
-            limit=per_page,
-        )
-        if not items:
-            break
-        entries.extend(item for item in items if isinstance(item, dict))
-        page_count = _parse_page_count(headers)
-        if page_count and page >= page_count:
-            break
-        if len(items) < per_page:
-            break
-        page += 1
-    return entries
+def _select_trakt_start_at(
+    now: datetime, lookback_days: int, last_run: datetime | None
+) -> datetime | None:
+    window_start = now - timedelta(days=lookback_days)
+    if last_run and last_run > window_start:
+        return last_run - timedelta(minutes=5)
+    return window_start
 
 
 async def _load_trakt_rating_lookup(
@@ -270,10 +222,9 @@ async def _load_trakt_rating_lookup(
         return {}
     rating_type, item_key = mapped
     try:
-        entries = await _fetch_ratings_entries(
-            client,
+        entries = await client.get_ratings(
             access_token,
-            rating_type,
+            rating_type=rating_type,
             per_page=per_page,
             max_pages=max_pages,
         )
@@ -334,18 +285,6 @@ def _extract_entry_rating(
     if rating is not None:
         return rating
     return _lookup_rating(lookup, imdb_id, tmdb_id, trakt_id)
-
-
-def _parse_page_count(headers: dict[str, str]) -> int | None:
-    value = headers.get("x-pagination-page-count") or headers.get(
-        "X-Pagination-Page-Count"
-    )
-    if not value:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
 
 
 async def _import_movie_entry(

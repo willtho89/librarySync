@@ -12,6 +12,7 @@ from librarysync.api.deps import get_current_user, get_db
 from librarysync.core.ratings import normalize_star_rating
 from librarysync.core.watch_pipeline import (
     SYNC_COORDINATOR,
+    SYNC_STRATEGY_REGISTRY,
     enqueue_new_item_job,
 )
 from librarysync.db.models import (
@@ -118,6 +119,16 @@ class WatchedItemCreateIn(BaseModel):
 class WatchedItemUpdateIn(BaseModel):
     watched_at: datetime | None = None
     rating: float | None = None
+
+
+class WatchedItemBulkDeleteIn(BaseModel):
+    watched_ids: list[str]
+    delete_integrations: bool = False
+
+
+class WatchedItemSyncIn(BaseModel):
+    provider: str
+    watched_ids: list[str] | None = None
 
 
 @router.post(
@@ -444,6 +455,61 @@ async def list_watched_items(
     return {"items": _merge_history_items(items)}
 
 
+@router.post(
+    "/items/sync",
+    summary="Sync watched items",
+    description="Queue watched items to sync with a connected integration.",
+)
+async def sync_watched_items(
+    payload: WatchedItemSyncIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    provider = payload.provider.strip().lower()
+    allowed = {strategy.provider for strategy in SYNC_STRATEGY_REGISTRY.list()}
+    if provider not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unknown sync provider",
+        )
+    strategy = SYNC_STRATEGY_REGISTRY.get(provider)
+    if not strategy:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unknown sync provider",
+        )
+    watched_ids = [
+        watched_id.strip()
+        for watched_id in (payload.watched_ids or [])
+        if watched_id and watched_id.strip()
+    ]
+    unique_ids = list(dict.fromkeys(watched_ids))
+    show_item = aliased(MediaItem)
+    query = (
+        select(WatchedItem, MediaItem, EpisodeItem, show_item)
+        .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
+        .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .outerjoin(show_item, EpisodeItem.show_media_item_id == show_item.id)
+        .where(WatchedItem.user_id == current_user.id)
+    )
+    if unique_ids:
+        query = query.where(WatchedItem.id.in_(unique_ids))
+    result = await db.execute(query)
+    rows = result.all()
+    requested = 0
+    for watched, media_item, episode_item, show in rows:
+        resolved_media = media_item if watched.media_item_id else show
+        resolved_episode = None if watched.media_item_id else episode_item
+        if not resolved_media and not resolved_episode:
+            continue
+        await strategy.enqueue_new(
+            db, watched, resolved_media, resolved_episode, is_rewatch=False
+        )
+        requested += 1
+    await db.commit()
+    return {"requested": requested, "provider": provider}
+
+
 @router.delete(
     "/items",
     summary="Clear watched history",
@@ -681,6 +747,84 @@ async def delete_watched_item(
     await db.delete(watched)
     await db.commit()
     return {"status": "deleted"}
+
+
+@router.post(
+    "/items/bulk-delete",
+    summary="Delete multiple watched items",
+    description="Remove selected watched entries from history.",
+)
+async def bulk_delete_watched_items(
+    payload: WatchedItemBulkDeleteIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    watched_ids = [watched_id.strip() for watched_id in payload.watched_ids if watched_id]
+    if not watched_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide at least one watched ID",
+        )
+    unique_ids = list(dict.fromkeys(watched_ids))
+    show_item = aliased(MediaItem)
+    result = await db.execute(
+        select(WatchedItem, MediaItem, EpisodeItem, show_item)
+        .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
+        .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .outerjoin(show_item, EpisodeItem.show_media_item_id == show_item.id)
+        .where(
+            WatchedItem.user_id == current_user.id,
+            WatchedItem.id.in_(unique_ids),
+        )
+    )
+    rows = result.all()
+    if not rows:
+        return {"deleted": 0}
+
+    now = datetime.now(timezone.utc)
+    events: list[WatchEvent] = []
+    delete_ids: list[str] = []
+
+    for watched, media_item, episode_item, show in rows:
+        delete_ids.append(watched.id)
+        event_raw: dict[str, object] = {
+            "watched_id": watched.id,
+            "previous_watched_at": watched.watched_at.isoformat()
+            if watched.watched_at
+            else None,
+            "bulk_delete": True,
+        }
+        if payload.delete_integrations:
+            event_raw["delete_integrations"] = True
+        events.append(
+            WatchEvent(
+                user_id=current_user.id,
+                media_item_id=watched.media_item_id,
+                episode_item_id=watched.episode_item_id,
+                event_type="manual_watched_deleted",
+                occurred_at=now,
+                raw=event_raw,
+            )
+        )
+        if payload.delete_integrations:
+            target_media = media_item or show
+            if target_media:
+                await _enqueue_delete_syncs(
+                    db,
+                    watched,
+                    target_media,
+                    episode_item,
+                )
+
+    db.add_all(events)
+    await db.execute(
+        delete(WatchedItem).where(
+            WatchedItem.user_id == current_user.id,
+            WatchedItem.id.in_(delete_ids),
+        )
+    )
+    await db.commit()
+    return {"deleted": len(delete_ids)}
 
 
 def _normalize_datetime(value: datetime | None) -> datetime:

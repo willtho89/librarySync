@@ -21,6 +21,17 @@
     </header>
     <main>
       <section class="card">
+        <h2>Import All</h2>
+        <p class="helper-text">
+          Runs a full history import in priority order (Trakt → Letterboxd → SIMKL → Stremio).
+          Outbox delivery is paused while the import runs.
+        </p>
+        <div class="button-row">
+          <button type="button" id="import-all-button">Import All</button>
+        </div>
+        <p id="import-all-message" class="form-message" role="status" hidden></p>
+      </section>
+      <section class="card">
         <h2>Letterboxd</h2>
         <form id="letterboxd-form">
           <label>
