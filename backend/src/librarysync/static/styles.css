@@ -1254,10 +1254,10 @@ h1,
 
 .candidate-meta h3 {
   font-size: 1rem;
-  line-height: 1.5rem;
   font-weight: 600;
+  line-height: 1.5rem;
   --tw-text-opacity: 1;
-  color: rgb(var(--color-base) / var(--tw-text-opacity, 1));
+  color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
 }
 
 .candidate-meta p {
@@ -1795,22 +1795,34 @@ h1,
 
 .rating-stars {
   --star-size: 1.25rem;
+  --star-gap: 0.3rem;
   position: relative;
-  display: flex;
-  flex-direction: row-reverse;
+  display: grid;
   align-items: center;
-  gap: 0.125rem;
+  grid-template-columns: repeat(5, var(--star-size));
+  -moz-column-gap: var(--star-gap);
+       column-gap: var(--star-gap);
 }
 
 .rating-stars input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
 }
 
 .rating-stars label {
+  grid-row: 1;
   width: var(--star-size);
   height: var(--star-size);
   position: relative;
   cursor: pointer;
+  z-index: 1;
 }
 
 .rating-stars label::before {
@@ -1826,6 +1838,33 @@ h1,
 .rating-stars label.half {
   width: calc(var(--star-size) / 2);
   overflow: hidden;
+  justify-self: start;
+  z-index: 2;
+}
+
+.rating-stars input[value="5"] + label,
+  .rating-stars input[value="4.5"] + label {
+  grid-column: 5;
+}
+
+.rating-stars input[value="4"] + label,
+  .rating-stars input[value="3.5"] + label {
+  grid-column: 4;
+}
+
+.rating-stars input[value="3"] + label,
+  .rating-stars input[value="2.5"] + label {
+  grid-column: 3;
+}
+
+.rating-stars input[value="2"] + label,
+  .rating-stars input[value="1.5"] + label {
+  grid-column: 2;
+}
+
+.rating-stars input[value="1"] + label,
+  .rating-stars input[value="0.5"] + label {
+  grid-column: 1;
 }
 
 .rating-stars input:checked ~ label::before,
@@ -1945,6 +1984,10 @@ h1,
 
 .flex-1 {
   flex: 1 1 0%;
+}
+
+.resize {
+  resize: both;
 }
 
 .flex-col {

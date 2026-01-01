@@ -292,7 +292,7 @@
   }
 
   .candidate-meta h3 {
-    @apply text-base font-semibold;
+    @apply text-[1rem] leading-6 font-semibold text-ink;
   }
 
   .candidate-meta p {
@@ -529,18 +529,23 @@
 
   .rating-stars {
     --star-size: 1.25rem;
-    @apply relative flex flex-row-reverse items-center gap-0.5;
+    --star-gap: 0.3rem;
+    @apply relative grid items-center;
+    grid-template-columns: repeat(5, var(--star-size));
+    column-gap: var(--star-gap);
   }
 
   .rating-stars input {
-    @apply hidden;
+    @apply sr-only;
   }
 
   .rating-stars label {
+    grid-row: 1;
     width: var(--star-size);
     height: var(--star-size);
     position: relative;
     cursor: pointer;
+    z-index: 1;
   }
 
   .rating-stars label::before {
@@ -556,6 +561,33 @@
   .rating-stars label.half {
     width: calc(var(--star-size) / 2);
     overflow: hidden;
+    justify-self: start;
+    z-index: 2;
+  }
+
+  .rating-stars input[value="5"] + label,
+  .rating-stars input[value="4.5"] + label {
+    grid-column: 5;
+  }
+
+  .rating-stars input[value="4"] + label,
+  .rating-stars input[value="3.5"] + label {
+    grid-column: 4;
+  }
+
+  .rating-stars input[value="3"] + label,
+  .rating-stars input[value="2.5"] + label {
+    grid-column: 3;
+  }
+
+  .rating-stars input[value="2"] + label,
+  .rating-stars input[value="1.5"] + label {
+    grid-column: 2;
+  }
+
+  .rating-stars input[value="1"] + label,
+  .rating-stars input[value="0.5"] + label {
+    grid-column: 1;
   }
 
   .rating-stars input:checked ~ label::before,

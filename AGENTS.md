@@ -266,6 +266,7 @@ librarySync/
 - Use `watch_pipeline.py` helpers to enqueue sync jobs.
 - Store secrets in `integration_secrets` (encrypted), not `integrations.config`.
 - Ruff is the linter; line length is 100 (see `pyproject.toml`).
+- When updating Tailwind styles in `frontend/input.css`, rebuild `backend/src/librarysync/static/styles.css`.
 
 ---
 

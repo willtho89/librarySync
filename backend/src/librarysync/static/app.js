@@ -1192,6 +1192,7 @@ function resetEpisodePicker() {
   const episodeSelect = document.getElementById("episode-select");
   if (picker) {
     picker.hidden = true;
+    picker.style.marginTop = "";
   }
   if (seasonSelect) {
     seasonSelect.innerHTML = "";
@@ -1288,37 +1289,7 @@ function renderCandidates(candidates) {
       const detail = document.createElement("p");
       const year = candidate.year ? candidate.year : "Year unknown";
       const mediaType = formatMediaType(candidate.media_type);
-      const providerLabel = formatProviderLabel(
-        Array.isArray(candidate.providers) && candidate.providers.length
-          ? candidate.providers
-          : candidate.provider,
-      );
       const detailParts = [`${year}`, mediaType];
-      if (providerLabel) {
-        detailParts.push(providerLabel);
-      }
-      const idParts = [];
-      if (candidate.imdb_id) {
-        idParts.push(candidate.imdb_id);
-      }
-      if (candidate.tmdb_id) {
-        idParts.push(`TMDB ${candidate.tmdb_id}`);
-      }
-      if (candidate.tvdb_id) {
-        idParts.push(`TVDB ${candidate.tvdb_id}`);
-      }
-      if (candidate.tvmaze_id) {
-        idParts.push(`TVMaze ${candidate.tvmaze_id}`);
-      }
-      if (candidate.kitsu_id) {
-        idParts.push(`Kitsu ${candidate.kitsu_id}`);
-      }
-      if (candidate.myanimelist_id) {
-        idParts.push(`MAL ${candidate.myanimelist_id}`);
-      }
-      if (idParts.length) {
-        detailParts.push(...idParts);
-      }
       detail.textContent = detailParts.join(" · ");
 
       meta.appendChild(title);
@@ -1347,6 +1318,33 @@ function getSelectedCandidateId() {
   return input ? input.value : null;
 }
 
+function updateEpisodePickerOffset() {
+  const picker = document.getElementById("episode-picker");
+  if (!picker) {
+    return;
+  }
+  const isWide = window.matchMedia("(min-width: 1024px)").matches;
+  if (!isWide || picker.hidden) {
+    picker.style.marginTop = "";
+    return;
+  }
+  const candidatesEl = document.getElementById("candidate-list");
+  const selectedInput = document.querySelector("input[name='candidate_id']:checked");
+  if (!candidatesEl || !selectedInput) {
+    picker.style.marginTop = "";
+    return;
+  }
+  const selectedLabel = selectedInput.closest(".candidate-option");
+  if (!selectedLabel) {
+    picker.style.marginTop = "";
+    return;
+  }
+  const listRect = candidatesEl.getBoundingClientRect();
+  const labelRect = selectedLabel.getBoundingClientRect();
+  const offset = Math.max(0, labelRect.top - listRect.top);
+  picker.style.marginTop = `${offset}px`;
+}
+
 async function handleCandidateSelection() {
   const candidate = getSelectedCandidate();
   if (!candidate || candidate.media_type !== "tv") {
@@ -1359,6 +1357,7 @@ async function handleCandidateSelection() {
     const picker = document.getElementById("episode-picker");
     if (picker) {
       picker.hidden = false;
+      updateEpisodePickerOffset();
     }
     setMessage(
       "episode-message",
@@ -1378,6 +1377,7 @@ async function loadSeasons(tmdbId) {
     return;
   }
   picker.hidden = false;
+  updateEpisodePickerOffset();
   seasonSelect.disabled = true;
   episodeSelect.disabled = true;
   episodeSelect.innerHTML = "";
@@ -1711,7 +1711,7 @@ function formatProviderLabel(value) {
     return "MyAnimeList";
   }
   if (normalized === "local") {
-    return "Local cache";
+    return "";
   }
   return normalized.toUpperCase();
 }
@@ -3446,6 +3446,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         handleCandidateSelection();
       }
     });
+  }
+  const episodePicker = document.getElementById("episode-picker");
+  if (episodePicker) {
+    window.addEventListener("resize", () => updateEpisodePickerOffset());
   }
   const seasonSelect = document.getElementById("season-select");
   if (seasonSelect) {
