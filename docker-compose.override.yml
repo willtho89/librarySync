@@ -1,0 +1,42 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: librarysync-backend:local
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: librarysync-worker:local
+
+  worker-outbox:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: librarysync-worker:local
+
+  worker-metadata:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: librarysync-worker:local
+
+  worker-imports:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: librarysync-worker:local
+
+  worker-import-all:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: librarysync-worker:local
+
+  worker-merge:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: librarysync-worker:local

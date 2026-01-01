@@ -25,6 +25,10 @@ my watch history in sync.
    `docker compose up --build`
 4. Open `http://localhost:8000`.
 
+By default, `docker-compose.override.yml` is loaded and builds local images. To pull
+the published images instead, run:
+`docker compose -f docker-compose.yml up --pull=always`
+
 ## Environment Variables (Defaults)
 
 All defaults below are from `.env.example`.
