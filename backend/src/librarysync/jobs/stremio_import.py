@@ -150,7 +150,7 @@ async def _import_for_integration(
     if not full_history:
         ids = _select_item_ids(timestamps, since)
     if not ids:
-        if force_full or full_history:
+        if full_history:
             logger.info(
                 "Stremio import falling back to full library fetch for user %s",
                 integration.user_id,

@@ -21,7 +21,6 @@ from librarysync.connectors.services.simkl import (
     SIMKL_OAUTH_AUTHORIZE_URL,
     SimklClient,
     SimklError,
-    has_required_simkl_fields,
 )
 from librarysync.connectors.services.simkl import (
     parse_expires_at as parse_simkl_expires_at,
@@ -33,13 +32,11 @@ from librarysync.connectors.services.stremio import (
     DEFAULT_STREMIO_API_BASE_URL,
     StremioClient,
     StremioError,
-    has_required_stremio_fields,
 )
 from librarysync.connectors.services.trakt import (
     TRAKT_OAUTH_AUTHORIZE_URL,
     TraktClient,
     TraktError,
-    has_required_trakt_fields,
     parse_expires_at,
     token_to_secret_payload,
 )
