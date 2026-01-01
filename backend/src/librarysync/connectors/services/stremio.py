@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 DEFAULT_STREMIO_API_BASE_URL = "https://api.strem.io"
-DEFAULT_CINEMETA_API_BASE_URL = "https://v3-cinemeta.strem.io"
+DEFAULT_CINEMETA_API_BASE_URL = "https://cinemeta-live.strem.io/"
 CINEMETA_CACHE_TTL = timedelta(hours=2)
 STREMIO_REQUIRED_FIELDS = ("auth_key",)
 
@@ -178,7 +178,7 @@ async def fetch_cinemeta_video_ids(series_id: str) -> list[str]:
         return cached[1]
     base_url = DEFAULT_CINEMETA_API_BASE_URL.rstrip("/")
     url = f"{base_url}/meta/series/{series_id}.json"
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         response = await client.get(url)
         response.raise_for_status()
         payload = response.json()
