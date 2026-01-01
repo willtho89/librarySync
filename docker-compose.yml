@@ -73,23 +73,17 @@ services:
     environment:
       LIBRARYSYNC_WORKER_MODES: metadata
 
-  worker-imports:
+  worker-import-quick:
     <<: *worker-base
     profiles: ["scaled-workers"]
     environment:
-      LIBRARYSYNC_WORKER_MODES: imports
+      LIBRARYSYNC_WORKER_MODES: quick_import
 
   worker-import-all:
     <<: *worker-base
     profiles: ["scaled-workers"]
     environment:
       LIBRARYSYNC_WORKER_MODES: import_all
-
-  worker-merge:
-    <<: *worker-base
-    profiles: ["scaled-workers"]
-    environment:
-      LIBRARYSYNC_WORKER_MODES: merge
 
 volumes:
   pgdata:

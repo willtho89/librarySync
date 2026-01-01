@@ -23,19 +23,13 @@ services:
       dockerfile: worker/Dockerfile
     image: librarysync-worker:local
 
-  worker-imports:
+  worker-import-quick:
     build:
       context: .
       dockerfile: worker/Dockerfile
     image: librarysync-worker:local
 
   worker-import-all:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    image: librarysync-worker:local
-
-  worker-merge:
     build:
       context: .
       dockerfile: worker/Dockerfile
