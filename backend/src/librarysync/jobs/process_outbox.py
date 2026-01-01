@@ -920,6 +920,7 @@ async def _deliver_trakt_remove(db: AsyncSession, job: OutboxJob) -> tuple[int |
     access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
 
     history_id = payload.get("history_id") or payload.get("external_id")
+    is_last_watch = payload.get("is_last_watch")
     history_ids: list[int | str] = []
     if history_id:
         values = history_id if isinstance(history_id, list) else [history_id]
@@ -930,10 +931,17 @@ async def _deliver_trakt_remove(db: AsyncSession, job: OutboxJob) -> tuple[int |
                 cleaned = value.strip()
                 if cleaned:
                     history_ids.append(int(cleaned) if cleaned.isdigit() else cleaned)
+
     if history_ids:
+        # Remove specific history entries by ID
         remove_payload = {"ids": history_ids}
-    else:
+    elif is_last_watch:
+        # Only remove all history if this is the last watch
         remove_payload = _build_trakt_remove_payload(payload)
+    else:
+        # Not the last watch and no history_id, skip removal to keep watched status
+        return 200, None
+
     _, response_code = await client.remove_history(remove_payload, access_token)
     return response_code, None
 
@@ -1001,6 +1009,15 @@ async def _deliver_simkl_remove(db: AsyncSession, job: OutboxJob) -> tuple[int |
         client_secret=settings.simkl_client_secret,
     )
     access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
+
+    is_last_watch = payload.get("is_last_watch")
+
+    # SIMKL remove_history removes all history entries for the item
+    # Only proceed if this is the last watch to remove the watched status
+    if not is_last_watch:
+        # Skip removal to keep watched status when there are other watch entries
+        return 200, None
+
     remove_payload = _build_simkl_remove_payload(payload)
     _, response_code = await client.remove_history(remove_payload, access_token)
     return response_code, None
@@ -1073,6 +1090,9 @@ async def _deliver_stremio_remove(
     if integration.config and integration.config.get("api_base_url"):
         api_base_url = str(integration.config["api_base_url"])
     client = StremioClient(api_base_url=api_base_url)
+
+    is_last_watch = payload.get("is_last_watch")
+
     if _is_series_payload(payload):
         if await _has_newer_stremio_series_job(db, job, item_id):
             external_id = _coerce_str(payload.get("video_id")) or item_id
@@ -1091,7 +1111,13 @@ async def _deliver_stremio_remove(
             return 200, external_id
         external_id = _coerce_str(payload.get("video_id")) or item_id
     else:
-        change = _build_stremio_remove_change(payload)
+        # For movies, only remove from library if this is the last watch
+        if is_last_watch:
+            change = _build_stremio_remove_change(payload)
+        else:
+            # There are other watch entries, so don't remove from library
+            # Just return success without making any changes
+            return 200, item_id
         external_id = item_id
     await client.update_library_items(auth_key, [change])
     return 200, external_id

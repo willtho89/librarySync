@@ -417,18 +417,45 @@ class LetterboxdSyncStrategy(SyncStrategy):
         watch_sync = result.scalars().first()
         if not watch_sync or not watch_sync.external_id:
             return
+
+        # Check if there are other watched items for the same media
+        has_other_watches = await _has_other_watched_items(
+            db,
+            watched.user_id,
+            watched.media_item_id,
+            watched.episode_item_id,
+            watched.id,
+        )
+
         payload = {
             "entry_id": watch_sync.external_id,
             "watched_item_id": watched.id,
+            "is_last_watch": not has_other_watches,
         }
-        await enqueue_outbox_job(
-            db,
-            user_id=watched.user_id,
-            target_provider="letterboxd",
-            job_type="delete_log_entry",
-            payload=payload,
-            status="pending",
-        )
+
+        if has_other_watches:
+            # Only delete this specific log entry
+            await enqueue_outbox_job(
+                db,
+                user_id=watched.user_id,
+                target_provider="letterboxd",
+                job_type="delete_log_entry",
+                payload=payload,
+                status="pending",
+            )
+        else:
+            # This is the last watch, need to mark movie as unwatched
+            # We'll delete the entry which effectively removes the watched flag
+            payload["imdb_id"] = media_item.imdb_id.lower() if media_item.imdb_id else None
+            payload["tmdb_id"] = media_item.tmdb_id if media_item.tmdb_id else None
+            await enqueue_outbox_job(
+                db,
+                user_id=watched.user_id,
+                target_provider="letterboxd",
+                job_type="delete_log_entry",
+                payload=payload,
+                status="pending",
+            )
 
 
 @dataclass(frozen=True)
@@ -633,11 +660,23 @@ class HistorySyncStrategy(SyncStrategy):
             return
         payload.pop("watched_at", None)
         payload.pop("rating", None)
+
+        # Check if there are other watched items for the same media/episode
+        has_other_watches = await _has_other_watched_items(
+            db,
+            watched.user_id,
+            watched.media_item_id,
+            watched.episode_item_id,
+            watched.id,
+        )
+
         if self._config.include_history_id_on_delete:
             watch_sync = await _get_watch_sync(db, watched.id, self.provider)
             if watch_sync and watch_sync.external_id:
                 payload["history_id"] = watch_sync.external_id
         payload["watched_item_id"] = watched.id
+        payload["is_last_watch"] = not has_other_watches
+
         await enqueue_outbox_job(
             db,
             user_id=watched.user_id,
@@ -751,7 +790,19 @@ class StremioSyncStrategy(SyncStrategy):
         if not payload:
             return
         payload.pop("watched_at", None)
+
+        # Check if there are other watched items for the same media/episode
+        has_other_watches = await _has_other_watched_items(
+            db,
+            watched.user_id,
+            watched.media_item_id,
+            watched.episode_item_id,
+            watched.id,
+        )
+
         payload["watched_item_id"] = watched.id
+        payload["is_last_watch"] = not has_other_watches
+
         await enqueue_outbox_job(
             db,
             user_id=watched.user_id,
@@ -795,6 +846,40 @@ async def _has_same_day_watch(
         query = query.where(WatchedItem.episode_item_id == episode_item_id)
     if exclude_watched_id:
         query = query.where(WatchedItem.id != exclude_watched_id)
+    query = query.limit(1)
+    result = await db.execute(query)
+    return result.scalars().first() is not None
+
+
+async def _has_other_watched_items(
+    db: AsyncSession,
+    user_id: str,
+    media_item_id: str | None,
+    episode_item_id: str | None,
+    exclude_watched_id: str,
+) -> bool:
+    """Check if there are any other watched items for the same media/episode for the user.
+
+    Args:
+        db: Database session
+        user_id: User ID to check
+        media_item_id: Media item ID (for movies or shows without episode)
+        episode_item_id: Episode item ID (for TV episodes)
+        exclude_watched_id: Watched item ID to exclude from the check
+
+    Returns:
+        True if there are other watched items, False otherwise
+    """
+    if not media_item_id and not episode_item_id:
+        return False
+    query = select(WatchedItem.id).where(
+        WatchedItem.user_id == user_id,
+        WatchedItem.id != exclude_watched_id,
+    )
+    if media_item_id:
+        query = query.where(WatchedItem.media_item_id == media_item_id)
+    if episode_item_id:
+        query = query.where(WatchedItem.episode_item_id == episode_item_id)
     query = query.limit(1)
     result = await db.execute(query)
     return result.scalars().first() is not None
