@@ -1838,12 +1838,18 @@ function updateHistoryBulkControls() {
 
 function updateHistorySyncControls() {
   const container = document.getElementById("history-sync-actions");
+  const syncAllToggle = document.getElementById("history-sync-all");
   if (!container) {
     return;
   }
   const hasItems = historySelectionState.items.length > 0;
+  const totalItems = historyState.total || 0;
+  const allowSync = hasItems || totalItems > 0;
+  if (syncAllToggle) {
+    syncAllToggle.disabled = totalItems === 0;
+  }
   container.querySelectorAll("button[data-history-sync]").forEach((button) => {
-    button.disabled = !hasItems;
+    button.disabled = !allowSync;
   });
 }
 
@@ -2018,6 +2024,7 @@ function bindHistoryUi() {
 
 function renderHistorySyncButtons(integrations) {
   const container = document.getElementById("history-sync-actions");
+  const syncAllWrap = document.getElementById("history-sync-all-wrap");
   if (!container) {
     return;
   }
@@ -2032,6 +2039,9 @@ function renderHistorySyncButtons(integrations) {
   );
   if (!enabled.length) {
     container.hidden = true;
+    if (syncAllWrap) {
+      syncAllWrap.hidden = true;
+    }
     if (note) {
       note.hidden = true;
     }
@@ -2048,6 +2058,9 @@ function renderHistorySyncButtons(integrations) {
     container.appendChild(button);
   });
   container.hidden = false;
+  if (syncAllWrap) {
+    syncAllWrap.hidden = false;
+  }
   if (note) {
     note.hidden = false;
   }
@@ -2056,23 +2069,37 @@ function renderHistorySyncButtons(integrations) {
 
 async function handleHistorySync(provider) {
   const label = formatIntegrationName(provider);
-  const totalItems = historySelectionState.items.length;
-  if (!totalItems) {
+  const totalItems = historyState.total || 0;
+  const pageItems = historySelectionState.items || [];
+  if (!pageItems.length && !totalItems) {
     setMessage("history-message", "No history items to sync.", true);
     return;
   }
+  const syncAllToggle = document.getElementById("history-sync-all");
+  const syncAll = syncAllToggle && syncAllToggle.checked;
   const selectedIds = Array.from(historySelectionState.selectedIds);
   const hasSelection = selectedIds.length > 0;
-  const count = hasSelection ? selectedIds.length : totalItems;
-  const prompt = hasSelection
-    ? `Sync ${count} selected item${count === 1 ? "" : "s"} to ${label}?`
-    : `Sync all ${count} item${count === 1 ? "" : "s"} to ${label}?`;
+  const pageIds = pageItems.map((item) => item.id).filter(Boolean);
+  const count = syncAll
+    ? totalItems
+    : hasSelection
+      ? selectedIds.length
+      : pageIds.length;
+  const prompt = syncAll
+    ? `Sync all ${count} item${count === 1 ? "" : "s"} to ${label}?`
+    : hasSelection
+      ? `Sync ${count} selected item${count === 1 ? "" : "s"} to ${label}?`
+      : `Sync ${count} item${count === 1 ? "" : "s"} from this page to ${label}?`;
   if (!window.confirm(prompt)) {
     return;
   }
   const payload = { provider };
-  if (hasSelection) {
+  if (syncAll) {
+    // omit watched_ids to sync the full history
+  } else if (hasSelection) {
     payload.watched_ids = selectedIds;
+  } else {
+    payload.watched_ids = pageIds;
   }
   try {
     setMessage("history-message", "Queueing sync...");

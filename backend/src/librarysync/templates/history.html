@@ -73,9 +73,15 @@
     <p class="helper-text">
       This permanently removes all watched items from your history.
     </p>
-    <div id="history-sync-actions" class="button-row" hidden></div>
+    <div class="flex flex-wrap items-center gap-3">
+      <div id="history-sync-actions" class="button-row" hidden></div>
+      <label id="history-sync-all-wrap" class="inline-control" hidden>
+        <input id="history-sync-all" type="checkbox" />
+        <span>Sync entire history</span>
+      </label>
+    </div>
     <p id="history-sync-note" class="helper-text" hidden>
-      Select items to sync just those, or sync everything if nothing is selected.
+      Select items to sync just those. Otherwise, syncs the current page.
     </p>
     <p id="history-message" class="form-message" hidden></p>
     <div id="history-list" class="candidate-list">Loading...</div>
