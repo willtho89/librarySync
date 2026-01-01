@@ -56,7 +56,37 @@ def create_app() -> FastAPI:
 
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    class CachedStaticFiles(StaticFiles):
+        async def get_response(self, path: str, scope):
+            response = await super().get_response(path, scope)
+            if response.status_code != 200 or "cache-control" in response.headers:
+                return response
+            suffix = Path(path).suffix.lower()
+            if path.endswith("service-worker.js"):
+                response.headers["Cache-Control"] = "no-cache"
+                return response
+            if suffix in {
+                ".woff2",
+                ".woff",
+                ".ttf",
+                ".otf",
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".webp",
+                ".svg",
+                ".ico",
+            }:
+                response.headers["Cache-Control"] = "public, max-age=2592000"
+                return response
+            if suffix in {".css", ".js", ".webmanifest"}:
+                response.headers["Cache-Control"] = "public, max-age=3600"
+                return response
+            response.headers["Cache-Control"] = "public, max-age=3600"
+            return response
+
+    app.mount("/static", CachedStaticFiles(directory=STATIC_DIR), name="static")
 
     def _static_asset(filename: str) -> FileResponse:
         return FileResponse(STATIC_DIR / filename)
