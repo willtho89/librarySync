@@ -145,8 +145,14 @@ function initMobileMenu() {
   const backdrop = document.querySelector("[data-mobile-menu-backdrop]");
   const panel = document.querySelector("[data-mobile-menu-panel]");
 
+  // Early return if required elements are missing
   if (!toggleButton || !panel || !backdrop) {
     return;
+  }
+  
+  // closeButton is optional but should exist in production
+  if (!closeButton) {
+    console.warn("Mobile menu close button not found");
   }
 
   function openMenu() {
