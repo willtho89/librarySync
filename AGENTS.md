@@ -16,8 +16,8 @@ an async metadata lookup/enrichment pipeline.
 - Ratings support (0.5–5.0 stars) synced to providers where supported.
 - Metadata providers (per user): TMDB, TVDB, IMDb, TVMaze, Kitsu, MyAnimeList.
 - Async metadata lookup and enrichment (posters/IDs), with local cache reuse.
-- Imports from Trakt, SIMKL, Letterboxd, Stremio (scheduled or on-demand).
-- Import-all queue (priority-ordered per user) + history merge dedupe job.
+- Imports from Trakt, SIMKL, Letterboxd, Stremio (quick import + import all).
+- Import-all queue (priority-ordered per user) + post-import history merge dedupe.
 - Outbox-based delivery with retries + per-user rate limiting.
 - Minimal UI (static HTML + JS): login, integrations, settings, activity, history, add-watched.
 
@@ -26,7 +26,7 @@ an async metadata lookup/enrichment pipeline.
 ## 3) Architecture / Data Flow
 
 - **API**: FastAPI serves JSON endpoints and static UI under `/static`.
-- **Worker**: async loops for outbox, metadata lookups, imports, import-all, and merges.
+- **Worker**: async loops for outbox, metadata lookups, quick import, and import-all.
 - **Canonical flow**:
   1. Manual add or import -> `MediaItem`/`EpisodeItem` + `WatchedItem`
   2. Append `WatchEvent` for auditing.
@@ -131,7 +131,7 @@ librarySync/
 - `watch_syncs`: per-provider sync status + external IDs/errors.
 - `outbox` + `sync_attempts`: delivery queue and attempt history.
 - `metadata_lookup_requests` + `metadata_lookup_candidates`: async lookup pipeline.
-- `scheduled_jobs`: leases for recurring jobs (e.g., merge history).
+- `scheduled_jobs`: leases for recurring jobs.
 - `rate_limit_buckets`: per-user/provider token buckets.
 - `progress_events`: legacy progress model (not wired to outbox yet).
 
@@ -149,13 +149,13 @@ librarySync/
 
 ## 7) Worker Modes & Jobs
 
-- `LIBRARYSYNC_WORKER_MODES`: `outbox`, `metadata`, `imports`, `import_all`, `merge`.
+- `LIBRARYSYNC_WORKER_MODES`: `outbox`, `metadata`, `quick_import`, `import_all`.
 - `process_outbox` handles `push_watched`, `push_rating`, `update_history`,
   `remove_history`, `update_log_entry`, `delete_log_entry`, `remove_watched`,
   and internal `new_item_added`.
 - `metadata_lookup` resolves lookup requests into candidates.
-- `imports` runs provider strategies; `import_all` sequences providers per user.
-- `merge_history` dedupes same-day movie entries and repoints sync/outbox rows.
+- `quick_import` runs the 7-day import window; `import_all` sequences providers per user.
+- `merge_history` runs after quick/import-all to dedupe same-day movie entries and repoint sync/outbox rows.
 
 ---
 
@@ -184,8 +184,8 @@ librarySync/
 - `POST /api/integrations/simkl/disconnect`
 - `POST /api/integrations/stremio/login`
 - `POST /api/integrations/stremio/disconnect`
-- `POST /api/integrations/{provider}/import/schedule`
-- `POST /api/integrations/{provider}/import/now`
+- `POST /api/integrations/import/quick/schedule`
+- `POST /api/integrations/import/quick`
 - `POST /api/integrations/import/all`
 
 ### Metadata
@@ -234,9 +234,8 @@ librarySync/
 - `LIBRARYSYNC_WORKER_MODES`
 - `LIBRARYSYNC_WORKER_OUTBOX_CONCURRENCY`
 - `LIBRARYSYNC_WORKER_METADATA_CONCURRENCY`
-- `LIBRARYSYNC_WORKER_IMPORTS_CONCURRENCY`
+- `LIBRARYSYNC_WORKER_QUICK_IMPORT_CONCURRENCY`
 - `LIBRARYSYNC_WORKER_IMPORT_ALL_CONCURRENCY`
-- `LIBRARYSYNC_WORKER_MERGE_CONCURRENCY`
 - `LIBRARYSYNC_TRAKT_RATE_LIMIT_PER_MINUTE`
 - `LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE`
 - `LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE`

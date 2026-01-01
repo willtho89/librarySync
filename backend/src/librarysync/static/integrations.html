@@ -35,10 +35,39 @@
     </header>
     <main>
       <section class="card">
+        <h2>Quick Import</h2>
+        <p class="helper-text">
+          Imports the last 7 days in priority order (Trakt → Letterboxd → SIMKL → Stremio).
+          Outbox delivery resumes after the merge completes.
+        </p>
+        <form id="quick-import-form">
+          <label>
+            Import schedule
+            <select name="quick_import_interval">
+              <option value="">Manual only</option>
+              <option value="21600">Every 6 hours</option>
+              <option value="43200">Every 12 hours</option>
+              <option value="86400">Every day</option>
+              <option value="259200">Every 3 days</option>
+              <option value="604800">Every 7 days</option>
+            </select>
+          </label>
+          <div class="button-row">
+            <button type="submit">Save schedule</button>
+            <button type="button" id="quick-import-now" class="secondary-button">
+              Import now
+            </button>
+          </div>
+          <p id="quick-import-last" class="helper-text"></p>
+          <p id="quick-import-message" class="form-message" role="status" hidden></p>
+        </form>
+      </section>
+      <section class="card">
         <h2>Import All</h2>
         <p class="helper-text">
-          Runs a full history import in priority order (Trakt → Letterboxd → SIMKL → Stremio).
-          Outbox delivery is paused while the import runs.
+          Runs a history import using the configured lookback window (HISTORY_LOOKBACK_DAYS)
+          in priority order (Trakt → Letterboxd → SIMKL → Stremio). Outbox delivery resumes
+          after the merge completes.
         </p>
         <div class="button-row">
           <button type="button" id="import-all-button">Import All</button>
@@ -105,33 +134,6 @@
           </div>
           <p id="letterboxd-message" class="form-message" role="status" hidden></p>
         </form>
-        <h3>History import</h3>
-        <form id="letterboxd-import-form">
-          <label>
-            Import schedule
-            <select name="import_interval">
-              <option value="">Manual only</option>
-              <option value="21600">Every 6 hours</option>
-              <option value="43200">Every 12 hours</option>
-              <option value="86400">Every day</option>
-              <option value="259200">Every 3 days</option>
-              <option value="604800">Every 7 days</option>
-            </select>
-          </label>
-          <div class="button-row">
-            <button type="submit">Save schedule</button>
-            <button type="button" id="letterboxd-import-now" class="secondary-button">
-              Import now
-            </button>
-          </div>
-          <p id="letterboxd-import-last" class="helper-text"></p>
-          <p
-            id="letterboxd-import-message"
-            class="form-message"
-            role="status"
-            hidden
-          ></p>
-        </form>
       </section>
       <section class="card">
         <h2>Trakt</h2>
@@ -142,28 +144,6 @@
             Disconnect
           </button>
         </div>
-        <h3>History import</h3>
-        <form id="trakt-import-form">
-          <label>
-            Import schedule
-            <select name="import_interval">
-              <option value="">Manual only</option>
-              <option value="21600">Every 6 hours</option>
-              <option value="43200">Every 12 hours</option>
-              <option value="86400">Every day</option>
-              <option value="259200">Every 3 days</option>
-              <option value="604800">Every 7 days</option>
-            </select>
-          </label>
-          <div class="button-row">
-            <button type="submit">Save schedule</button>
-            <button type="button" id="trakt-import-now" class="secondary-button">
-              Import now
-            </button>
-          </div>
-          <p id="trakt-import-last" class="helper-text"></p>
-          <p id="trakt-import-message" class="form-message" role="status" hidden></p>
-        </form>
       </section>
       <section class="card">
         <h2>SIMKL</h2>
@@ -174,28 +154,6 @@
             Disconnect
           </button>
         </div>
-        <h3>History import</h3>
-        <form id="simkl-import-form">
-          <label>
-            Import schedule
-            <select name="import_interval">
-              <option value="">Manual only</option>
-              <option value="21600">Every 6 hours</option>
-              <option value="43200">Every 12 hours</option>
-              <option value="86400">Every day</option>
-              <option value="259200">Every 3 days</option>
-              <option value="604800">Every 7 days</option>
-            </select>
-          </label>
-          <div class="button-row">
-            <button type="submit">Save schedule</button>
-            <button type="button" id="simkl-import-now" class="secondary-button">
-              Import now
-            </button>
-          </div>
-          <p id="simkl-import-last" class="helper-text"></p>
-          <p id="simkl-import-message" class="form-message" role="status" hidden></p>
-        </form>
       </section>
       <section class="card">
         <h2>Stremio</h2>
@@ -219,33 +177,6 @@
             </button>
           </div>
           <p id="stremio-message" class="form-message" role="status" hidden></p>
-        </form>
-        <h3>History import</h3>
-        <form id="stremio-import-form">
-          <label>
-            Import schedule
-            <select name="import_interval">
-              <option value="">Manual only</option>
-              <option value="21600">Every 6 hours</option>
-              <option value="43200">Every 12 hours</option>
-              <option value="86400">Every day</option>
-              <option value="259200">Every 3 days</option>
-              <option value="604800">Every 7 days</option>
-            </select>
-          </label>
-          <div class="button-row">
-            <button type="submit">Save schedule</button>
-            <button type="button" id="stremio-import-now" class="secondary-button">
-              Import now
-            </button>
-          </div>
-          <p id="stremio-import-last" class="helper-text"></p>
-          <p
-            id="stremio-import-message"
-            class="form-message"
-            role="status"
-            hidden
-          ></p>
         </form>
       </section>
     </main>

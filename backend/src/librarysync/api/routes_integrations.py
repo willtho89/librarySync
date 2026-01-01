@@ -44,19 +44,19 @@ from librarysync.connectors.services.trakt import (
     token_to_secret_payload,
 )
 from librarysync.core.import_all import (
-    IMPORT_ALL_PRIORITY,
     IMPORT_ALL_PROVIDER,
     build_import_all_config,
+    build_import_all_queue,
     get_or_create_system_integration,
     import_all_active,
 )
-from librarysync.core.import_schedule import (
-    DEFAULT_IMPORT_INTERVAL_SECONDS,
-    compute_next_import_at,
-    normalize_interval_seconds,
-    set_import_interval,
-    set_import_requested,
+from librarysync.core.import_control import (
+    build_quick_import_config,
+    mark_merge_required,
+    quick_import_active,
+    set_quick_import_interval,
 )
+from librarysync.core.import_schedule import normalize_interval_seconds
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.security import decrypt_value, encrypt_value
 from librarysync.db.models import Integration, IntegrationSecret, User
@@ -65,8 +65,6 @@ router = APIRouter(
     prefix="/api/integrations",
     tags=["integrations"],
 )
-
-IMPORTABLE_PROVIDERS = {"letterboxd", "trakt", "simkl", "stremio"}
 
 
 class IntegrationOut(BaseModel):
@@ -99,7 +97,7 @@ class StremioLoginConfig(BaseModel):
     api_base_url: str | None = None
 
 
-class ImportScheduleIn(BaseModel):
+class QuickImportScheduleIn(BaseModel):
     interval_seconds: int | None = None
 
 
@@ -108,14 +106,6 @@ def _normalize_optional(value: str | None) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
-
-
-def _refresh_next_import_at(integration: Integration, now: datetime) -> None:
-    integration.next_import_at = compute_next_import_at(
-        integration.config,
-        now,
-        default_interval_seconds=DEFAULT_IMPORT_INTERVAL_SECONDS,
-    )
 
 
 def _normalize_cookies(cookies: dict[str, str] | None) -> dict[str, str] | None:
@@ -128,38 +118,6 @@ def _normalize_cookies(cookies: dict[str, str] | None) -> dict[str, str] | None:
         if key_str and value_str:
             cleaned[key_str] = value_str
     return cleaned
-
-
-async def _build_import_all_queue(
-    db: AsyncSession, user_id: str
-) -> list[str]:
-    queue: list[str] = []
-    for provider in IMPORT_ALL_PRIORITY:
-        integration, secret_data = await load_integration_with_secrets(
-            db, user_id, provider
-        )
-        if not integration or not secret_data:
-            continue
-        if provider == "letterboxd":
-            if not has_required_letterboxd_fields(secret_data):
-                continue
-        elif provider == "trakt":
-            if not settings.trakt_client_id or not settings.trakt_client_secret:
-                continue
-            if not has_required_trakt_fields(secret_data):
-                continue
-        elif provider == "simkl":
-            if not settings.simkl_client_id or not settings.simkl_client_secret:
-                continue
-            if not has_required_simkl_fields(secret_data):
-                continue
-        elif provider == "stremio":
-            if not has_required_stremio_fields(secret_data):
-                continue
-        else:
-            continue
-        queue.append(provider)
-    return queue
 
 
 async def _load_letterboxd_integration(
@@ -281,12 +239,8 @@ async def save_letterboxd(
 
     config = dict(integration.config or {})
     config["api_base_url"] = api_base_url
-    if is_new:
-        config = set_import_interval(config, 0)
     integration.config = config
     integration.status = "configured"
-    now = datetime.now(timezone.utc)
-    _refresh_next_import_at(integration, now)
     db.add(integration)
     await db.flush()
 
@@ -443,105 +397,67 @@ async def letterboxd_disconnect(
     config = dict(integration.config or {})
     config.pop("member_id", None)
     integration.config = config
-    integration.next_import_at = None
     db.add(integration)
     await db.commit()
     return {"status": "ok"}
 
 
 @router.post(
-    "/{provider}/import/schedule",
-    summary="Configure history import schedule",
-    description="Update the history import interval for the selected integration.",
+    "/import/quick/schedule",
+    summary="Configure quick import schedule",
+    description="Update the quick import interval for the current user.",
 )
-async def update_import_schedule(
-    provider: str,
-    payload: ImportScheduleIn,
+async def update_quick_import_schedule(
+    payload: QuickImportScheduleIn,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    if provider not in IMPORTABLE_PROVIDERS:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Unknown provider",
-        )
     if payload.interval_seconds is not None and payload.interval_seconds < 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Interval must be a positive number of seconds",
         )
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == provider,
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Integration is not configured",
-        )
+    integration = await get_or_create_system_integration(db, current_user.id)
     interval_seconds = normalize_interval_seconds(payload.interval_seconds)
-    integration.config = set_import_interval(integration.config, interval_seconds)
-    now = datetime.now(timezone.utc)
-    _refresh_next_import_at(integration, now)
+    integration.config = set_quick_import_interval(integration.config, interval_seconds)
+    integration.status = "system"
     db.add(integration)
     await db.commit()
-
-    result = await db.execute(
-        select(IntegrationSecret.integration_id).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    has_secrets = result.scalar_one_or_none() is not None
-    return _integration_to_out(integration, has_secrets).model_dump()
+    return {"status": "ok", "interval_seconds": interval_seconds}
 
 
 @router.post(
-    "/{provider}/import/now",
-    summary="Trigger an immediate history import",
-    description="Queue an on-demand import for the selected integration.",
+    "/import/quick",
+    summary="Trigger a quick history import",
+    description="Queue a 7-day import across configured integrations.",
 )
-async def trigger_import_now(
-    provider: str,
+async def trigger_quick_import(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    if provider not in IMPORTABLE_PROVIDERS:
+    integration = await get_or_create_system_integration(db, current_user.id)
+    if import_all_active(integration.config) or quick_import_active(integration.config):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Unknown provider",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Import is already in progress",
         )
-    integration, secret_data = await load_integration_with_secrets(
-        db, current_user.id, provider
+    queue = await build_import_all_queue(db, current_user.id)
+    if not queue:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No integrations are ready for import",
+        )
+    now = datetime.now(timezone.utc)
+    integration.status = "system"
+    config = build_quick_import_config(
+        integration.config,
+        queue,
+        now,
     )
-    if not integration or not secret_data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Integration credentials are missing",
-        )
-    if provider == "letterboxd" and not has_required_letterboxd_fields(secret_data):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Letterboxd credentials are incomplete",
-        )
-    if provider == "trakt" and not has_required_trakt_fields(secret_data):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Trakt credentials are incomplete",
-        )
-    if provider == "simkl" and not has_required_simkl_fields(secret_data):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="SIMKL credentials are incomplete",
-        )
-    config = set_import_requested(integration.config, datetime.now(timezone.utc))
-    integration.config = config
-    _refresh_next_import_at(integration, datetime.now(timezone.utc))
+    integration.config = mark_merge_required(config, now)
     db.add(integration)
     await db.commit()
-    return {"status": "queued"}
+    return {"status": "queued", "providers": queue}
 
 
 @router.post(
@@ -554,23 +470,25 @@ async def trigger_import_all(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     integration = await get_or_create_system_integration(db, current_user.id)
-    if import_all_active(integration.config):
+    if import_all_active(integration.config) or quick_import_active(integration.config):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Import all is already in progress",
+            detail="Import is already in progress",
         )
-    queue = await _build_import_all_queue(db, current_user.id)
+    queue = await build_import_all_queue(db, current_user.id)
     if not queue:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No integrations are ready for import",
         )
+    now = datetime.now(timezone.utc)
     integration.status = "system"
-    integration.config = build_import_all_config(
+    config = build_import_all_config(
         integration.config,
         queue,
-        datetime.now(timezone.utc),
+        now,
     )
+    integration.config = mark_merge_required(config, now)
     db.add(integration)
     await db.commit()
     return {"status": "queued", "providers": queue}
@@ -593,7 +511,6 @@ async def trakt_start(
         )
     )
     integration = result.scalars().first()
-    is_new = integration is None
     if not integration:
         integration = Integration(
             user_id=current_user.id,
@@ -605,8 +522,6 @@ async def trakt_start(
     config = dict(integration.config or {})
     config["oauth_state"] = state
     config["oauth_state_expires_at"] = expires_at.isoformat()
-    if is_new:
-        config = set_import_interval(config, 0)
     integration.config = config
     integration.status = "pending"
     db.add(integration)
@@ -695,7 +610,6 @@ async def trakt_callback(
         if isinstance(username, str) and username.strip():
             config["trakt_username"] = username.strip()
             integration.config = config
-    _refresh_next_import_at(integration, datetime.now(timezone.utc))
     db.add(integration)
     await db.commit()
     return RedirectResponse(url="/static/integrations.html")
@@ -733,7 +647,6 @@ async def trakt_disconnect(
     config.pop("oauth_state", None)
     config.pop("oauth_state_expires_at", None)
     integration.config = config
-    integration.next_import_at = None
     db.add(integration)
     await db.commit()
     return {"status": "ok"}
@@ -756,7 +669,6 @@ async def simkl_start(
         )
     )
     integration = result.scalars().first()
-    is_new = integration is None
     if not integration:
         integration = Integration(
             user_id=current_user.id,
@@ -768,8 +680,6 @@ async def simkl_start(
     config = dict(integration.config or {})
     config["oauth_state"] = state
     config["oauth_state_expires_at"] = expires_at.isoformat()
-    if is_new:
-        config = set_import_interval(config, 0)
     integration.config = config
     integration.status = "pending"
     db.add(integration)
@@ -857,7 +767,6 @@ async def simkl_callback(
     if username:
         config["simkl_username"] = username
         integration.config = config
-    _refresh_next_import_at(integration, datetime.now(timezone.utc))
     db.add(integration)
     await db.commit()
     return RedirectResponse(url="/static/integrations.html")
@@ -895,7 +804,6 @@ async def simkl_disconnect(
     config.pop("oauth_state", None)
     config.pop("oauth_state_expires_at", None)
     integration.config = config
-    integration.next_import_at = None
     db.add(integration)
     await db.commit()
     return {"status": "ok"}
@@ -950,19 +858,13 @@ async def stremio_login(
             provider="stremio",
             status="connected",
         )
-        is_new = True
-    else:
-        is_new = False
 
     config = dict(integration.config or {})
     config["api_base_url"] = api_base_url
     _clear_stremio_profile(config)
     _apply_stremio_profile(config, login.user, email)
-    if is_new:
-        config = set_import_interval(config, 0)
     integration.status = "connected"
     integration.config = config
-    _refresh_next_import_at(integration, datetime.now(timezone.utc))
     db.add(integration)
     await db.flush()
 
@@ -1017,7 +919,6 @@ async def stremio_disconnect(
     config = dict(integration.config or {})
     _clear_stremio_profile(config)
     integration.config = config
-    integration.next_import_at = None
     db.add(integration)
     await db.commit()
     return {"status": "ok"}

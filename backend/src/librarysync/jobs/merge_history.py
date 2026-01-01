@@ -3,24 +3,14 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.core.scheduler import (
-    claim_scheduled_job,
-    complete_scheduled_job,
-    release_scheduled_job,
-)
 from librarysync.db.models import MediaItem, OutboxJob, WatchedItem, WatchSync
-from librarysync.db.session import SessionLocal, init_session_factory
 
 logger = logging.getLogger(__name__)
-MERGE_HISTORY_JOB = "merge_history"
-MERGE_HISTORY_INTERVAL = timedelta(hours=6)
-MERGE_HISTORY_LEASE = timedelta(minutes=30)
-MERGE_HISTORY_RETRY_DELAY = timedelta(minutes=10)
 
 
 @dataclass
@@ -29,38 +19,23 @@ class WatchedRow:
     media: MediaItem
 
 
-async def process_history_merges_once() -> int:
-    init_session_factory()
-    async with SessionLocal() as db:
-        now = datetime.now(timezone.utc)
-        job = await claim_scheduled_job(
-            db,
-            MERGE_HISTORY_JOB,
-            MERGE_HISTORY_INTERVAL,
-            MERGE_HISTORY_LEASE,
-            now=now,
+async def merge_history_for_user(db: AsyncSession, user_id: str) -> int:
+    result = await db.execute(
+        select(WatchedItem, MediaItem)
+        .join(MediaItem, WatchedItem.media_item_id == MediaItem.id)
+        .where(
+            WatchedItem.user_id == user_id,
+            MediaItem.media_type == "movie",
         )
-        if not job:
-            return 0
-        result = await db.execute(
-            select(WatchedItem, MediaItem)
-            .join(MediaItem, WatchedItem.media_item_id == MediaItem.id)
-            .where(MediaItem.media_type == "movie")
-            .order_by(WatchedItem.user_id, WatchedItem.watched_at)
-        )
-        rows = [WatchedRow(watched, media) for watched, media in result.all()]
-        try:
-            if not rows:
-                await complete_scheduled_job(db, job, MERGE_HISTORY_INTERVAL, now=now)
-                return 0
-            merged_count = await _merge_movie_history(db, rows)
-            if merged_count:
-                logger.info("Merged %s watched entries", merged_count)
-            await complete_scheduled_job(db, job, MERGE_HISTORY_INTERVAL, now=now)
-            return merged_count
-        except Exception:
-            await release_scheduled_job(db, job, MERGE_HISTORY_RETRY_DELAY, now=now)
-            raise
+        .order_by(WatchedItem.watched_at)
+    )
+    rows = [WatchedRow(watched, media) for watched, media in result.all()]
+    if not rows:
+        return 0
+    merged_count = await _merge_movie_history(db, rows)
+    if merged_count:
+        logger.info("Merged %s watched entries for user %s", merged_count, user_id)
+    return merged_count
 
 
 async def _merge_movie_history(
@@ -128,7 +103,7 @@ async def _merge_cluster(
     duplicate_ids = [row.watched.id for row in duplicate_rows]
     syncs = await _load_syncs(db, duplicate_ids + [primary_watched.id])
     sync_map, delete_syncs = _select_syncs(syncs, primary_watched.id)
-    await _repoint_outbox_jobs(db, sync_map, primary_watched.id)
+    await _repoint_outbox_jobs(db, sync_map, primary_watched.id, duplicate_ids)
     for sync in delete_syncs:
         await db.delete(sync)
 
@@ -300,24 +275,36 @@ def _merge_sync_fields(primary: WatchSync, other: WatchSync) -> None:
 
 
 async def _repoint_outbox_jobs(
-    db: AsyncSession, sync_map: dict[str, str], primary_watched_id: str
+    db: AsyncSession,
+    sync_map: dict[str, str],
+    primary_watched_id: str,
+    duplicate_watched_ids: list[str],
 ) -> None:
-    if not sync_map:
+    if not sync_map and not duplicate_watched_ids:
         return
-    result = await db.execute(
-        select(OutboxJob).where(
+    criteria = []
+    if sync_map:
+        criteria.append(
             OutboxJob.payload["watch_sync_id"]
             .as_string()
             .in_(list(sync_map.keys()))
         )
-    )
+    if duplicate_watched_ids:
+        criteria.append(
+            OutboxJob.payload["watched_item_id"]
+            .as_string()
+            .in_(duplicate_watched_ids)
+        )
+    result = await db.execute(select(OutboxJob).where(or_(*criteria)))
     jobs = result.scalars().all()
+    duplicate_set = set(duplicate_watched_ids)
     for job in jobs:
         payload = dict(job.payload or {})
         old_sync_id = payload.get("watch_sync_id")
         if old_sync_id in sync_map:
             payload["watch_sync_id"] = sync_map[old_sync_id]
-        payload["watched_item_id"] = primary_watched_id
+        if payload.get("watched_item_id") in duplicate_set or sync_map:
+            payload["watched_item_id"] = primary_watched_id
         job.payload = payload
 
 

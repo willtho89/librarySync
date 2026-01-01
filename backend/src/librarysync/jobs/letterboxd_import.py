@@ -18,7 +18,6 @@ from librarysync.connectors.services.letterboxd import (
     extract_member_id,
     has_required_letterboxd_fields,
 )
-from librarysync.core.import_schedule import IMPORT_LAST_RUN_KEY, parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.watch_pipeline import enqueue_new_item_job
@@ -29,7 +28,6 @@ from librarysync.db.models import (
     WatchEvent,
     WatchSync,
 )
-from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
 LOOKBACK_DAYS = settings.history_lookback_days
@@ -79,22 +77,6 @@ class LetterboxdImportStrategy(ImportStrategy):
             self._per_page,
             self._max_pages,
         )
-
-
-async def process_letterboxd_imports_once(
-    lookback_days: int = LOOKBACK_DAYS,
-    per_page: int = PER_PAGE,
-    max_pages: int = MAX_PAGES,
-) -> int:
-    init_session_factory()
-    async with SessionLocal() as db:
-        strategy = LetterboxdImportStrategy(
-            lookback_days=lookback_days,
-            per_page=per_page,
-            max_pages=max_pages,
-        )
-        now = datetime.now(timezone.utc)
-        return await strategy.run_once(db, now)
 
 
 async def _import_for_integration(
@@ -147,9 +129,8 @@ async def _import_for_integration(
                     db.add(integration)
                     await db.commit()
         now = datetime.now(timezone.utc)
-        last_run = parse_datetime((integration.config or {}).get(IMPORT_LAST_RUN_KEY))
-        full_history = lookback_days < 0 and last_run is None
-        since = _select_letterboxd_since(now, lookback_days, last_run)
+        full_history = lookback_days < 0
+        since = _select_letterboxd_since(now, lookback_days)
         entries = await client.get_history(
             access_token,
             since=since,
@@ -184,17 +165,10 @@ async def _import_for_integration(
     return ImportResult(imported=imported, attempted=True)
 
 
-def _select_letterboxd_since(
-    now: datetime, lookback_days: int, last_run: datetime | None
-) -> datetime:
+def _select_letterboxd_since(now: datetime, lookback_days: int) -> datetime:
     if lookback_days < 0:
-        if last_run:
-            return last_run - timedelta(minutes=5)
         return FULL_HISTORY_START
-    window_start = now - timedelta(days=lookback_days)
-    if last_run and last_run > window_start:
-        return last_run - timedelta(minutes=5)
-    return window_start
+    return now - timedelta(days=lookback_days)
 
 
 async def _import_entry(db: AsyncSession, user_id: str, entry: dict[str, Any]) -> bool:

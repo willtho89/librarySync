@@ -21,7 +21,6 @@ from librarysync.connectors.services.stremio_watched_bitfield import (
     WatchedBitFieldError,
     watched_bitfield_from_string,
 )
-from librarysync.core.import_schedule import IMPORT_LAST_RUN_KEY, parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
@@ -32,7 +31,6 @@ from librarysync.db.models import (
     WatchEvent,
     WatchSync,
 )
-from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
 LOOKBACK_DAYS = settings.history_lookback_days
@@ -109,22 +107,7 @@ class StremioImportStrategy(ImportStrategy):
             integration,
             self._lookback_days,
             self._batch_size,
-            requested_at,
         )
-
-
-async def process_stremio_imports_once(
-    lookback_days: int = LOOKBACK_DAYS,
-    batch_size: int = BATCH_SIZE,
-) -> int:
-    init_session_factory()
-    async with SessionLocal() as db:
-        strategy = StremioImportStrategy(
-            lookback_days=lookback_days,
-            batch_size=batch_size,
-        )
-        now = datetime.now(timezone.utc)
-        return await strategy.run_once(db, now)
 
 
 async def _import_for_integration(
@@ -132,7 +115,6 @@ async def _import_for_integration(
     integration: Integration,
     lookback_days: int,
     batch_size: int,
-    requested_at: datetime | None,
 ) -> ImportResult:
     integration, secret_data = await load_integration_with_secrets(
         db, integration.user_id, "stremio"
@@ -150,15 +132,9 @@ async def _import_for_integration(
     client = StremioClient(api_base_url=api_base_url)
 
     now = datetime.now(timezone.utc)
-    last_run = parse_datetime((integration.config or {}).get(IMPORT_LAST_RUN_KEY))
-    force_full = bool(requested_at and (last_run is None or requested_at > last_run))
-    full_history = lookback_days < 0 and last_run is None
-    rewatch_cutoff = _compute_rewatch_cutoff(now, last_run)
-    since = None if lookback_days < 0 else now - timedelta(days=lookback_days)
-    if force_full:
-        since = None
-    elif last_run and (since is None or last_run > since):
-        since = last_run - timedelta(minutes=5)
+    full_history = lookback_days < 0
+    rewatch_cutoff = _compute_rewatch_cutoff(now, lookback_days)
+    since = None if full_history else now - timedelta(days=lookback_days)
 
     try:
         timestamps = await client.get_library_item_timestamps(auth_key)
@@ -1017,13 +993,12 @@ def _watch_score(watched: WatchedItem) -> tuple[int, datetime]:
     return (_source_priority(watched.source), watched.watched_at)
 
 
-def _compute_rewatch_cutoff(now: datetime, last_run: datetime | None) -> datetime | None:
-    if not last_run:
+def _compute_rewatch_cutoff(now: datetime, lookback_days: int) -> datetime | None:
+    if lookback_days < 0:
         return None
-    delta = now - last_run
-    if delta.total_seconds() <= 0:
-        return now
-    return now - (delta * 2)
+    if lookback_days <= 0:
+        return None
+    return now - timedelta(days=lookback_days)
 
 
 def _select_item_ids(timestamps: list[Any], since: datetime | None) -> list[str]:

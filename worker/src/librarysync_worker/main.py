@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from librarysync.config import settings
-from librarysync.jobs.imports import process_import_all_once, process_imports_once
-from librarysync.jobs.merge_history import process_history_merges_once
+from librarysync.jobs.imports import process_import_all_once, process_quick_import_once
 from librarysync.jobs.metadata_lookup import process_metadata_lookups_once
 from librarysync.jobs.process_outbox import process_outbox_once
 
@@ -24,9 +23,8 @@ class ModeConfig:
 MODE_CONFIGS: dict[str, ModeConfig] = {
     "outbox": ModeConfig("outbox", process_outbox_once, 0.5, 0.1),
     "metadata": ModeConfig("metadata", process_metadata_lookups_once, 1.0, 0.2),
-    "imports": ModeConfig("imports", process_imports_once, 2.0, 0.5),
+    "quick_import": ModeConfig("quick_import", process_quick_import_once, 2.0, 0.5),
     "import_all": ModeConfig("import_all", process_import_all_once, 2.0, 0.5),
-    "merge": ModeConfig("merge", process_history_merges_once, 10.0, 1.0),
 }
 
 

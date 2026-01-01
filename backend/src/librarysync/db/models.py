@@ -47,8 +47,6 @@ class Integration(Base):
     __tablename__ = "integrations"
     __table_args__ = (
         UniqueConstraint("user_id", "provider", name="uq_integrations_user_provider"),
-        Index("ix_integrations_next_import_at", "next_import_at"),
-        Index("ix_integrations_import_lease_until", "import_lease_until"),
     )
 
     id: Mapped[str] = mapped_column(
@@ -60,13 +58,6 @@ class Integration(Base):
     provider: Mapped[str] = mapped_column(String(50), index=True)
     status: Mapped[str] = mapped_column(String(32), default="configured")
     config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    next_import_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    import_lease_until: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    import_lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

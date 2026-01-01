@@ -6,15 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
-from librarysync.core.import_schedule import (
-    DEFAULT_IMPORT_INTERVAL_SECONDS,
-    IMPORT_INTERVAL_KEY,
-    IMPORT_LAST_RUN_KEY,
-    IMPORT_REQUESTED_KEY,
-    compute_next_import_at,
-    normalize_interval_seconds,
-    parse_datetime,
+from librarysync.core.import_all import IMPORT_ALL_PROVIDER, parse_import_all_state
+from librarysync.core.import_control import (
+    MERGE_COMPLETED_AT_KEY,
+    MERGE_ERROR_KEY,
+    MERGE_REQUIRED_AT_KEY,
+    next_quick_import_at,
+    parse_quick_import_state,
 )
+from librarysync.core.import_schedule import parse_datetime
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
@@ -251,34 +251,19 @@ async def status(
 ) -> dict:
     now = datetime.now(timezone.utc)
 
-    integrations_result = await db.execute(
-        select(Integration).where(Integration.user_id == current_user.id)
-    )
-    integrations: list[dict] = []
-    for integration in integrations_result.scalars().all():
-        config = integration.config or {}
-        interval_seconds = normalize_interval_seconds(config.get(IMPORT_INTERVAL_KEY))
-        last_run = parse_datetime(config.get(IMPORT_LAST_RUN_KEY))
-        requested_at = parse_datetime(config.get(IMPORT_REQUESTED_KEY))
-        next_import_at = integration.next_import_at
-        if next_import_at is None and (
-            interval_seconds is not None or last_run or requested_at
-        ):
-            next_import_at = compute_next_import_at(
-                config, now, DEFAULT_IMPORT_INTERVAL_SECONDS
-            )
-        integrations.append(
-            {
-                "provider": integration.provider,
-                "status": integration.status,
-                "next_import_at": next_import_at,
-                "last_import_at": last_run,
-                "requested_at": requested_at,
-                "interval_seconds": interval_seconds,
-                "lease_until": integration.import_lease_until,
-                "lease_owner": integration.import_lease_owner,
-            }
+    system_result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == IMPORT_ALL_PROVIDER,
         )
+    )
+    system_integration = system_result.scalars().first()
+    system_config = system_integration.config if system_integration else {}
+    quick_state = parse_quick_import_state(system_config)
+    import_all_state = parse_import_all_state(system_config)
+    merge_required_at = parse_datetime(system_config.get(MERGE_REQUIRED_AT_KEY))
+    merge_completed_at = parse_datetime(system_config.get(MERGE_COMPLETED_AT_KEY))
+    merge_error = system_config.get(MERGE_ERROR_KEY)
 
     scheduled_result = await db.execute(select(ScheduledJob))
     scheduled_jobs = [
@@ -290,6 +275,7 @@ async def status(
             "lease_owner": job.lease_owner,
         }
         for job in scheduled_result.scalars().all()
+        if job.name != "merge_history"
     ]
 
     outbox_counts: dict[str, int] = {}
@@ -333,7 +319,34 @@ async def status(
 
     return {
         "server_time": now,
-        "import_schedules": integrations,
+        "imports": {
+            "quick": {
+                "status": quick_state.status,
+                "interval_seconds": quick_state.interval_seconds,
+                "next_run_at": next_quick_import_at(system_config, now),
+                "last_run_at": quick_state.last_run_at,
+                "requested_at": quick_state.requested_at,
+                "started_at": quick_state.started_at,
+                "completed_at": quick_state.completed_at,
+                "error": quick_state.error,
+                "queue": quick_state.queue,
+                "index": quick_state.index,
+            },
+            "import_all": {
+                "status": import_all_state.status,
+                "requested_at": import_all_state.requested_at,
+                "started_at": import_all_state.started_at,
+                "completed_at": import_all_state.completed_at,
+                "error": import_all_state.error,
+                "queue": import_all_state.queue,
+                "index": import_all_state.index,
+            },
+            "merge": {
+                "required_at": merge_required_at,
+                "completed_at": merge_completed_at,
+                "error": merge_error,
+            },
+        },
         "scheduled_jobs": scheduled_jobs,
         "outbox": {
             "counts": outbox_counts,

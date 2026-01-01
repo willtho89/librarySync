@@ -35,7 +35,9 @@ const historyState = {
   },
   searchTimer: null,
 };
-const DEFAULT_IMPORT_INTERVAL_SECONDS = 86400;
+const integrationState = {
+  hasAnyImports: false,
+};
 
 function bindForm(id, handler) {
   const form = document.getElementById(id);
@@ -83,42 +85,34 @@ function formatImportTimestamp(value) {
   return `Last import: ${date.toLocaleString()}`;
 }
 
-function applyImportControls(provider, integration) {
-  const form = document.getElementById(`${provider}-import-form`);
+function applyQuickImportControls(statusData) {
+  const form = document.getElementById("quick-import-form");
   if (!form) {
     return;
   }
-  const select = form.querySelector("select[name='import_interval']");
-  const lastEl = document.getElementById(`${provider}-import-last`);
-  const importNow = document.getElementById(`${provider}-import-now`);
-  const hasSecrets = integration && integration.has_secrets;
+  const select = form.querySelector("select[name='quick_import_interval']");
+  const lastEl = document.getElementById("quick-import-last");
+  const importNow = document.getElementById("quick-import-now");
+  const quickImport =
+    statusData && statusData.imports ? statusData.imports.quick : null;
+  const intervalSeconds = quickImport ? quickImport.interval_seconds : null;
   if (select) {
-    const rawInterval =
-      integration && integration.config
-        ? integration.config.import_interval_seconds
-        : null;
-    let intervalValue = parseIntervalSeconds(rawInterval);
-    if (intervalValue === null && hasSecrets) {
-      intervalValue = DEFAULT_IMPORT_INTERVAL_SECONDS;
-    }
-    select.value = intervalValue ? String(intervalValue) : "";
-    select.disabled = !hasSecrets;
+    select.value =
+      intervalSeconds && intervalSeconds > 0 ? String(intervalSeconds) : "";
+    select.disabled = !integrationState.hasAnyImports;
   }
   if (importNow) {
-    importNow.disabled = !hasSecrets;
+    importNow.disabled = !integrationState.hasAnyImports;
   }
-  if (!hasSecrets) {
+  if (!integrationState.hasAnyImports) {
     if (lastEl) {
-      lastEl.textContent = "Connect to enable history import.";
+      lastEl.textContent = "Connect an integration to enable quick import.";
     }
-    setMessage(`${provider}-import-message`, "");
+    setMessage("quick-import-message", "");
     return;
   }
   if (lastEl) {
-    const lastRun =
-      integration && integration.config
-        ? integration.config.import_last_run_at
-        : null;
+    const lastRun = quickImport ? quickImport.last_run_at : null;
     lastEl.textContent = formatImportTimestamp(lastRun);
   }
 }
@@ -265,7 +259,6 @@ async function loadIntegrations() {
         letterboxdDisconnect.hidden = true;
       }
     }
-    applyImportControls("letterboxd", letterboxd);
   }
 
   const trakt = integrations.find((item) => item.provider === "trakt");
@@ -297,7 +290,6 @@ async function loadIntegrations() {
       traktDisconnect.hidden = true;
     }
   }
-  applyImportControls("trakt", trakt);
 
   const simkl = integrations.find((item) => item.provider === "simkl");
   const simklMessage = document.getElementById("simkl-message");
@@ -326,7 +318,6 @@ async function loadIntegrations() {
       simklDisconnect.hidden = true;
     }
   }
-  applyImportControls("simkl", simkl);
 
   const stremio = integrations.find((item) => item.provider === "stremio");
   const stremioForm = document.getElementById("stremio-form");
@@ -355,13 +346,12 @@ async function loadIntegrations() {
       stremioDisconnect.hidden = true;
     }
   }
-  applyImportControls("stremio", stremio);
-
+  integrationState.hasAnyImports = integrations.some((item) => item.has_secrets);
   const importAllButton = document.getElementById("import-all-button");
   if (importAllButton) {
-    const hasAnyImports = integrations.some((item) => item.has_secrets);
-    importAllButton.disabled = !hasAnyImports;
+    importAllButton.disabled = !integrationState.hasAnyImports;
   }
+  applyQuickImportControls(activityState.status);
 
   renderHistorySyncButtons(integrations);
 }
@@ -738,40 +728,40 @@ async function handleStremioDisconnect() {
   }
 }
 
-async function handleImportScheduleSave(provider, data) {
-  setMessage(`${provider}-import-message`, "");
-  const rawInterval = data.get("import_interval");
+async function handleQuickImportScheduleSave(data) {
+  setMessage("quick-import-message", "");
+  const rawInterval = data.get("quick_import_interval");
   const intervalSeconds = parseIntervalSeconds(rawInterval);
   if (rawInterval && intervalSeconds === null) {
-    setMessage(
-      `${provider}-import-message`,
-      "Select a valid import schedule.",
-      true
-    );
+    setMessage("quick-import-message", "Select a valid import schedule.", true);
     return;
   }
   try {
-    await requestJSON(`/api/integrations/${provider}/import/schedule`, {
+    await requestJSON("/api/integrations/import/quick/schedule", {
       method: "POST",
       body: JSON.stringify({ interval_seconds: intervalSeconds }),
     });
-    setMessage(`${provider}-import-message`, "Schedule saved.");
-    await loadIntegrations();
+    setMessage("quick-import-message", "Schedule saved.");
+    await loadActivity();
   } catch (error) {
-    setMessage(`${provider}-import-message`, error.message, true);
+    setMessage("quick-import-message", error.message, true);
   }
 }
 
-async function handleImportNow(provider) {
-  setMessage(`${provider}-import-message`, "Requesting import...");
+async function handleQuickImportNow() {
+  setMessage("quick-import-message", "Requesting import...");
   try {
-    await requestJSON(`/api/integrations/${provider}/import/now`, {
+    const response = await requestJSON("/api/integrations/import/quick", {
       method: "POST",
     });
-    setMessage(`${provider}-import-message`, "Import requested.");
-    await loadIntegrations();
+    const providers = response && response.providers ? response.providers : [];
+    const label = providers.length
+      ? `Quick import queued: ${providers.join(", ")}.`
+      : "Quick import requested.";
+    setMessage("quick-import-message", label);
+    await loadActivity();
   } catch (error) {
-    setMessage(`${provider}-import-message`, error.message, true);
+    setMessage("quick-import-message", error.message, true);
   }
 }
 
@@ -790,7 +780,7 @@ async function handleImportAll() {
       ? `Import queued: ${providers.join(", ")}.`
       : "Import requested.";
     setMessage("import-all-message", label);
-    await loadIntegrations();
+    await loadActivity();
   } catch (error) {
     setMessage("import-all-message", error.message, true);
   } finally {
@@ -2690,20 +2680,8 @@ function renderActivitySummary(statusData) {
   const pending = (counts.pending || 0) + (counts.failed_retryable || 0);
   const inProgress = counts.in_progress || 0;
   const nextOutbox = outbox.next_run_at || null;
-  const importSchedules = statusData.import_schedules || [];
-  let nextImport = null;
-  importSchedules.forEach((schedule) => {
-    if (!schedule.next_import_at) {
-      return;
-    }
-    if (!nextImport) {
-      nextImport = schedule.next_import_at;
-      return;
-    }
-    if (new Date(schedule.next_import_at) < new Date(nextImport)) {
-      nextImport = schedule.next_import_at;
-    }
-  });
+  const quickImport = statusData.imports ? statusData.imports.quick : null;
+  const nextImport = quickImport ? quickImport.next_run_at : null;
   const lastRefresh = activityState.lastRefresh
     ? activityState.lastRefresh.toLocaleTimeString()
     : "Unknown";
@@ -2754,28 +2732,29 @@ function renderScheduleGroup(title, rows) {
   return group;
 }
 
-function buildIntegrationScheduleRow(schedule) {
+function buildQuickImportRow(quick) {
+  if (!quick) {
+    return null;
+  }
   const row = document.createElement("div");
   row.className = "schedule-row";
 
   const main = document.createElement("div");
   const title = document.createElement("div");
   title.className = "schedule-title";
-  title.textContent = `${formatProvider(schedule.provider)} import`;
+  title.textContent = "Quick import";
   const meta = document.createElement("div");
   meta.className = "schedule-meta";
-  const metaParts = [formatInterval(schedule.interval_seconds)];
-  if (schedule.status) {
-    metaParts.push(formatLabel(schedule.status));
+  const intervalLabel = formatInterval(quick.interval_seconds);
+  const metaParts = [intervalLabel || "Manual only"];
+  if (quick.status) {
+    metaParts.push(formatLabel(quick.status));
   }
-  if (schedule.last_import_at) {
-    metaParts.push(`Last run ${formatMetadataDate(schedule.last_import_at)}`);
+  if (quick.last_run_at) {
+    metaParts.push(`Last run ${formatMetadataDate(quick.last_run_at)}`);
   }
-  if (schedule.requested_at) {
-    metaParts.push(`Requested ${formatMetadataDate(schedule.requested_at)}`);
-  }
-  if (schedule.lease_until && new Date(schedule.lease_until) > new Date()) {
-    metaParts.push(`Leased until ${formatMetadataDate(schedule.lease_until)}`);
+  if (quick.requested_at) {
+    metaParts.push(`Requested ${formatMetadataDate(quick.requested_at)}`);
   }
   meta.textContent = metaParts.join(" · ");
   main.appendChild(title);
@@ -2783,16 +2762,58 @@ function buildIntegrationScheduleRow(schedule) {
 
   const time = document.createElement("div");
   time.className = "schedule-time";
-  const nextLabel = schedule.next_import_at
-    ? formatRelativeTime(schedule.next_import_at)
+  const nextLabel = quick.next_run_at
+    ? formatRelativeTime(quick.next_run_at)
     : "Not scheduled";
   time.textContent = nextLabel;
-  if (schedule.next_import_at) {
+  if (quick.next_run_at) {
     const details = document.createElement("small");
-    details.textContent = formatMetadataDate(schedule.next_import_at);
+    details.textContent = formatMetadataDate(quick.next_run_at);
     time.appendChild(details);
   }
-  if (schedule.lease_until && new Date(schedule.lease_until) > new Date()) {
+  if (quick.status === "in_progress") {
+    time.prepend(createStatusBadge("Running", "in_progress"));
+  }
+
+  row.appendChild(main);
+  row.appendChild(time);
+  return row;
+}
+
+function buildImportAllRow(importAll) {
+  if (!importAll || !importAll.status) {
+    return null;
+  }
+  const row = document.createElement("div");
+  row.className = "schedule-row";
+
+  const main = document.createElement("div");
+  const title = document.createElement("div");
+  title.className = "schedule-title";
+  title.textContent = "Import all";
+  const meta = document.createElement("div");
+  meta.className = "schedule-meta";
+  const metaParts = [formatLabel(importAll.status)];
+  if (importAll.requested_at) {
+    metaParts.push(`Requested ${formatMetadataDate(importAll.requested_at)}`);
+  }
+  if (importAll.completed_at) {
+    metaParts.push(`Completed ${formatMetadataDate(importAll.completed_at)}`);
+  }
+  meta.textContent = metaParts.join(" · ");
+  main.appendChild(title);
+  main.appendChild(meta);
+
+  const time = document.createElement("div");
+  time.className = "schedule-time";
+  const statusLabel = formatLabel(importAll.status || "idle");
+  time.textContent = statusLabel;
+  if (importAll.started_at) {
+    const details = document.createElement("small");
+    details.textContent = formatMetadataDate(importAll.started_at);
+    time.appendChild(details);
+  }
+  if (importAll.status === "in_progress") {
     time.prepend(createStatusBadge("Running", "in_progress"));
   }
 
@@ -2854,19 +2875,21 @@ function renderSchedule(statusData) {
     container.appendChild(empty);
     return;
   }
-  const importSchedules = (statusData.import_schedules || []).filter(
-    (schedule) => schedule.provider !== "system"
-  );
+  const imports = statusData.imports || {};
   const scheduledJobs = statusData.scheduled_jobs || [];
 
   const rows = [];
-  if (importSchedules.length) {
-    rows.push(
-      renderScheduleGroup(
-        "Imports",
-        importSchedules.map((schedule) => buildIntegrationScheduleRow(schedule))
-      )
-    );
+  const importRows = [];
+  const quickRow = buildQuickImportRow(imports.quick);
+  if (quickRow) {
+    importRows.push(quickRow);
+  }
+  const importAllRow = buildImportAllRow(imports.import_all);
+  if (importAllRow) {
+    importRows.push(importAllRow);
+  }
+  if (importRows.length) {
+    rows.push(renderScheduleGroup("Imports", importRows));
   }
   if (scheduledJobs.length) {
     rows.push(
@@ -3148,6 +3171,7 @@ async function loadActivity(silent = false) {
     activityState.events =
       eventsData && eventsData.events ? eventsData.events : [];
     activityState.lastRefresh = new Date();
+    applyQuickImportControls(statusData);
     updateProviderFilterOptions(activityState.jobs);
     renderActivitySummary(statusData);
     renderSchedule(statusData);
@@ -3215,19 +3239,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindForm("login-form", handleLogin);
   bindForm("register-form", handleRegister);
   bindForm("letterboxd-form", handleLetterboxdSave);
-  bindForm("letterboxd-import-form", (data) =>
-    handleImportScheduleSave("letterboxd", data)
-  );
+  bindForm("quick-import-form", handleQuickImportScheduleSave);
   bindForm("stremio-form", handleStremioConnect);
-  bindForm("stremio-import-form", (data) =>
-    handleImportScheduleSave("stremio", data)
-  );
-  bindForm("trakt-import-form", (data) =>
-    handleImportScheduleSave("trakt", data)
-  );
-  bindForm("simkl-import-form", (data) =>
-    handleImportScheduleSave("simkl", data)
-  );
   bindForm("settings-form", handleSettingsSave);
   bindForm("tmdb-form", handleTmdbSave);
   bindForm("tvdb-form", handleTvdbSave);
@@ -3271,11 +3284,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (importAllButton) {
     importAllButton.addEventListener("click", handleImportAll);
   }
-  const letterboxdImportNow = document.getElementById("letterboxd-import-now");
-  if (letterboxdImportNow) {
-    letterboxdImportNow.addEventListener("click", () =>
-      handleImportNow("letterboxd")
-    );
+  const quickImportNow = document.getElementById("quick-import-now");
+  if (quickImportNow) {
+    quickImportNow.addEventListener("click", handleQuickImportNow);
   }
   const letterboxdParse = document.getElementById("letterboxd-parse");
   if (letterboxdParse) {
@@ -3293,25 +3304,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (traktDisconnect) {
     traktDisconnect.addEventListener("click", handleTraktDisconnect);
   }
-  const traktImportNow = document.getElementById("trakt-import-now");
-  if (traktImportNow) {
-    traktImportNow.addEventListener("click", () =>
-      handleImportNow("trakt")
-    );
-  }
-  const simklImportNow = document.getElementById("simkl-import-now");
-  if (simklImportNow) {
-    simklImportNow.addEventListener("click", () =>
-      handleImportNow("simkl")
-    );
-  }
-  const stremioImportNow = document.getElementById("stremio-import-now");
-  if (stremioImportNow) {
-    stremioImportNow.addEventListener("click", () =>
-      handleImportNow("stremio")
-    );
-  }
-
   const simklConnect = document.getElementById("simkl-connect");
   if (simklConnect) {
     simklConnect.addEventListener("click", handleSimklConnect);

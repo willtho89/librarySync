@@ -7,7 +7,13 @@ from typing import Any, Iterable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from librarysync.config import settings
+from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
+from librarysync.connectors.services.simkl import has_required_simkl_fields
+from librarysync.connectors.services.stremio import has_required_stremio_fields
+from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.import_schedule import parse_datetime
+from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.db.models import Integration
 
 IMPORT_ALL_PROVIDER = "system"
@@ -124,6 +130,36 @@ async def get_or_create_system_integration(
     db.add(integration)
     await db.flush()
     return integration
+
+
+async def build_import_all_queue(db: AsyncSession, user_id: str) -> list[str]:
+    queue: list[str] = []
+    for provider in IMPORT_ALL_PRIORITY:
+        integration, secret_data = await load_integration_with_secrets(
+            db, user_id, provider
+        )
+        if not integration or not secret_data:
+            continue
+        if provider == "letterboxd":
+            if not has_required_letterboxd_fields(secret_data):
+                continue
+        elif provider == "trakt":
+            if not settings.trakt_client_id or not settings.trakt_client_secret:
+                continue
+            if not has_required_trakt_fields(secret_data):
+                continue
+        elif provider == "simkl":
+            if not settings.simkl_client_id or not settings.simkl_client_secret:
+                continue
+            if not has_required_simkl_fields(secret_data):
+                continue
+        elif provider == "stremio":
+            if not has_required_stremio_fields(secret_data):
+                continue
+        else:
+            continue
+        queue.append(provider)
+    return queue
 
 
 async def load_active_import_all_users(db: AsyncSession) -> set[str]:

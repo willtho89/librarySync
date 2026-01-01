@@ -52,7 +52,7 @@ from librarysync.connectors.services.trakt import (
     parse_expires_at,
     token_to_secret_payload,
 )
-from librarysync.core.import_all import load_active_import_all_users
+from librarysync.core.import_control import load_blocked_outbox_users
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.core.ratings import coerce_star_rating
@@ -333,7 +333,7 @@ async def _deliver_batch(db: AsyncSession, jobs: list[OutboxJob]) -> int | None:
 async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
     now = datetime.now(timezone.utc)
     async with db.begin():
-        active_users = await load_active_import_all_users(db)
+        blocked_users = await load_blocked_outbox_users(db)
         query = (
             select(OutboxJob)
             .where(
@@ -341,8 +341,8 @@ async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
                 or_(OutboxJob.run_after.is_(None), OutboxJob.run_after <= now),
             )
         )
-        if active_users:
-            query = query.where(~OutboxJob.user_id.in_(active_users))
+        if blocked_users:
+            query = query.where(~OutboxJob.user_id.in_(blocked_users))
         query = (
             query.order_by(OutboxJob.user_id, OutboxJob.created_at)
             .limit(limit)

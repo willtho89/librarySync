@@ -11,7 +11,7 @@ my watch history in sync.
 - Multi-user auth with JWT cookies and optional registration.
 - Manual watch history (add/update/delete) with optional downstream deletion.
 - Ratings support synced where supported.
-- Imports from Trakt, SIMKL, Letterboxd, and Stremio.
+- Imports from Trakt, SIMKL, Letterboxd, and Stremio (quick import + import all).
 - Outbox-based delivery with retries and per-user rate limiting.
 - Metadata lookup and enrichment with TMDB, TVDB, IMDb, TVMaze, Kitsu, MyAnimeList.
 - Minimal web UI (static HTML + JS).
@@ -47,7 +47,7 @@ All defaults below are from `.env.example`.
 - `LIBRARYSYNC_ADMIN_API_KEY` (default `your_admin_api_key`): required for admin endpoints.
 - `LIBRARYSYNC_BASE_URL` (default `http://localhost:8000`): base URL for OAuth callbacks.
 - `LOG_LEVEL` (default `INFO`): logging level.
-- `HISTORY_LOOKBACK_DAYS` (default `30`): import lookback window (use `-1` for full history).
+- `HISTORY_LOOKBACK_DAYS` (default `30`): import-all lookback window (set `-1` for full history).
 - `LIBRARYSYNC_JWT_ACCESS_TOKEN_MINUTES` (default `60`): access token lifetime.
 - `LIBRARYSYNC_JWT_ALGORITHM` (default `HS256`): JWT signing algorithm.
 - `LIBRARYSYNC_ALLOW_REGISTRATION` (default `true`): enable `/api/auth/register`.
@@ -60,12 +60,11 @@ All defaults below are from `.env.example`.
 
 ### Worker Modes
 - `LIBRARYSYNC_WORKER_MODES` (default `all`): comma-separated list of worker loops.
-  Options: `outbox`, `metadata`, `imports`, `import_all`, `merge`.
+  Options: `outbox`, `metadata`, `quick_import`, `import_all`.
 - `LIBRARYSYNC_WORKER_OUTBOX_CONCURRENCY` (default `1`): outbox loop concurrency.
 - `LIBRARYSYNC_WORKER_METADATA_CONCURRENCY` (default `1`): metadata loop concurrency.
-- `LIBRARYSYNC_WORKER_IMPORTS_CONCURRENCY` (default `1`): imports loop concurrency.
+- `LIBRARYSYNC_WORKER_QUICK_IMPORT_CONCURRENCY` (default `1`): quick import loop concurrency.
 - `LIBRARYSYNC_WORKER_IMPORT_ALL_CONCURRENCY` (default `1`): import-all loop concurrency.
-- `LIBRARYSYNC_WORKER_MERGE_CONCURRENCY` (default `1`): merge loop concurrency.
 
 ### Rate Limits (per user, per provider, per minute)
 - `LIBRARYSYNC_TRAKT_RATE_LIMIT_PER_MINUTE` (default `60`).

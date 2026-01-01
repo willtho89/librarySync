@@ -33,7 +33,6 @@ from librarysync.db.models import (
     WatchEvent,
     WatchSync,
 )
-from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
 LOOKBACK_DAYS = settings.history_lookback_days
@@ -98,16 +97,6 @@ class SimklImportStrategy(ImportStrategy):
             integration,
             self._lookback_days,
         )
-
-
-async def process_simkl_imports_once(
-    lookback_days: int = LOOKBACK_DAYS,
-) -> int:
-    init_session_factory()
-    async with SessionLocal() as db:
-        strategy = SimklImportStrategy(lookback_days=lookback_days)
-        now = datetime.now(timezone.utc)
-        return await strategy.run_once(db, now)
 
 
 async def _import_for_integration(

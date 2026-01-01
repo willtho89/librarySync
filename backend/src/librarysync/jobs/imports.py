@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from librarysync.config import settings
 from librarysync.core.import_all import (
     IMPORT_ALL_ERROR_KEY,
     IMPORT_ALL_INDEX_KEY,
@@ -12,45 +13,68 @@ from librarysync.core.import_all import (
     IMPORT_ALL_STATUS_IN_PROGRESS,
     IMPORT_ALL_STATUS_KEY,
     IMPORT_ALL_STATUS_PENDING,
-    load_active_import_all_users,
+    build_import_all_queue,
+    import_all_active,
     mark_import_all_completed,
     mark_import_all_failed,
     mark_import_all_started,
     parse_import_all_state,
 )
-from librarysync.core.import_schedule import compute_next_import_at, record_import_run
+from librarysync.core.import_control import (
+    MERGE_REQUIRED_AT_KEY,
+    QUICK_IMPORT_ERROR_KEY,
+    QUICK_IMPORT_INDEX_KEY,
+    QUICK_IMPORT_STATUS_IN_PROGRESS,
+    QUICK_IMPORT_STATUS_PENDING,
+    build_quick_import_config,
+    mark_merge_completed,
+    mark_merge_failed,
+    mark_merge_required,
+    mark_quick_import_completed,
+    mark_quick_import_failed,
+    mark_quick_import_started,
+    parse_quick_import_state,
+    should_run_quick_import,
+)
 from librarysync.db.models import Integration
 from librarysync.db.session import SessionLocal, init_session_factory
-from librarysync.jobs.import_base import ImportContext, ImportCoordinator, ImportStrategyRegistry
+from librarysync.jobs.import_base import ImportContext, ImportStrategyRegistry
 from librarysync.jobs.letterboxd_import import LetterboxdImportStrategy
+from librarysync.jobs.merge_history import merge_history_for_user
 from librarysync.jobs.simkl_import import SimklImportStrategy
 from librarysync.jobs.stremio_import import StremioImportStrategy
 from librarysync.jobs.trakt_import import TraktImportStrategy
 
-DEFAULT_IMPORT_REGISTRY = ImportStrategyRegistry(
-    [
-        LetterboxdImportStrategy(),
-        TraktImportStrategy(),
-        SimklImportStrategy(),
-        StremioImportStrategy(),
-    ]
-)
-IMPORT_CLAIM_LIMIT = 25
+QUICK_IMPORT_LOOKBACK_DAYS = 7
+IMPORT_ALL_LOOKBACK_DAYS = settings.history_lookback_days
 
 
-async def process_imports_once() -> int:
+def _build_registry(lookback_days: int) -> ImportStrategyRegistry:
+    return ImportStrategyRegistry(
+        [
+            LetterboxdImportStrategy(lookback_days=lookback_days),
+            TraktImportStrategy(lookback_days=lookback_days),
+            SimklImportStrategy(lookback_days=lookback_days),
+            StremioImportStrategy(lookback_days=lookback_days),
+        ]
+    )
+
+
+QUICK_IMPORT_REGISTRY = _build_registry(QUICK_IMPORT_LOOKBACK_DAYS)
+IMPORT_ALL_REGISTRY = _build_registry(IMPORT_ALL_LOOKBACK_DAYS)
+
+
+async def process_quick_import_once(limit: int = 1) -> int:
     init_session_factory()
     async with SessionLocal() as db:
-        coordinator = ImportCoordinator(DEFAULT_IMPORT_REGISTRY)
+        runs = await _claim_quick_import_runs(db, limit)
+        if not runs:
+            return 0
+        processed = 0
         now = datetime.now(timezone.utc)
-        active_users = await load_active_import_all_users(db)
-        await db.rollback()
-        return await coordinator.run_once(
-            db,
-            now,
-            skip_user_ids=active_users,
-            limit=IMPORT_CLAIM_LIMIT,
-        )
+        for run in runs:
+            processed += await _process_quick_import_run(db, run, now)
+        return processed
 
 
 async def process_import_all_once(limit: int = 1) -> int:
@@ -64,6 +88,45 @@ async def process_import_all_once(limit: int = 1) -> int:
         for run in runs:
             processed += await _process_import_all_run(db, run, now)
         return processed
+
+
+async def _claim_quick_import_runs(db: AsyncSession, limit: int) -> list[Integration]:
+    now = datetime.now(timezone.utc)
+    async with db.begin():
+        result = await db.execute(
+            select(Integration)
+            .where(Integration.provider == IMPORT_ALL_PROVIDER)
+            .order_by(Integration.updated_at)
+            .with_for_update(skip_locked=True)
+        )
+        runs: list[Integration] = []
+        for run in result.scalars().all():
+            if len(runs) >= limit:
+                break
+            if import_all_active(run.config):
+                continue
+            if not should_run_quick_import(run.config, now):
+                continue
+            state = parse_quick_import_state(run.config)
+            if state.status not in {
+                QUICK_IMPORT_STATUS_PENDING,
+                QUICK_IMPORT_STATUS_IN_PROGRESS,
+            }:
+                queue = await build_import_all_queue(db, run.user_id)
+                if not queue:
+                    continue
+                config = build_quick_import_config(run.config, queue, now)
+                config = mark_merge_required(config, now)
+                run.config = config
+                state = parse_quick_import_state(run.config)
+            if state.status == QUICK_IMPORT_STATUS_PENDING:
+                run.config = mark_quick_import_started(run.config, now)
+                run.updated_at = now
+            elif not _has_merge_required(run.config):
+                run.config = mark_merge_required(run.config, now)
+                run.updated_at = now
+            runs.append(run)
+    return runs
 
 
 async def _claim_import_all_runs(db: AsyncSession, limit: int) -> list[Integration]:
@@ -88,9 +151,85 @@ async def _claim_import_all_runs(db: AsyncSession, limit: int) -> list[Integrati
         for run in runs:
             state = parse_import_all_state(run.config)
             if state.status == IMPORT_ALL_STATUS_PENDING:
-                run.config = mark_import_all_started(run.config, now)
+                config = mark_import_all_started(run.config, now)
+                if not _has_merge_required(config):
+                    config = mark_merge_required(config, now)
+                run.config = config
+                run.updated_at = now
+            elif not _has_merge_required(run.config):
+                run.config = mark_merge_required(run.config, now)
                 run.updated_at = now
     return runs
+
+
+async def _process_quick_import_run(
+    db: AsyncSession, run: Integration, now: datetime
+) -> int:
+    state = parse_quick_import_state(run.config)
+    queue = list(state.queue)
+    if not queue or state.index >= len(queue):
+        run.config = dict(run.config or {})
+        run.config[QUICK_IMPORT_ERROR_KEY] = None
+        run.config[QUICK_IMPORT_INDEX_KEY] = len(queue)
+        await _finalize_merge(db, run, now, mark_quick_import_completed)
+        return 1
+
+    provider = queue[state.index]
+    strategy = QUICK_IMPORT_REGISTRY.get(provider)
+    if not strategy:
+        return await _advance_quick_import_run(db, run, queue, state.index + 1, now)
+
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == run.user_id,
+            Integration.provider == provider,
+        )
+    )
+    integration = result.scalars().first()
+    if not integration:
+        return await _advance_quick_import_run(db, run, queue, state.index + 1, now)
+
+    next_index: int | None = None
+    try:
+        await strategy.import_for_integration(
+            ImportContext(db=db, now=now),
+            integration,
+            state.requested_at,
+        )
+        run.config = dict(run.config or {})
+        run.config[QUICK_IMPORT_ERROR_KEY] = None
+        next_index = state.index + 1
+        run.config[QUICK_IMPORT_INDEX_KEY] = next_index
+        if next_index >= len(queue):
+            await _finalize_merge(db, run, now, mark_quick_import_completed)
+            return 1
+        db.add(run)
+        await db.commit()
+        return 1
+    except Exception as exc:
+        run.config = mark_quick_import_failed(run.config, now, str(exc)[:500])
+        run.config[QUICK_IMPORT_INDEX_KEY] = (
+            next_index if next_index is not None else state.index
+        )
+        await _finalize_merge(db, run, now, None)
+        return 1
+
+
+async def _advance_quick_import_run(
+    db: AsyncSession,
+    run: Integration,
+    queue: list[str],
+    next_index: int,
+    now: datetime,
+) -> int:
+    run.config = dict(run.config or {})
+    run.config[QUICK_IMPORT_INDEX_KEY] = next_index
+    if next_index >= len(queue):
+        await _finalize_merge(db, run, now, mark_quick_import_completed)
+        return 1
+    db.add(run)
+    await db.commit()
+    return 1
 
 
 async def _process_import_all_run(
@@ -99,13 +238,14 @@ async def _process_import_all_run(
     state = parse_import_all_state(run.config)
     queue = list(state.queue)
     if not queue or state.index >= len(queue):
-        run.config = mark_import_all_completed(run.config, now)
+        run.config = dict(run.config or {})
+        run.config[IMPORT_ALL_ERROR_KEY] = None
         run.config[IMPORT_ALL_INDEX_KEY] = len(queue)
-        db.add(run)
-        await db.commit()
+        await _finalize_merge(db, run, now, mark_import_all_completed)
         return 1
+
     provider = queue[state.index]
-    strategy = DEFAULT_IMPORT_REGISTRY.get(provider)
+    strategy = IMPORT_ALL_REGISTRY.get(provider)
     if not strategy:
         return await _advance_import_all_run(db, run, queue, state.index + 1, now)
 
@@ -119,33 +259,29 @@ async def _process_import_all_run(
     if not integration:
         return await _advance_import_all_run(db, run, queue, state.index + 1, now)
 
+    next_index: int | None = None
     try:
-        import_result = await strategy.import_for_integration(
+        await strategy.import_for_integration(
             ImportContext(db=db, now=now),
             integration,
             state.requested_at,
         )
-        if import_result.attempted:
-            integration.config = record_import_run(integration.config, now)
-            integration.next_import_at = compute_next_import_at(
-                integration.config,
-                now,
-                default_interval_seconds=strategy.default_interval_seconds,
-            )
-            db.add(integration)
         run.config = dict(run.config or {})
         run.config[IMPORT_ALL_ERROR_KEY] = None
-        run.config[IMPORT_ALL_INDEX_KEY] = state.index + 1
-        if run.config[IMPORT_ALL_INDEX_KEY] >= len(queue):
-            run.config = mark_import_all_completed(run.config, now)
+        next_index = state.index + 1
+        run.config[IMPORT_ALL_INDEX_KEY] = next_index
+        if next_index >= len(queue):
+            await _finalize_merge(db, run, now, mark_import_all_completed)
+            return 1
         db.add(run)
         await db.commit()
         return 1
     except Exception as exc:
         run.config = mark_import_all_failed(run.config, now, str(exc)[:500])
-        run.config[IMPORT_ALL_INDEX_KEY] = state.index
-        db.add(run)
-        await db.commit()
+        run.config[IMPORT_ALL_INDEX_KEY] = (
+            next_index if next_index is not None else state.index
+        )
+        await _finalize_merge(db, run, now, None)
         return 1
 
 
@@ -159,7 +295,34 @@ async def _advance_import_all_run(
     run.config = dict(run.config or {})
     run.config[IMPORT_ALL_INDEX_KEY] = next_index
     if next_index >= len(queue):
-        run.config = mark_import_all_completed(run.config, now)
+        await _finalize_merge(db, run, now, mark_import_all_completed)
+        return 1
     db.add(run)
     await db.commit()
     return 1
+
+
+async def _finalize_merge(
+    db: AsyncSession,
+    run: Integration,
+    now: datetime,
+    finalize_run: callable | None,
+) -> None:
+    try:
+        await merge_history_for_user(db, run.user_id)
+        run.config = mark_merge_completed(run.config, now)
+        if finalize_run is not None:
+            run.config = finalize_run(run.config, now)
+    except Exception as exc:
+        run.config = mark_merge_failed(run.config, now, str(exc)[:500])
+        if finalize_run is not None and run.config:
+            run.config = finalize_run(run.config, now)
+    db.add(run)
+    await db.commit()
+
+
+def _has_merge_required(config: dict | None) -> bool:
+    if not isinstance(config, dict):
+        return False
+    value = config.get(MERGE_REQUIRED_AT_KEY)
+    return bool(value)

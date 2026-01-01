@@ -18,7 +18,6 @@ from librarysync.connectors.services.trakt import (
     parse_expires_at,
     token_to_secret_payload,
 )
-from librarysync.core.import_schedule import IMPORT_LAST_RUN_KEY, parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
@@ -32,7 +31,6 @@ from librarysync.db.models import (
     WatchEvent,
     WatchSync,
 )
-from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 
 LOOKBACK_DAYS = settings.history_lookback_days
@@ -102,22 +100,6 @@ class TraktImportStrategy(ImportStrategy):
         )
 
 
-async def process_trakt_imports_once(
-    lookback_days: int = LOOKBACK_DAYS,
-    per_page: int = PER_PAGE,
-    max_pages: int = MAX_PAGES,
-) -> int:
-    init_session_factory()
-    async with SessionLocal() as db:
-        strategy = TraktImportStrategy(
-            lookback_days=lookback_days,
-            per_page=per_page,
-            max_pages=max_pages,
-        )
-        now = datetime.now(timezone.utc)
-        return await strategy.run_once(db, now)
-
-
 async def _import_for_integration(
     db: AsyncSession,
     integration: Integration,
@@ -152,9 +134,8 @@ async def _import_for_integration(
 
     imported = 0
     now = datetime.now(timezone.utc)
-    last_run = parse_datetime((integration.config or {}).get(IMPORT_LAST_RUN_KEY))
-    full_history = lookback_days < 0 and last_run is None
-    start_at = _select_trakt_start_at(now, lookback_days, last_run)
+    full_history = lookback_days < 0
+    start_at = _select_trakt_start_at(now, lookback_days)
     max_pages = None if full_history else max_pages
     for history_type in ("movies", "episodes"):
         entries = await client.get_history(
@@ -201,17 +182,10 @@ async def _import_for_integration(
     return ImportResult(imported=imported, attempted=True)
 
 
-def _select_trakt_start_at(
-    now: datetime, lookback_days: int, last_run: datetime | None
-) -> datetime | None:
+def _select_trakt_start_at(now: datetime, lookback_days: int) -> datetime | None:
     if lookback_days < 0:
-        if last_run:
-            return last_run - timedelta(minutes=5)
         return None
-    window_start = now - timedelta(days=lookback_days)
-    if last_run and last_run > window_start:
-        return last_run - timedelta(minutes=5)
-    return window_start
+    return now - timedelta(days=lookback_days)
 
 
 async def _load_trakt_rating_lookup(
