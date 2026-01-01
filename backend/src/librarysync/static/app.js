@@ -237,6 +237,9 @@ async function loadCurrentUser() {
 }
 
 function applyAuthVisibility(user) {
+  if (document.body) {
+    document.body.dataset.authState = user ? "auth" : "guest";
+  }
   document.querySelectorAll("[data-auth-only]").forEach((el) => {
     el.hidden = !user;
   });

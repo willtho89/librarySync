@@ -13,6 +13,12 @@
     <link rel="manifest" href="/site.webmanifest" />
     <meta name="theme-color" content="#f6f8fa" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0f1b24" media="(prefers-color-scheme: dark)" />
+    <style>
+      [data-auth-state="auth"] [data-guest-only],
+      [data-auth-state="guest"] [data-auth-only] {
+        display: none !important;
+      }
+    </style>
     <link
       rel="preload"
       href="/static/fonts/SpaceGrotesk-SemiBold.woff2"
@@ -27,11 +33,18 @@
       type="font/woff2"
       crossorigin
     />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link
+      rel="preload"
+      href="/static/styles.css"
+      as="style"
+      onload="this.onload=null;this.rel='stylesheet'"
+    />
+    <noscript><link rel="stylesheet" href="/static/styles.css" /></noscript>
     <script src="/static/app.js" defer></script>
   </head>
   <body
     class="min-h-full bg-base text-ink antialiased"
+    data-auth-state="{{ auth_state }}"
     {% if requires_auth %}data-requires-auth="true"{% endif %}
     {% if guest_only %}data-guest-only="true"{% endif %}
   >
@@ -103,7 +116,10 @@
               <span data-theme-label>System</span>
             </button>
             <span class="text-xs text-muted" data-auth-only>
-              Signed in as <strong data-user-username></strong>
+              Signed in as
+              <strong data-user-username>
+                {% if current_user %}{{ current_user.username }}{% endif %}
+              </strong>
             </span>
             <button type="button" class="btn btn-ghost" data-logout data-auth-only>
               Log out

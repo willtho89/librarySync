@@ -46,6 +46,33 @@ async def get_current_user(
     return user
 
 
+async def get_optional_user(
+    db: AsyncSession = Depends(get_db),
+    bearer_credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    cookie_token: str | None = Security(cookie_scheme),
+) -> User | None:
+    token = bearer_credentials.credentials if bearer_credentials else None
+    if not token:
+        token = cookie_token
+    if not token:
+        return None
+
+    payload = decode_access_token(token)
+    if not payload:
+        return None
+
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active:
+        return None
+
+    return user
+
+
 async def get_admin_api_key(
     admin_api_key: str = Header(alias="X-API-Key", example="your-admin-api-key"),
 ) -> str:
