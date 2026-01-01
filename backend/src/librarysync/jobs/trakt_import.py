@@ -32,10 +32,12 @@ from librarysync.db.models import (
     WatchSync,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
+from librarysync.jobs.import_utils import chunked, load_existing_entry_keys
 
 LOOKBACK_DAYS = settings.history_lookback_days
 MAX_PAGES = 8
 PER_PAGE = 50
+ENTRY_KEY_BATCH_SIZE = 200
 logger = logging.getLogger(__name__)
 
 
@@ -155,24 +157,40 @@ async def _import_for_integration(
                 max_pages=max_pages,
                 user_id=integration.user_id,
             )
-        for entry in entries:
-            try:
-                if history_type == "movies":
-                    if await _import_movie_entry(
-                        db, integration.user_id, entry, rating_lookup
-                    ):
-                        imported += 1
-                else:
-                    if await _import_episode_entry(
-                        db, integration.user_id, entry, rating_lookup
-                    ):
-                        imported += 1
-            except Exception:
-                logger.exception(
-                    "Trakt entry import failed for user %s",
-                    integration.user_id,
-                )
-                await db.rollback()
+        for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
+            entry_keys = _prefetch_entry_keys(batch)
+            existing_keys = await load_existing_entry_keys(
+                db,
+                integration.user_id,
+                "trakt_imported",
+                entry_keys,
+            )
+            for entry in batch:
+                try:
+                    if history_type == "movies":
+                        if await _import_movie_entry(
+                            db,
+                            integration.user_id,
+                            entry,
+                            rating_lookup,
+                            existing_keys,
+                        ):
+                            imported += 1
+                    else:
+                        if await _import_episode_entry(
+                            db,
+                            integration.user_id,
+                            entry,
+                            rating_lookup,
+                            existing_keys,
+                        ):
+                            imported += 1
+                except Exception:
+                    logger.exception(
+                        "Trakt entry import failed for user %s",
+                        integration.user_id,
+                    )
+                    await db.rollback()
     if imported:
         logger.info(
             "Imported %s Trakt entries for user %s",
@@ -272,6 +290,7 @@ async def _import_movie_entry(
     user_id: str,
     entry: dict[str, Any],
     rating_lookup: dict[str, float],
+    existing_entry_keys: set[str] | None = None,
 ) -> bool:
     history_id = _coerce_str(entry.get("id"))
     watched_at = _parse_datetime(entry.get("watched_at")) or datetime.now(timezone.utc)
@@ -286,7 +305,10 @@ async def _import_movie_entry(
     )
     if not entry_key:
         return False
-    if await _entry_already_imported(db, user_id, entry_key):
+    if history_id and existing_entry_keys is not None:
+        if entry_key in existing_entry_keys:
+            return False
+    elif await _entry_already_imported(db, user_id, entry_key):
         return False
     media_item = await _get_or_create_movie_item(db, movie)
     if not media_item:
@@ -335,6 +357,7 @@ async def _import_episode_entry(
     user_id: str,
     entry: dict[str, Any],
     rating_lookup: dict[str, float],
+    existing_entry_keys: set[str] | None = None,
 ) -> bool:
     history_id = _coerce_str(entry.get("id"))
     watched_at = _parse_datetime(entry.get("watched_at")) or datetime.now(timezone.utc)
@@ -354,7 +377,10 @@ async def _import_episode_entry(
     )
     if not entry_key:
         return False
-    if await _entry_already_imported(db, user_id, entry_key):
+    if history_id and existing_entry_keys is not None:
+        if entry_key in existing_entry_keys:
+            return False
+    elif await _entry_already_imported(db, user_id, entry_key):
         return False
     show_item = await _get_or_create_show_item(db, show)
     if not show_item:
@@ -399,6 +425,15 @@ async def _import_episode_entry(
     )
     await db.commit()
     return True
+
+
+def _prefetch_entry_keys(entries: list[dict[str, Any]]) -> list[str]:
+    keys: list[str] = []
+    for entry in entries:
+        history_id = _coerce_str(entry.get("id"))
+        if history_id:
+            keys.append(f"history:{history_id}")
+    return keys
 
 
 async def _entry_already_imported(

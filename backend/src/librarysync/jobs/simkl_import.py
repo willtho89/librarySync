@@ -34,6 +34,7 @@ from librarysync.db.models import (
     WatchSync,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
+from librarysync.jobs.import_utils import chunked, load_existing_entry_keys
 
 LOOKBACK_DAYS = settings.history_lookback_days
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ SIMKL_ACTIVITY_KEYS = {
     "shows": "tv_shows",
     "anime": "anime",
 }
+ENTRY_KEY_BATCH_SIZE = 200
 
 
 @dataclass(frozen=True)
@@ -348,16 +350,24 @@ async def _import_movies_payload(
         _log_empty_all_items_payload("movies", payload)
         return 0
     imported = 0
-    for entry in entries:
-        try:
-            watched_at = _extract_item_watched_at(entry) or datetime.now(timezone.utc)
-            if date_from and watched_at < date_from:
-                continue
-            if await _import_movie_entry(db, user_id, entry, watched_at):
-                imported += 1
-        except Exception:
-            logger.exception("SIMKL movie import failed for user %s", user_id)
-            await db.rollback()
+    for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
+        entry_keys = _prefetch_entry_keys(batch)
+        existing_keys = await load_existing_entry_keys(
+            db,
+            user_id,
+            "simkl_imported",
+            entry_keys,
+        )
+        for entry in batch:
+            try:
+                watched_at = _extract_item_watched_at(entry) or datetime.now(timezone.utc)
+                if date_from and watched_at < date_from:
+                    continue
+                if await _import_movie_entry(db, user_id, entry, watched_at, existing_keys):
+                    imported += 1
+            except Exception:
+                logger.exception("SIMKL movie import failed for user %s", user_id)
+                await db.rollback()
     return imported
 
 
@@ -379,43 +389,55 @@ async def _import_shows_payload(
         _log_empty_all_items_payload(label, payload)
         return 0
     imported = 0
-    for entry in entries:
-        show_payload = _extract_show_payload(entry)
-        episodes = _extract_episode_entries(entry)
-        if not episodes:
-            watched_at = _extract_item_watched_at(entry)
-            if not watched_at:
-                continue
-            normalized = dict(entry)
-            normalized["show"] = show_payload or entry
-            try:
-                if await _import_show_entry(db, user_id, normalized, watched_at):
-                    imported += 1
-            except Exception:
-                logger.exception(
-                    "SIMKL show import failed for user %s", user_id
-                )
-                await db.rollback()
-            continue
-        for episode in episodes:
-            normalized = dict(entry)
-            normalized["show"] = show_payload or entry
-            normalized["episode"] = episode
-            watched_at = _extract_item_watched_at(episode)
-            if not watched_at:
+    for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
+        entry_keys = _prefetch_entry_keys(batch)
+        existing_keys = await load_existing_entry_keys(
+            db,
+            user_id,
+            "simkl_imported",
+            entry_keys,
+        )
+        for entry in batch:
+            show_payload = _extract_show_payload(entry)
+            episodes = _extract_episode_entries(entry)
+            if not episodes:
                 watched_at = _extract_item_watched_at(entry)
-            if not watched_at:
-                watched_at = datetime.now(timezone.utc)
-            if date_from and watched_at < date_from:
+                if not watched_at:
+                    continue
+                normalized = dict(entry)
+                normalized["show"] = show_payload or entry
+                try:
+                    if await _import_show_entry(
+                        db, user_id, normalized, watched_at, existing_keys
+                    ):
+                        imported += 1
+                except Exception:
+                    logger.exception(
+                        "SIMKL show import failed for user %s", user_id
+                    )
+                    await db.rollback()
                 continue
-            try:
-                if await _import_episode_entry(db, user_id, normalized, watched_at):
-                    imported += 1
-            except Exception:
-                logger.exception(
-                    "SIMKL episode import failed for user %s", user_id
-                )
-                await db.rollback()
+            for episode in episodes:
+                normalized = dict(entry)
+                normalized["show"] = show_payload or entry
+                normalized["episode"] = episode
+                watched_at = _extract_item_watched_at(episode)
+                if not watched_at:
+                    watched_at = _extract_item_watched_at(entry)
+                if not watched_at:
+                    watched_at = datetime.now(timezone.utc)
+                if date_from and watched_at < date_from:
+                    continue
+                try:
+                    if await _import_episode_entry(
+                        db, user_id, normalized, watched_at, existing_keys
+                    ):
+                        imported += 1
+                except Exception:
+                    logger.exception(
+                        "SIMKL episode import failed for user %s", user_id
+                    )
+                    await db.rollback()
     return imported
 
 
@@ -684,6 +706,7 @@ async def _import_movie_entry(
     user_id: str,
     entry: dict[str, Any],
     watched_at: datetime | None,
+    existing_entry_keys: set[str] | None = None,
 ) -> bool:
     history_id = _extract_history_id(entry)
     watched_at = watched_at or datetime.now(timezone.utc)
@@ -701,7 +724,10 @@ async def _import_movie_entry(
     )
     if not entry_key:
         return False
-    if await _entry_already_imported(db, user_id, entry_key):
+    if history_id and existing_entry_keys is not None:
+        if entry_key in existing_entry_keys:
+            return False
+    elif await _entry_already_imported(db, user_id, entry_key):
         return False
     media_item = await _get_or_create_movie_item(db, movie)
     if not media_item:
@@ -750,6 +776,7 @@ async def _import_show_entry(
     user_id: str,
     entry: dict[str, Any],
     watched_at: datetime | None,
+    existing_entry_keys: set[str] | None = None,
 ) -> bool:
     history_id = _extract_history_id(entry)
     watched_at = watched_at or datetime.now(timezone.utc)
@@ -767,7 +794,10 @@ async def _import_show_entry(
     )
     if not entry_key:
         return False
-    if await _entry_already_imported(db, user_id, entry_key):
+    if history_id and existing_entry_keys is not None:
+        if entry_key in existing_entry_keys:
+            return False
+    elif await _entry_already_imported(db, user_id, entry_key):
         return False
     media_item = await _get_or_create_show_item(db, show)
     if not media_item:
@@ -816,6 +846,7 @@ async def _import_episode_entry(
     user_id: str,
     entry: dict[str, Any],
     watched_at: datetime | None,
+    existing_entry_keys: set[str] | None = None,
 ) -> bool:
     history_id = _extract_history_id(entry)
     watched_at = watched_at or datetime.now(timezone.utc)
@@ -827,7 +858,10 @@ async def _import_episode_entry(
     entry_key = _build_episode_entry_key(history_id, show, episode, watched_at)
     if not entry_key:
         return False
-    if await _entry_already_imported(db, user_id, entry_key):
+    if history_id and existing_entry_keys is not None:
+        if entry_key in existing_entry_keys:
+            return False
+    elif await _entry_already_imported(db, user_id, entry_key):
         return False
     show_item = await _get_or_create_show_item(db, show)
     if not show_item:
@@ -872,6 +906,15 @@ async def _import_episode_entry(
     )
     await db.commit()
     return True
+
+
+def _prefetch_entry_keys(entries: list[dict[str, Any]]) -> list[str]:
+    keys: list[str] = []
+    for entry in entries:
+        history_id = _extract_history_id(entry)
+        if history_id:
+            keys.append(f"history:{history_id}")
+    return keys
 
 
 async def _entry_already_imported(

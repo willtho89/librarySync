@@ -41,6 +41,7 @@ from librarysync.db.models import (
     WatchSync,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
+from librarysync.jobs.import_utils import chunked, load_existing_entry_keys
 
 LOOKBACK_DAYS = settings.history_lookback_days
 MAX_PAGES = 6
@@ -49,6 +50,7 @@ FULL_HISTORY_START = datetime(1900, 1, 1, tzinfo=timezone.utc)
 FULL_HISTORY_EMPTY_MONTHS = 3
 IMDB_ID_RE = re.compile(r"(tt\d{3,10})", re.IGNORECASE)
 TMDB_URL_RE = re.compile(r"/(?:movie|film|tv)/(\d+)", re.IGNORECASE)
+ENTRY_KEY_BATCH_SIZE = 200
 logger = logging.getLogger(__name__)
 
 
@@ -164,15 +166,23 @@ async def _import_for_integration(
         return ImportResult(imported=0, attempted=True)
 
     imported = 0
-    for entry in entries:
-        try:
-            if await _import_entry(db, integration.user_id, entry):
-                imported += 1
-        except Exception:
-            logger.exception(
-                "Letterboxd entry import failed for user %s", integration.user_id
-            )
-            await db.rollback()
+    for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
+        entry_keys = _prefetch_entry_keys(batch)
+        existing_keys = await load_existing_entry_keys(
+            db,
+            integration.user_id,
+            "letterboxd_imported",
+            entry_keys,
+        )
+        for entry in batch:
+            try:
+                if await _import_entry(db, integration.user_id, entry, existing_keys):
+                    imported += 1
+            except Exception:
+                logger.exception(
+                    "Letterboxd entry import failed for user %s", integration.user_id
+                )
+                await db.rollback()
     if imported:
         logger.info(
             "Imported %s Letterboxd entries for user %s",
@@ -228,7 +238,12 @@ def _select_letterboxd_since(now: datetime, lookback_days: int) -> datetime:
     return now - timedelta(days=lookback_days)
 
 
-async def _import_entry(db: AsyncSession, user_id: str, entry: dict[str, Any]) -> bool:
+async def _import_entry(
+    db: AsyncSession,
+    user_id: str,
+    entry: dict[str, Any],
+    existing_entry_keys: set[str] | None = None,
+) -> bool:
     entry_id = _extract_entry_id(entry)
     watched_at = _extract_entry_watched_at(entry)
     if watched_at is None:
@@ -239,7 +254,10 @@ async def _import_entry(db: AsyncSession, user_id: str, entry: dict[str, Any]) -
     entry_key = _build_entry_key(entry_id, film.film_id, watched_at)
     if not entry_key:
         return False
-    if await _entry_already_imported(db, user_id, entry_key):
+    if entry_id and existing_entry_keys is not None:
+        if entry_key in existing_entry_keys:
+            return False
+    elif await _entry_already_imported(db, user_id, entry_key):
         return False
 
     media_item = await _get_or_create_media_item(db, film)
@@ -284,6 +302,15 @@ async def _import_entry(db: AsyncSession, user_id: str, entry: dict[str, Any]) -
     )
     await db.commit()
     return True
+
+
+def _prefetch_entry_keys(entries: list[dict[str, Any]]) -> list[str]:
+    keys: list[str] = []
+    for entry in entries:
+        entry_id = _extract_entry_id(entry)
+        if entry_id:
+            keys.append(f"entry:{entry_id}")
+    return keys
 
 
 async def _entry_already_imported(
