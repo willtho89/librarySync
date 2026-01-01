@@ -1,3 +1,4 @@
+from importlib import metadata
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -124,8 +125,16 @@ def create_app() -> FastAPI:
         run_migrations()
         init_session_factory()
 
+    try:
+        app_version = metadata.version("librarysync")
+    except metadata.PackageNotFoundError:
+        app_version = "unknown"
+
     def _render_page(request: Request, template_name: str, **context: object):
-        return templates.TemplateResponse(template_name, {"request": request, **context})
+        return templates.TemplateResponse(
+            template_name,
+            {"request": request, "app_version": app_version, **context},
+        )
 
     @app.get("/", include_in_schema=False)
     async def index(request: Request):
