@@ -1,6 +1,8 @@
 {
   "name": "librarySync",
   "short_name": "librarySync",
+  "start_url": "/",
+  "scope": "/",
   "icons": [
     {
       "src": "/web-app-manifest-192x192.png",
@@ -15,7 +17,7 @@
       "purpose": "maskable"
     }
   ],
-  "theme_color": "#ffffff",
-  "background_color": "#ffffff",
+  "theme_color": "#0d78d3",
+  "background_color": "#f6f8fa",
   "display": "standalone"
 }

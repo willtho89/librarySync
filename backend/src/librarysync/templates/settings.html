@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="space-y-8">
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <h2 class="section-title">Search</h2>
+        <p class="section-subtitle">Control how lookups behave.</p>
+      </div>
+    </div>
+    <form id="settings-form" class="space-y-4">
+      <label class="inline-control">
+        <input type="checkbox" name="include_adult_in_search" />
+        <span>Include adult titles in search results</span>
+      </label>
+      <button class="btn btn-primary" type="submit">Save</button>
+      <p id="settings-message" class="form-message" role="status" hidden></p>
+    </form>
+  </div>
+
+  <div>
+    <h2 class="section-title">Metadata providers</h2>
+    <p class="section-subtitle">Enable providers and store API keys where needed.</p>
+    <div class="mt-4 grid gap-4 lg:grid-cols-2">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3 class="section-title">TMDB</h3>
+            <p class="section-subtitle">Movies + TV metadata.</p>
+          </div>
+        </div>
+        <form id="tmdb-form" class="space-y-4">
+          <label class="inline-control">
+            <input type="checkbox" name="enabled" />
+            <span>Enable TMDB</span>
+          </label>
+          <label class="field">
+            <span>TMDB API Key</span>
+            <input class="input" type="text" name="api_key" autocomplete="off" />
+          </label>
+          <div class="grid gap-3 md:grid-cols-2">
+            <label class="field">
+              <span>Language (optional)</span>
+              <input class="input" type="text" name="language" placeholder="en-US" />
+            </label>
+            <label class="field">
+              <span>Region (optional)</span>
+              <input class="input" type="text" name="region" placeholder="US" />
+            </label>
+          </div>
+          <button class="btn btn-secondary" type="submit">Save</button>
+          <p id="tmdb-message" class="form-message" role="status" hidden></p>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3 class="section-title">TVDB</h3>
+            <p class="section-subtitle">Episode metadata and IDs.</p>
+          </div>
+        </div>
+        <form id="tvdb-form" class="space-y-4">
+          <label class="inline-control">
+            <input type="checkbox" name="enabled" />
+            <span>Enable TVDB</span>
+          </label>
+          <label class="field">
+            <span>TVDB API Key</span>
+            <input class="input" type="text" name="api_key" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>TVDB PIN (optional)</span>
+            <input class="input" type="text" name="pin" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Language (optional)</span>
+            <input class="input" type="text" name="language" placeholder="en" />
+          </label>
+          <button class="btn btn-secondary" type="submit">Save</button>
+          <p id="tvdb-message" class="form-message" role="status" hidden></p>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3 class="section-title">TVMaze</h3>
+            <p class="section-subtitle">No API key required.</p>
+          </div>
+        </div>
+        <form id="tvmaze-form" class="space-y-4">
+          <label class="inline-control">
+            <input type="checkbox" name="enabled" />
+            <span>Enable TVMaze</span>
+          </label>
+          <p class="helper-text">No API key required for TVMaze metadata lookups.</p>
+          <button class="btn btn-secondary" type="submit">Save</button>
+          <p id="tvmaze-message" class="form-message" role="status" hidden></p>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3 class="section-title">IMDb</h3>
+            <p class="section-subtitle">No API key required.</p>
+          </div>
+        </div>
+        <form id="imdb-form" class="space-y-4">
+          <label class="inline-control">
+            <input type="checkbox" name="enabled" />
+            <span>Enable IMDb</span>
+          </label>
+          <p class="helper-text">No API key required for IMDb metadata lookups.</p>
+          <button class="btn btn-secondary" type="submit">Save</button>
+          <p id="imdb-message" class="form-message" role="status" hidden></p>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3 class="section-title">Kitsu</h3>
+            <p class="section-subtitle">Anime metadata provider.</p>
+          </div>
+        </div>
+        <form id="kitsu-form" class="space-y-4">
+          <label class="inline-control">
+            <input type="checkbox" name="enabled" />
+            <span>Enable Kitsu</span>
+          </label>
+          <label class="field">
+            <span>Title language (optional)</span>
+            <input class="input" type="text" name="language" placeholder="en, en_jp, ja_jp" />
+          </label>
+          <p class="helper-text">No API key required for Kitsu metadata lookups.</p>
+          <button class="btn btn-secondary" type="submit">Save</button>
+          <p id="kitsu-message" class="form-message" role="status" hidden></p>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3 class="section-title">MyAnimeList</h3>
+            <p class="section-subtitle">Anime metadata provider.</p>
+          </div>
+        </div>
+        <form id="myanimelist-form" class="space-y-4">
+          <label class="inline-control">
+            <input type="checkbox" name="enabled" />
+            <span>Enable MyAnimeList</span>
+          </label>
+          <p class="helper-text">No API key required for MyAnimeList lookups.</p>
+          <button class="btn btn-secondary" type="submit">Save</button>
+          <p id="myanimelist-message" class="form-message" role="status" hidden></p>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

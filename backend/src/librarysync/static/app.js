@@ -38,6 +38,9 @@ const historyState = {
 const integrationState = {
   hasAnyImports: false,
 };
+const themeState = {
+  mode: "system",
+};
 
 function bindForm(id, handler) {
   const form = document.getElementById(id);
@@ -85,6 +88,57 @@ function formatImportTimestamp(value) {
   return `Last import: ${date.toLocaleString()}`;
 }
 
+function getStoredTheme() {
+  try {
+    return localStorage.getItem("librarysync_theme");
+  } catch (error) {
+    return null;
+  }
+}
+
+function setStoredTheme(value) {
+  try {
+    localStorage.setItem("librarysync_theme", value);
+  } catch (error) {
+    // ignore storage errors
+  }
+}
+
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (!root) {
+    return;
+  }
+  if (mode === "light" || mode === "dark") {
+    root.dataset.theme = mode;
+  } else {
+    delete root.dataset.theme;
+  }
+  themeState.mode = mode;
+  document.querySelectorAll("[data-theme-label]").forEach((label) => {
+    label.textContent = mode === "system" ? "System" : mode === "dark" ? "Dark" : "Light";
+  });
+}
+
+function initThemeToggle() {
+  const stored = getStoredTheme();
+  const initial =
+    stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+  applyTheme(initial);
+  document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next =
+        themeState.mode === "system"
+          ? "light"
+          : themeState.mode === "light"
+            ? "dark"
+            : "system";
+      setStoredTheme(next);
+      applyTheme(next);
+    });
+  });
+}
+
 function applyQuickImportControls(statusData) {
   const form = document.getElementById("quick-import-form");
   if (!form) {
@@ -122,6 +176,15 @@ function isIntegrationConnected(integration) {
     !!integration &&
     (integration.has_secrets || integration.status === "connected")
   );
+}
+
+function setIntegrationStatusBadge(id, connected) {
+  const badge = document.getElementById(id);
+  if (!badge) {
+    return;
+  }
+  badge.textContent = connected ? "Connected" : "Not connected";
+  badge.dataset.state = connected ? "connected" : "disconnected";
 }
 
 async function requestJSON(path, options = {}) {
@@ -223,7 +286,7 @@ async function handleLogout() {
   } catch (error) {
     console.error("logout failed", error);
   }
-  window.location.href = "/static/login.html";
+  window.location.href = "/login";
 }
 
 async function loadIntegrations() {
@@ -246,6 +309,7 @@ async function loadIntegrations() {
     const letterboxdMessage = document.getElementById("letterboxd-message");
     const letterboxdDisconnect = document.getElementById("letterboxd-disconnect");
     const letterboxdConnected = isIntegrationConnected(letterboxd);
+    setIntegrationStatusBadge("letterboxd-status", letterboxdConnected);
     if (letterboxdConnected) {
       if (letterboxdMessage && !letterboxdMessage.textContent) {
         setMessage("letterboxd-message", "Credentials are stored securely.");
@@ -266,6 +330,7 @@ async function loadIntegrations() {
   const traktConnect = document.getElementById("trakt-connect");
   const traktDisconnect = document.getElementById("trakt-disconnect");
   const traktConnected = isIntegrationConnected(trakt);
+  setIntegrationStatusBadge("trakt-status", traktConnected);
   if (traktConnected) {
     const username =
       trakt.config && trakt.config.trakt_username
@@ -296,6 +361,7 @@ async function loadIntegrations() {
   const simklConnect = document.getElementById("simkl-connect");
   const simklDisconnect = document.getElementById("simkl-disconnect");
   const simklConnected = isIntegrationConnected(simkl);
+  setIntegrationStatusBadge("simkl-status", simklConnected);
   if (simklConnected) {
     const username =
       simkl.config && simkl.config.simkl_username ? simkl.config.simkl_username : null;
@@ -330,6 +396,7 @@ async function loadIntegrations() {
   const stremioMessage = document.getElementById("stremio-message");
   const stremioDisconnect = document.getElementById("stremio-disconnect");
   const stremioConnected = isIntegrationConnected(stremio);
+  setIntegrationStatusBadge("stremio-status", stremioConnected);
   if (stremioConnected) {
     const name =
       stremio.config && stremio.config.stremio_name ? stremio.config.stremio_name : null;
@@ -1733,6 +1800,7 @@ function updateHistoryPagination() {
 function updateHistoryBulkControls() {
   const selectAll = document.getElementById("history-select-all");
   const deleteButton = document.getElementById("history-delete-selected");
+  const bulkBar = document.querySelector("[data-bulk-bar]");
   const total = historySelectionState.items.length;
   const selectedCount = historySelectionState.selectedIds.size;
 
@@ -1755,6 +1823,14 @@ function updateHistoryBulkControls() {
     deleteButton.textContent = selectedCount
       ? `Delete selected (${selectedCount})`
       : "Delete selected";
+  }
+
+  if (bulkBar) {
+    if (selectedCount > 0) {
+      bulkBar.classList.add("is-visible");
+    } else {
+      bulkBar.classList.remove("is-visible");
+    }
   }
 
   updateHistorySyncControls();
@@ -2134,6 +2210,62 @@ function statusBadgeClass(status) {
     return "status-failed";
   }
   return "status-pending";
+}
+
+function renderHomeStatus(statusData) {
+  const pendingEl = document.getElementById("home-outbox-pending");
+  if (!pendingEl) {
+    return;
+  }
+  const inProgressEl = document.getElementById("home-outbox-progress");
+  const nextOutboxEl = document.getElementById("home-next-outbox");
+  const nextImportEl = document.getElementById("home-next-import");
+  const queueEl = document.getElementById("home-import-queue");
+  const metadataEl = document.getElementById("home-metadata-pending");
+
+  if (!statusData) {
+    [pendingEl, inProgressEl, nextOutboxEl, nextImportEl, queueEl, metadataEl].forEach(
+      (el) => {
+        if (el) {
+          el.textContent = "—";
+        }
+      },
+    );
+    return;
+  }
+
+  const outbox = statusData.outbox || {};
+  const counts = outbox.counts || {};
+  const pending = (counts.pending || 0) + (counts.failed_retryable || 0);
+  const inProgress = counts.in_progress || 0;
+  const quick = statusData.imports ? statusData.imports.quick : null;
+  const queue =
+    quick && Array.isArray(quick.queue) && quick.queue.length
+      ? quick.queue.map((entry) => formatProvider(entry)).join(" → ")
+      : "Idle";
+  const metadataCounts = statusData.metadata ? statusData.metadata.counts : {};
+  const metadataPending = metadataCounts && metadataCounts.pending ? metadataCounts.pending : 0;
+
+  if (pendingEl) {
+    pendingEl.textContent = String(pending);
+  }
+  if (inProgressEl) {
+    inProgressEl.textContent = String(inProgress);
+  }
+  if (nextOutboxEl) {
+    nextOutboxEl.textContent = formatRelativeTime(outbox.next_run_at);
+    nextOutboxEl.title = formatMetadataDate(outbox.next_run_at);
+  }
+  if (nextImportEl) {
+    nextImportEl.textContent = formatRelativeTime(quick ? quick.next_run_at : null);
+    nextImportEl.title = formatMetadataDate(quick ? quick.next_run_at : null);
+  }
+  if (queueEl) {
+    queueEl.textContent = queue;
+  }
+  if (metadataEl) {
+    metadataEl.textContent = String(metadataPending);
+  }
 }
 
 function formatActivityTitle(item) {
@@ -3177,6 +3309,7 @@ async function loadActivity(silent = false) {
     renderSchedule(statusData);
     renderOutboxList();
     renderEventsList();
+    renderHomeStatus(statusData);
   } catch (error) {
     setMessage("activity-message", error.message, true);
   }
@@ -3210,6 +3343,30 @@ function bindActivityControls() {
   }
 }
 
+function bindRatingClearControls() {
+  document.querySelectorAll("[data-rating-clear]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const field = button.closest(".field");
+      const group = field ? field.querySelector(".rating-stars") : null;
+      if (!group) {
+        return;
+      }
+      group.querySelectorAll("input[type='radio']").forEach((input) => {
+        input.checked = false;
+      });
+    });
+  });
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+  navigator.serviceWorker.register("/static/service-worker.js").catch((error) => {
+    console.warn("service worker registration failed", error);
+  });
+}
+
 function startActivityAutoRefresh() {
   if (activityState.timer) {
     return;
@@ -3223,11 +3380,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const body = document.body;
   const requiresAuth = body && body.dataset.requiresAuth === "true";
   const guestOnly = body && body.dataset.guestOnly === "true";
+  initThemeToggle();
   const user = await loadCurrentUser();
   applyAuthVisibility(user);
 
   if (requiresAuth && !user) {
-    window.location.href = "/static/login.html";
+    window.location.href = "/login";
     return;
   }
 
@@ -3252,6 +3410,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindForm("myanimelist-form", handleMyAnimeListSave);
   bindForm("lookup-form", handleLookupSubmit);
   bindForm("confirm-form", handleLookupConfirm);
+  bindRatingClearControls();
 
   const candidateList = document.getElementById("candidate-list");
   if (candidateList) {
@@ -3333,4 +3492,5 @@ document.addEventListener("DOMContentLoaded", async () => {
       console.error("initial load failed", error);
     }
   }
+  registerServiceWorker();
 });

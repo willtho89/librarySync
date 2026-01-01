@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="grid gap-6 lg:grid-cols-2">
+  <div class="card hero-card">
+    <p class="eyebrow">Welcome back</p>
+    <h1 class="mt-3 text-3xl font-display tracking-tight sm:text-4xl">
+      Sign in to keep every watch log in sync.
+    </h1>
+    <p class="mt-4 text-muted">
+      librarySync keeps your watch history and ratings aligned with Trakt, SIMKL,
+      Letterboxd, and Stremio using a resilient outbox pipeline.
+    </p>
+    <div class="mt-6 grid gap-3 text-sm text-muted">
+      <div class="flex items-start gap-3">
+        <span class="status-dot"></span>
+        <span>Quick imports with dedupe-aware merging.</span>
+      </div>
+      <div class="flex items-start gap-3">
+        <span class="status-dot"></span>
+        <span>Multi-provider metadata enrichment.</span>
+      </div>
+      <div class="flex items-start gap-3">
+        <span class="status-dot"></span>
+        <span>Per-user rate limits and audit trails.</span>
+      </div>
+    </div>
+  </div>
+  <div class="space-y-6">
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <h2 class="section-title">Sign in</h2>
+          <p class="section-subtitle">Use your local librarySync account.</p>
+        </div>
+      </div>
+      <form id="login-form" class="space-y-4">
+        <label class="field">
+          <span>Username</span>
+          <input class="input" type="text" name="username" autocomplete="username" required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input
+            class="input"
+            type="password"
+            name="password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        <div class="flex items-center justify-between text-xs">
+          <button class="btn btn-primary" type="submit">Sign in</button>
+          <a class="link-muted" href="#" aria-disabled="true">Forgot password?</a>
+        </div>
+        <p id="login-message" class="form-message" role="status" hidden></p>
+      </form>
+    </section>
+    {% if allow_registration %}
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <h2 class="section-title">Create an account</h2>
+          <p class="section-subtitle">Registration is open.</p>
+        </div>
+      </div>
+      <form id="register-form" class="space-y-4">
+        <label class="field">
+          <span>Username</span>
+          <input class="input" type="text" name="username" autocomplete="username" required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input
+            class="input"
+            type="password"
+            name="password"
+            autocomplete="new-password"
+            required
+          />
+        </label>
+        <button class="btn btn-secondary" type="submit">Register</button>
+        <p id="register-message" class="form-message" role="status" hidden></p>
+      </form>
+    </section>
+    {% else %}
+    <section class="card">
+      <h2 class="section-title">Registrations closed</h2>
+      <p class="mt-2 text-sm text-muted">
+        Registration is disabled on this server. Ask an admin to create your account.
+      </p>
+    </section>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -15,6 +15,10 @@ htmlcov/
 .tox/
 .hypothesis/
 
+# Node
+node_modules/
+npm-debug.log*
+
 # Environments
 .env
 .env.*

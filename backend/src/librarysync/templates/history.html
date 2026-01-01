@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="space-y-6">
+  <div class="card history-toolbar">
+    <div class="flex flex-wrap gap-4">
+      <label class="field flex-1 min-w-[220px]">
+        <span>Search</span>
+        <input
+          id="history-search"
+          class="input"
+          type="search"
+          placeholder="Title, ID, or year"
+        />
+      </label>
+      <label class="field min-w-[160px]">
+        <span>Type</span>
+        <select id="history-type-filter" class="select">
+          <option value="all">All types</option>
+          <option value="movie">Movies</option>
+          <option value="tv">TV</option>
+          <option value="anime">Anime</option>
+        </select>
+      </label>
+      <label class="field min-w-[160px]">
+        <span>Source</span>
+        <select id="history-source-filter" class="select">
+          <option value="all">All sources</option>
+          <option value="manual">Manual</option>
+          <option value="trakt">Trakt</option>
+          <option value="simkl">SIMKL</option>
+          <option value="letterboxd">Letterboxd</option>
+          <option value="stremio">Stremio</option>
+        </select>
+      </label>
+      <label class="field min-w-[120px]">
+        <span>Per page</span>
+        <select id="history-page-size" class="select">
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
+    </div>
+    <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex flex-wrap items-center gap-3">
+        <button id="history-page-prev" type="button" class="btn btn-ghost btn-sm">
+          Previous
+        </button>
+        <span id="history-page-info" class="helper-text">Loading...</span>
+        <button id="history-page-next" type="button" class="btn btn-ghost btn-sm">
+          Next
+        </button>
+      </div>
+      <button id="history-filters-clear" type="button" class="btn btn-secondary btn-sm">
+        Clear filters
+      </button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <h2 class="section-title">Watched items</h2>
+        <p class="section-subtitle">Edit, sync, or remove entries.</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button id="history-clear" type="button" class="btn btn-danger btn-sm">
+          Clear history
+        </button>
+      </div>
+    </div>
+    <p class="helper-text">
+      This permanently removes all watched items from your history.
+    </p>
+    <div id="history-sync-actions" class="button-row" hidden></div>
+    <p id="history-sync-note" class="helper-text" hidden>
+      Select items to sync just those, or sync everything if nothing is selected.
+    </p>
+    <p id="history-message" class="form-message" hidden></p>
+    <div id="history-list" class="candidate-list">Loading...</div>
+  </div>
+</section>
+
+<div id="history-bulk-bar" class="history-bulk-bar" data-bulk-bar>
+  <div class="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-4 px-4 py-3">
+    <label class="inline-control">
+      <input id="history-select-all" type="checkbox" />
+      <span>Select all</span>
+    </label>
+    <label class="inline-control">
+      <input id="history-delete-integrations" type="checkbox" />
+      <span>Also delete from integrations</span>
+    </label>
+    <button id="history-delete-selected" type="button" class="btn btn-danger btn-sm" disabled>
+      Delete selected
+    </button>
+  </div>
+</div>
+
+<div id="metadata-modal" class="metadata-drawer" hidden>
+  <div class="metadata-backdrop" data-modal-close></div>
+  <div class="metadata-panel" role="dialog" aria-modal="true" aria-labelledby="metadata-title">
+    <header class="metadata-header">
+      <h2 id="metadata-title" class="section-title">Item metadata</h2>
+      <button type="button" class="btn btn-ghost btn-sm" data-modal-close>Close</button>
+    </header>
+    <div id="metadata-body" class="metadata-body"></div>
+  </div>
+</div>
+{% endblock %}

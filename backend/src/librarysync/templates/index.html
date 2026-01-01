@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+  <div class="card hero-card">
+    <p class="eyebrow">Self-hosted watch history sync</p>
+    <h1 class="mt-3 text-3xl font-display tracking-tight sm:text-4xl">
+      A personal hub that keeps Trakt, SIMKL, Letterboxd, and Stremio in step.
+    </h1>
+    <p class="mt-4 text-muted">
+      librarySync unifies watched history and ratings, enriches metadata, and sends clean
+      updates to every connected provider on your schedule.
+    </p>
+    <div class="mt-6 flex flex-wrap gap-3">
+      <a class="btn btn-primary" href="/add-watched" data-auth-only>Log a watch</a>
+      <a class="btn btn-secondary" href="/history" data-auth-only>View history</a>
+      <a class="btn btn-primary" href="/login" data-guest-only>Sign in</a>
+      <a class="btn btn-ghost" href="/login" data-guest-only>Create account</a>
+    </div>
+    <div class="mt-6 flex flex-wrap gap-2 text-xs text-muted">
+      <span class="pill">Async metadata pipeline</span>
+      <span class="pill">Outbox with retries</span>
+      <span class="pill">Multi-user</span>
+      <span class="pill">Self-hosted</span>
+    </div>
+  </div>
+  <div class="card card-muted">
+    <div data-auth-only>
+      <h2 class="section-title">Quick actions</h2>
+      <p class="section-subtitle">Jump back into your routine.</p>
+      <div class="mt-4 grid gap-3">
+        <a class="action-card" href="/add-watched">
+          <span class="action-title">Add watched</span>
+          <span class="action-meta">Search titles and log episodes</span>
+        </a>
+        <a class="action-card" href="/integrations">
+          <span class="action-title">Manage integrations</span>
+          <span class="action-meta">Connect and schedule imports</span>
+        </a>
+        <a class="action-card" href="/settings">
+          <span class="action-title">Tune metadata</span>
+          <span class="action-meta">Configure providers and locales</span>
+        </a>
+      </div>
+    </div>
+    <div data-guest-only>
+      <h2 class="section-title">Why librarySync?</h2>
+      <p class="section-subtitle">Keep your watch data consistent everywhere.</p>
+      <ul class="mt-4 space-y-3 text-sm text-muted">
+        <li>One log, many destinations. Push to Trakt, SIMKL, Letterboxd, and Stremio.</li>
+        <li>Smart metadata: TMDB, TVDB, IMDb, TVMaze, Kitsu, MyAnimeList.</li>
+        <li>Own your timeline. Run imports and syncs on your schedule.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="mt-8 card" data-auth-only>
+  <div class="card-header">
+    <div>
+      <h2 class="section-title">Sync status</h2>
+      <p class="section-subtitle">The latest snapshot across queues and imports.</p>
+    </div>
+    <a class="btn btn-secondary" href="/activity">View activity</a>
+  </div>
+  <div id="home-status" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="stat-card">
+      <span class="stat-label">Outbox pending</span>
+      <strong id="home-outbox-pending" class="stat-value">—</strong>
+      <span class="stat-meta">Includes retryable failures.</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Outbox in progress</span>
+      <strong id="home-outbox-progress" class="stat-value">—</strong>
+      <span class="stat-meta">Currently delivering.</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Next outbox run</span>
+      <strong id="home-next-outbox" class="stat-value">—</strong>
+      <span class="stat-meta">Scheduled execution.</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Next import</span>
+      <strong id="home-next-import" class="stat-value">—</strong>
+      <span class="stat-meta">Quick import cadence.</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Import queue</span>
+      <strong id="home-import-queue" class="stat-value">—</strong>
+      <span class="stat-meta">Provider order in progress.</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Metadata pending</span>
+      <strong id="home-metadata-pending" class="stat-value">—</strong>
+      <span class="stat-meta">Lookup backlog.</span>
+    </div>
+  </div>
+</section>
+
+<section class="mt-8 grid gap-4 md:grid-cols-3" data-guest-only>
+  <div class="card">
+    <h3 class="section-title">Keep history clean</h3>
+    <p class="mt-2 text-sm text-muted">
+      Merge imports, dedupe same-day watches, and preserve your preferred metadata IDs.
+    </p>
+  </div>
+  <div class="card">
+    <h3 class="section-title">Sync on your terms</h3>
+    <p class="mt-2 text-sm text-muted">
+      Pause imports, run outbox delivery when ready, and control provider rate limits.
+    </p>
+  </div>
+  <div class="card">
+    <h3 class="section-title">Multi-user ready</h3>
+    <p class="mt-2 text-sm text-muted">
+      Each account keeps its own integrations, metadata keys, and activity trails.
+    </p>
+  </div>
+</section>
+{% endblock %}

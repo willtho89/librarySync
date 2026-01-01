@@ -1,8 +1,9 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from librarysync.api import (
     routes_activity,
@@ -13,10 +14,12 @@ from librarysync.api import (
     routes_metadata,
     routes_settings,
 )
+from librarysync.config import settings
 from librarysync.db.migrate import run_migrations
 from librarysync.db.session import init_session_factory
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 OPENAPI_TAGS = [
     {"name": "auth", "description": "User registration and authentication."},
@@ -50,6 +53,8 @@ def create_app() -> FastAPI:
     app.include_router(routes_activity.router)
     app.include_router(routes_settings.router)
     app.include_router(routes_admin.router)
+
+    templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -89,9 +94,77 @@ def create_app() -> FastAPI:
         run_migrations()
         init_session_factory()
 
+    def _render_page(request: Request, template_name: str, **context: object):
+        return templates.TemplateResponse(template_name, {"request": request, **context})
+
     @app.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+    async def index(request: Request):
+        return _render_page(request, "index.html", page_title="Home", active_page="home")
+
+    @app.get("/login", include_in_schema=False)
+    async def login(request: Request):
+        return _render_page(
+            request,
+            "login.html",
+            page_title="Login",
+            active_page="login",
+            guest_only=True,
+            allow_registration=settings.allow_registration,
+        )
+
+    @app.get("/add-watched", include_in_schema=False)
+    async def add_watched(request: Request):
+        return _render_page(
+            request,
+            "add-watched.html",
+            page_title="Add Watched",
+            active_page="add-watched",
+            requires_auth=True,
+        )
+
+    @app.get("/history", include_in_schema=False)
+    async def history(request: Request):
+        return _render_page(
+            request,
+            "history.html",
+            page_title="History",
+            active_page="history",
+            requires_auth=True,
+        )
+
+    @app.get("/integrations", include_in_schema=False)
+    async def integrations(request: Request):
+        return _render_page(
+            request,
+            "integrations.html",
+            page_title="Integrations",
+            active_page="integrations",
+            requires_auth=True,
+        )
+
+    @app.get("/activity", include_in_schema=False)
+    async def activity(request: Request):
+        return _render_page(
+            request,
+            "activity.html",
+            page_title="Activity",
+            active_page="activity",
+            requires_auth=True,
+        )
+
+    @app.get("/settings", include_in_schema=False)
+    async def settings_page(request: Request):
+        return _render_page(
+            request,
+            "settings.html",
+            page_title="Settings",
+            active_page="settings",
+            requires_auth=True,
+        )
+
+    @app.get("/offline", include_in_schema=False)
+    async def offline(request: Request):
+        return _render_page(request, "offline.html", page_title="Offline")
 
     @app.get(
         "/health",

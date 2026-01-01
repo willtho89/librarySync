@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ page_title }} - librarySync</title>
+    <meta name="description" content="librarySync keeps your watch history and ratings aligned across providers." />
+    <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="librarySync" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#f6f8fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0f1b24" media="(prefers-color-scheme: dark)" />
+    <link
+      rel="preload"
+      href="/static/fonts/SpaceGrotesk-SemiBold.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/static/fonts/IBMPlexSans-Regular.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body
+    class="min-h-full bg-base text-ink antialiased"
+    {% if requires_auth %}data-requires-auth="true"{% endif %}
+    {% if guest_only %}data-guest-only="true"{% endif %}
+  >
+    <div class="flex min-h-screen flex-col">
+      <header class="sticky top-0 z-40 border-b border-line/60 bg-surface/90 backdrop-blur">
+        <div
+          class="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-4"
+        >
+          <a href="/" class="flex items-center gap-3">
+            <img class="h-10 w-10" src="/favicon.svg" alt="" />
+            <div class="leading-none">
+              <span class="block font-display text-lg tracking-tight">librarySync</span>
+              <span class="block text-xs uppercase tracking-[0.3em] text-muted">Sync Hub</span>
+            </div>
+          </a>
+          <nav class="flex flex-wrap items-center gap-2 text-sm">
+            <a
+              href="/"
+              class="nav-link{% if active_page == 'home' %} nav-link-active{% endif %}"
+            >
+              Home
+            </a>
+            <a
+              href="/login"
+              data-guest-only
+              class="nav-link{% if active_page == 'login' %} nav-link-active{% endif %}"
+            >
+              Login
+            </a>
+            <a
+              href="/add-watched"
+              data-auth-only
+              class="nav-link{% if active_page == 'add-watched' %} nav-link-active{% endif %}"
+            >
+              Add Watched
+            </a>
+            <a
+              href="/history"
+              data-auth-only
+              class="nav-link{% if active_page == 'history' %} nav-link-active{% endif %}"
+            >
+              History
+            </a>
+            <a
+              href="/integrations"
+              data-auth-only
+              class="nav-link{% if active_page == 'integrations' %} nav-link-active{% endif %}"
+            >
+              Integrations
+            </a>
+            <a
+              href="/activity"
+              data-auth-only
+              class="nav-link{% if active_page == 'activity' %} nav-link-active{% endif %}"
+            >
+              Activity
+            </a>
+            <a
+              href="/settings"
+              data-auth-only
+              class="nav-link{% if active_page == 'settings' %} nav-link-active{% endif %}"
+            >
+              Settings
+            </a>
+          </nav>
+          <div class="flex items-center gap-2">
+            <button type="button" class="btn btn-ghost" data-theme-toggle>
+              <span class="sr-only">Toggle theme</span>
+              <span data-theme-label>System</span>
+            </button>
+            <span class="text-xs text-muted" data-auth-only>
+              Signed in as <strong data-user-username></strong>
+            </span>
+            <button type="button" class="btn btn-ghost" data-logout data-auth-only>
+              Log out
+            </button>
+          </div>
+        </div>
+      </header>
+      <main class="flex-1">
+        <div class="mx-auto w-full max-w-6xl px-4 pb-20 pt-8">
+          {% block content %}{% endblock %}
+        </div>
+      </main>
+      <footer class="border-t border-line/60 bg-surface/70">
+        <div class="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-muted">
+          <span>librarySync is a self-hosted sync hub for watch history and ratings.</span>
+          <span>Keep your data yours. Sync when you want.</span>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

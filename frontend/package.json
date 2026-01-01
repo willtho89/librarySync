@@ -1,0 +1,10 @@
+{
+  "name": "librarysync-frontend",
+  "private": true,
+  "devDependencies": {
+    "tailwindcss": "^3.4.1"
+  },
+  "scripts": {
+    "build": "tailwindcss -i ./input.css -o ../backend/src/librarysync/static/styles.css"
+  }
+}
