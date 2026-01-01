@@ -2,6 +2,7 @@ from importlib import metadata
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -51,6 +52,8 @@ def create_app() -> FastAPI:
         ),
         openapi_tags=OPENAPI_TAGS,
     )
+    if settings.gzip_enabled:
+        app.add_middleware(GZipMiddleware, minimum_size=settings.gzip_min_size)
 
     app.include_router(routes_auth.router)
     app.include_router(routes_integrations.router)

@@ -22,6 +22,8 @@ class Settings:
     jwt_access_token_minutes: int
     jwt_algorithm: str
     allow_registration: bool
+    gzip_enabled: bool
+    gzip_min_size: int
     trakt_rate_limit_per_minute: int
     simkl_rate_limit_per_minute: int
     letterboxd_rate_limit_per_minute: int
@@ -47,6 +49,10 @@ def load_settings() -> Settings:
         allow_registration=(
             (_get_env("LIBRARYSYNC_ALLOW_REGISTRATION", "true") or "true").lower() == "true"
         ),
+        gzip_enabled=(
+            (_get_env("LIBRARYSYNC_GZIP_ENABLED", "true") or "true").lower() == "true"
+        ),
+        gzip_min_size=int(_get_env("LIBRARYSYNC_GZIP_MIN_SIZE", "500") or "500"),
         trakt_rate_limit_per_minute=int(
             _get_env("LIBRARYSYNC_TRAKT_RATE_LIMIT_PER_MINUTE", "60") or "60"
         ),
