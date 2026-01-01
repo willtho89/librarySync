@@ -17,7 +17,18 @@ from librarysync.connectors.services.letterboxd import (
     DEFAULT_LETTERBOXD_API_BASE_URL,
     LetterboxdClient,
     LetterboxdError,
+    extract_member_id,
+    extract_member_name,
     has_required_letterboxd_fields,
+)
+from librarysync.connectors.services.letterboxd import (
+    is_token_expired as is_letterboxd_token_expired,
+)
+from librarysync.connectors.services.letterboxd import (
+    parse_expires_at as parse_letterboxd_expires_at,
+)
+from librarysync.connectors.services.letterboxd import (
+    token_to_secret_payload as letterboxd_token_to_secret_payload,
 )
 from librarysync.connectors.services.simkl import (
     SimklClient,
@@ -60,6 +71,7 @@ from librarysync.core.security import encrypt_value
 from librarysync.core.watch_pipeline import process_new_item_job
 from librarysync.db.models import (
     EpisodeItem,
+    Integration,
     IntegrationSecret,
     MediaItem,
     OutboxJob,
@@ -495,18 +507,27 @@ async def _deliver_letterboxd_watch(
         refresh_token=str(secret_data.get("refresh_token")),
         cookies=_safe_cookies(secret_data.get("cookies")),
     )
-    access_token = await client.refresh_access_token()
-    film_id = await client.resolve_film_id(access_token, imdb_id, tmdb_id)
+    access_token = await _ensure_letterboxd_access_token(
+        db, integration.id, secret_data, client
+    )
     if force_update_rating and rating is not None and entry_id:
         _, response_code = await client.update_log_entry_rating(
             str(entry_id), rating, access_token=access_token
         )
         return response_code, str(entry_id), None
+    film_id = await client.resolve_film_id(access_token, imdb_id, tmdb_id)
+    member_id = await _ensure_letterboxd_member(
+        db,
+        integration,
+        client,
+        access_token,
+    )
 
     log_check = await client.check_log_entries_for_date(
         access_token,
         film_id,
         watched_at.date(),
+        member_id=member_id,
     )
     if log_check.already_logged_today:
         if force_update_rating and rating is not None and log_check.entry_id:
@@ -566,7 +587,9 @@ async def _deliver_letterboxd_log_update(
         refresh_token=str(secret_data.get("refresh_token")),
         cookies=_safe_cookies(secret_data.get("cookies")),
     )
-    access_token = await client.refresh_access_token()
+    access_token = await _ensure_letterboxd_access_token(
+        db, integration.id, secret_data, client
+    )
     response, response_code = await client.update_log_entry(
         str(entry_id),
         watched_at=watched_at,
@@ -601,9 +624,65 @@ async def _deliver_letterboxd_delete(
         refresh_token=str(secret_data.get("refresh_token")),
         cookies=_safe_cookies(secret_data.get("cookies")),
     )
-    access_token = await client.refresh_access_token()
+    access_token = await _ensure_letterboxd_access_token(
+        db, integration.id, secret_data, client
+    )
     _, response_code = await client.delete_log_entry(str(entry_id), access_token=access_token)
     return response_code, str(entry_id)
+
+
+async def _ensure_letterboxd_access_token(
+    db: AsyncSession,
+    integration_id: str,
+    secret_data: dict[str, object],
+    client: LetterboxdClient,
+) -> str:
+    access_token = secret_data.get("access_token")
+    expires_at = parse_letterboxd_expires_at(secret_data.get("expires_at"))
+    if isinstance(access_token, str) and access_token and not is_letterboxd_token_expired(
+        expires_at
+    ):
+        return access_token
+    token = await client.refresh_access_token_payload()
+    updated = dict(secret_data)
+    updated.update(letterboxd_token_to_secret_payload(token))
+    await _save_integration_secret(db, integration_id, updated)
+    return token.access_token
+
+
+def _extract_letterboxd_member_id(integration: Integration) -> str | None:
+    if not integration.config:
+        return None
+    member_id = integration.config.get("member_id")
+    if member_id is None:
+        return None
+    cleaned = str(member_id).strip()
+    return cleaned or None
+
+
+async def _ensure_letterboxd_member(
+    db: AsyncSession,
+    integration: Integration,
+    client: LetterboxdClient,
+    access_token: str,
+) -> str | None:
+    member_id = _extract_letterboxd_member_id(integration)
+    if member_id:
+        return member_id
+    me_payload = await client.fetch_me(access_token=access_token)
+    member_id = extract_member_id(me_payload)
+    member_name = extract_member_name(me_payload)
+    if not member_id:
+        raise LetterboxdError("Letterboxd /me response missing member id")
+    if member_id or member_name:
+        config = dict(integration.config or {})
+        if member_id:
+            config["member_id"] = member_id
+        if member_name:
+            config["member_name"] = member_name
+        integration.config = config
+        db.add(integration)
+    return member_id
 
 
 def _merge_payload_list(

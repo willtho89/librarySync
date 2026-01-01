@@ -9,6 +9,7 @@ import httpx
 
 DEFAULT_LETTERBOXD_API_BASE_URL = "https://api.letterboxd.com/api/v0"
 LETTERBOXD_REQUIRED_FIELDS = ("client_id", "client_secret", "refresh_token")
+DEFAULT_LETTERBOXD_TOKEN_TTL_SECONDS = 300
 logger = logging.getLogger(__name__)
 
 
@@ -37,6 +38,80 @@ def has_required_letterboxd_fields(values: Mapping[str, object]) -> bool:
         if not isinstance(value, str) or not value:
             return False
     return True
+
+
+@dataclass(frozen=True)
+class LetterboxdToken:
+    access_token: str
+    expires_at: datetime | None = None
+    token_type: str | None = None
+
+
+def parse_expires_at(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if cleaned.isdigit():
+            try:
+                return datetime.fromtimestamp(float(cleaned), tz=timezone.utc)
+            except ValueError:
+                return None
+        try:
+            if cleaned.endswith("Z"):
+                cleaned = f"{cleaned[:-1]}+00:00"
+            parsed = datetime.fromisoformat(cleaned)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def is_token_expired(expires_at: datetime | None, skew_seconds: int = 60) -> bool:
+    if expires_at is None:
+        return True
+    now = datetime.now(timezone.utc)
+    return expires_at <= (now + timedelta(seconds=skew_seconds))
+
+
+def normalize_token_payload(payload: Mapping[str, Any]) -> LetterboxdToken:
+    access_token = str(payload.get("access_token") or "").strip()
+    if not access_token:
+        raise LetterboxdError("Letterboxd token response missing access_token")
+    created_at = payload.get("created_at")
+    expires_in = payload.get("expires_in")
+    expires_at: datetime | None = None
+    if isinstance(created_at, (int, float)) and isinstance(expires_in, (int, float)):
+        expires_at = datetime.fromtimestamp(
+            float(created_at) + float(expires_in), tz=timezone.utc
+        )
+    elif isinstance(expires_in, (int, float)):
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=float(expires_in))
+    if expires_at is None:
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=DEFAULT_LETTERBOXD_TOKEN_TTL_SECONDS
+        )
+    token_type = payload.get("token_type")
+    return LetterboxdToken(
+        access_token=access_token,
+        expires_at=expires_at,
+        token_type=str(token_type) if isinstance(token_type, str) else None,
+    )
+
+
+def token_to_secret_payload(token: LetterboxdToken) -> dict[str, object]:
+    payload: dict[str, object] = {"access_token": token.access_token}
+    if token.expires_at:
+        payload["expires_at"] = token.expires_at.isoformat()
+    if token.token_type:
+        payload["token_type"] = token.token_type
+    return payload
 
 
 class LetterboxdClient:
@@ -76,6 +151,10 @@ class LetterboxdClient:
             raise LetterboxdError("Letterboxd /me request failed") from exc
 
     async def refresh_access_token(self) -> str:
+        token = await self.refresh_access_token_payload()
+        return token.access_token
+
+    async def refresh_access_token_payload(self) -> LetterboxdToken:
         token_url = f"{self.api_base_url}/auth/token"
         payload = {
             "grant_type": "refresh_token",
@@ -110,10 +189,9 @@ class LetterboxdClient:
         except (httpx.RequestError, json.JSONDecodeError) as exc:
             raise LetterboxdError("Letterboxd token refresh failed") from exc
 
-        access_token = data.get("access_token")
-        if not access_token:
-            raise LetterboxdError("Letterboxd token response missing access_token")
-        return str(access_token)
+        if not isinstance(data, dict):
+            raise LetterboxdError("Letterboxd token response was not JSON")
+        return normalize_token_payload(data)
 
     async def log_watch(
         self,
@@ -293,10 +371,13 @@ class LetterboxdClient:
         film_id: str,
         watched_date: date,
         max_pages: int = 5,
+        member_id: str | None = None,
     ) -> LogEntryCheck:
-        me_payload = await self.fetch_me(access_token=access_token)
-        member_id = _extract_member_id(me_payload)
-        if not member_id:
+        resolved_member_id = member_id
+        if not resolved_member_id:
+            me_payload = await self.fetch_me(access_token=access_token)
+            resolved_member_id = _extract_member_id(me_payload)
+        if not resolved_member_id:
             raise LetterboxdError("Letterboxd /me response missing member id")
         cursor: str | None = None
         has_any_entries = False
@@ -305,7 +386,7 @@ class LetterboxdClient:
                 access_token,
                 film_id,
                 cursor=cursor,
-                member_id=member_id,
+                member_id=resolved_member_id,
             )
             entries = _extract_log_entries(payload)
             if not entries:
@@ -878,6 +959,10 @@ def _iter_months(
 
 def extract_member_id(payload: Any) -> str | None:
     return _extract_member_id(payload)
+
+
+def extract_member_name(payload: Any) -> str | None:
+    return _extract_member_name(payload)
 
 
 def _extract_member_id(payload: Any) -> str | None:

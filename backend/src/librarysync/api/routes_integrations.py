@@ -15,6 +15,7 @@ from librarysync.connectors.services.letterboxd import (
     LetterboxdClient,
     LetterboxdError,
     extract_member_id,
+    extract_member_name,
     has_required_letterboxd_fields,
 )
 from librarysync.connectors.services.simkl import (
@@ -260,6 +261,13 @@ async def save_letterboxd(
     client_secret = _normalize_optional(payload.client_secret)
     refresh_token = _normalize_optional(payload.refresh_token)
     cookies = _normalize_cookies(payload.cookies)
+    credentials_changed = False
+    if client_id is not None and client_id != secret_data.get("client_id"):
+        credentials_changed = True
+    if client_secret is not None and client_secret != secret_data.get("client_secret"):
+        credentials_changed = True
+    if refresh_token is not None and refresh_token != secret_data.get("refresh_token"):
+        credentials_changed = True
 
     updated: dict[str, object] = dict(secret_data)
     if client_id is not None:
@@ -270,6 +278,10 @@ async def save_letterboxd(
         updated["refresh_token"] = refresh_token
     if cookies is not None:
         updated["cookies"] = cookies
+    if credentials_changed:
+        updated.pop("access_token", None)
+        updated.pop("expires_at", None)
+        updated.pop("token_type", None)
 
     if not updated and is_new:
         raise HTTPException(
@@ -353,13 +365,16 @@ async def test_letterboxd(
         ) from exc
 
     member_id = extract_member_id(me_payload)
+    member_name = extract_member_name(me_payload)
     if member_id:
         config = dict(integration.config or {})
         if config.get("member_id") != member_id:
             config["member_id"] = member_id
-            integration.config = config
-            db.add(integration)
-            await db.commit()
+        if member_name and config.get("member_name") != member_name:
+            config["member_name"] = member_name
+        integration.config = config
+        db.add(integration)
+        await db.commit()
 
     return {"status": "ok"}
 
@@ -393,6 +408,7 @@ async def letterboxd_disconnect(
     integration.status = "disconnected"
     config = dict(integration.config or {})
     config.pop("member_id", None)
+    config.pop("member_name", None)
     integration.config = config
     db.add(integration)
     await db.commit()
