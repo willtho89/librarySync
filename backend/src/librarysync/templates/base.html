@@ -74,7 +74,8 @@
               <span class="block text-xs uppercase tracking-[0.3em] text-muted">Sync Hub</span>
             </div>
           </a>
-          <nav class="flex flex-wrap items-center gap-2 text-sm">
+          <!-- Desktop Navigation - Hidden on mobile -->
+          <nav class="hidden items-center gap-2 text-sm md:flex">
             <a
               href="/"
               class="nav-link{% if active_page == 'home' %} nav-link-active{% endif %}"
@@ -124,6 +125,18 @@
               Settings
             </a>
           </nav>
+          <!-- Burger Menu Button - Visible on mobile only -->
+          <button
+            type="button"
+            class="flex flex-col gap-1 md:hidden"
+            data-mobile-menu-toggle
+            aria-label="Toggle menu"
+            aria-expanded="false"
+          >
+            <span class="h-0.5 w-6 bg-ink transition-transform"></span>
+            <span class="h-0.5 w-6 bg-ink transition-opacity"></span>
+            <span class="h-0.5 w-6 bg-ink transition-transform"></span>
+          </button>
           <div class="flex items-center gap-2">
             <button type="button" class="btn btn-ghost" data-theme-toggle>
               <span class="sr-only">Toggle theme</span>
@@ -141,6 +154,104 @@
           </div>
         </div>
       </header>
+      <!-- Mobile Menu Overlay -->
+      <div
+        class="fixed inset-0 z-50 hidden bg-slate/70 backdrop-blur-sm"
+        data-mobile-menu-backdrop
+      ></div>
+      <!-- Mobile Menu Panel -->
+      <nav
+        class="fixed right-0 top-0 z-50 flex h-full w-64 translate-x-full flex-col gap-2 border-l border-line/60 bg-surface p-6 shadow-card transition-transform duration-300"
+        data-mobile-menu-panel
+      >
+        <div class="mb-4 flex items-center justify-between">
+          <span class="text-lg font-display">Menu</span>
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-lg border border-line/60 text-muted hover:text-ink"
+            data-mobile-menu-close
+            aria-label="Close menu"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <a
+          href="/"
+          class="mobile-nav-link{% if active_page == 'home' %} mobile-nav-link-active{% endif %}"
+        >
+          Home
+        </a>
+        <a
+          href="/login"
+          data-guest-only
+          class="mobile-nav-link{% if active_page == 'login' %} mobile-nav-link-active{% endif %}"
+        >
+          Login
+        </a>
+        <a
+          href="/add-watched"
+          data-auth-only
+          class="mobile-nav-link{% if active_page == 'add-watched' %} mobile-nav-link-active{% endif %}"
+        >
+          Add Watched
+        </a>
+        <a
+          href="/history"
+          data-auth-only
+          class="mobile-nav-link{% if active_page == 'history' %} mobile-nav-link-active{% endif %}"
+        >
+          History
+        </a>
+        <a
+          href="/integrations"
+          data-auth-only
+          class="mobile-nav-link{% if active_page == 'integrations' %} mobile-nav-link-active{% endif %}"
+        >
+          Integrations
+        </a>
+        <a
+          href="/activity"
+          data-auth-only
+          class="mobile-nav-link{% if active_page == 'activity' %} mobile-nav-link-active{% endif %}"
+        >
+          Activity
+        </a>
+        <a
+          href="/settings"
+          data-auth-only
+          class="mobile-nav-link{% if active_page == 'settings' %} mobile-nav-link-active{% endif %}"
+        >
+          Settings
+        </a>
+        <div class="mt-auto border-t border-line/60 pt-4">
+          <div class="flex flex-col gap-2">
+            <button type="button" class="btn btn-ghost w-full justify-start" data-theme-toggle>
+              <span data-theme-label>System</span>
+            </button>
+            <div class="text-xs text-muted" data-auth-only>
+              <strong data-user-username>
+                {% if current_user %}{{ current_user.username }}{% endif %}
+              </strong>
+            </div>
+            <button type="button" class="btn btn-ghost w-full justify-start" data-logout data-auth-only>
+              Log out
+            </button>
+          </div>
+        </div>
+      </nav>
       <main class="flex-1">
         <div class="mx-auto w-full max-w-6xl px-4 pb-20 pt-8">
           {% block content %}{% endblock %}

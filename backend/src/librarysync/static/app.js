@@ -139,6 +139,62 @@ function initThemeToggle() {
   });
 }
 
+function initMobileMenu() {
+  const toggleButton = document.querySelector("[data-mobile-menu-toggle]");
+  const closeButton = document.querySelector("[data-mobile-menu-close]");
+  const backdrop = document.querySelector("[data-mobile-menu-backdrop]");
+  const panel = document.querySelector("[data-mobile-menu-panel]");
+
+  // Early return if required elements are missing
+  if (!toggleButton || !panel || !backdrop) {
+    return;
+  }
+  
+  // closeButton is optional but should exist in production
+  if (!closeButton) {
+    console.warn("Mobile menu close button not found");
+  }
+
+  function openMenu() {
+    panel.classList.add("is-open");
+    backdrop.classList.add("is-open");
+    toggleButton.setAttribute("aria-expanded", "true");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeMenu() {
+    panel.classList.remove("is-open");
+    backdrop.classList.remove("is-open");
+    toggleButton.setAttribute("aria-expanded", "false");
+    document.body.style.overflow = "";
+  }
+
+  toggleButton.addEventListener("click", () => {
+    const isOpen = panel.classList.contains("is-open");
+    if (isOpen) {
+      closeMenu();
+    } else {
+      openMenu();
+    }
+  });
+
+  if (closeButton) {
+    closeButton.addEventListener("click", closeMenu);
+  }
+
+  backdrop.addEventListener("click", closeMenu);
+
+  panel.querySelectorAll("a").forEach((link) => {
+    link.addEventListener("click", closeMenu);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && panel.classList.contains("is-open")) {
+      closeMenu();
+    }
+  });
+}
+
 function applyQuickImportControls(statusData) {
   const form = document.getElementById("quick-import-form");
   if (!form) {
@@ -3411,6 +3467,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const requiresAuth = body && body.dataset.requiresAuth === "true";
   const guestOnly = body && body.dataset.guestOnly === "true";
   initThemeToggle();
+  initMobileMenu();
   const user = await loadCurrentUser();
   applyAuthVisibility(user);
 
