@@ -625,7 +625,7 @@ async def trakt_callback(
             integration.config = config
     db.add(integration)
     await db.commit()
-    return RedirectResponse(url="/static/integrations.html")
+    return RedirectResponse(url="/settings")
 
 
 @router.post(
@@ -782,7 +782,7 @@ async def simkl_callback(
         integration.config = config
     db.add(integration)
     await db.commit()
-    return RedirectResponse(url="/static/integrations.html")
+    return RedirectResponse(url="/settings")
 
 
 @router.post(

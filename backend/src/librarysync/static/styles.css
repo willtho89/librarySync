@@ -626,6 +626,8 @@ body {
       radial-gradient(900px 500px at 15% -10%, rgba(13, 120, 211, 0.18), transparent 60%),
       radial-gradient(800px 600px at 90% -5%, rgba(11, 138, 155, 0.18), transparent 55%),
       radial-gradient(1200px 900px at 50% 120%, rgba(13, 120, 211, 0.12), transparent 60%);
+  background-repeat: no-repeat;
+  background-size: cover;
 }
 
 [hidden] {
@@ -718,6 +720,58 @@ h1,
 
 .card-muted {
   background-color: rgb(var(--color-elevated) / 0.8);
+}
+
+.settings-group {
+  border-radius: 1.5rem;
+  border-width: 1px;
+  border-color: rgb(var(--color-line) / 0.6);
+  background-color: rgb(var(--color-surface) / 0.7);
+  --tw-shadow: 0 18px 40px -24px rgba(15, 27, 36, 0.35);
+  --tw-shadow-colored: 0 18px 40px -24px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+  overflow: hidden;
+}
+
+.settings-summary {
+  list-style: none;
+  display: flex;
+  cursor: pointer;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.5rem;
+  background-color: rgb(var(--color-surface) / 0.9);
+}
+
+.settings-summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-summary::marker {
+  content: "";
+}
+
+.settings-summary::after {
+  content: "+";
+  font-size: 1.25rem;
+  line-height: 1;
+  font-weight: 600;
+  color: rgb(var(--color-muted) / 1);
+}
+
+.settings-group[open] .settings-summary {
+  border-bottom-width: 1px;
+  border-color: rgb(var(--color-line) / 0.6);
+}
+
+.settings-group[open] .settings-summary::after {
+  content: "-";
+}
+
+.settings-panel {
+  padding: 1.5rem;
 }
 
 .card-header {
@@ -2433,14 +2487,6 @@ h1,
     grid-column: span 3 / span 3;
   }
 
-  .md\:flex {
-    display: flex;
-  }
-
-  .md\:hidden {
-    display: none;
-  }
-
   .md\:grid-cols-2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2451,6 +2497,14 @@ h1,
 }
 
 @media (min-width: 1024px) {
+  .lg\:flex {
+    display: flex;
+  }
+
+  .lg\:hidden {
+    display: none;
+  }
+
   .lg\:grid-cols-2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

@@ -106,7 +106,7 @@ librarySync automatically handles browser cache invalidation for static assets (
 
 - Static files are cached for 7 days by default
 - When you update the version in `backend/pyproject.toml`, browsers will automatically fetch new files
-- Example: `/static/app.js?v=0.4.3` becomes `/static/app.js?v=0.4.4` on version bump
+- Example: `/static/app.js?v=0.4.3` becomes `/static/app.js?v=0.4.5` on version bump
 
 No manual cache busting or build-time hash generation is needed.
 

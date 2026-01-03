@@ -1,164 +1,440 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="space-y-8">
-  <div class="card">
-    <div class="card-header">
+<section class="space-y-6">
+  <details class="settings-group" open>
+    <summary class="settings-summary">
       <div>
-        <h2 class="section-title">Search</h2>
-        <p class="section-subtitle">Control how lookups behave.</p>
+        <h2 class="section-title">Personal preferences</h2>
+        <p class="section-subtitle">Control search behavior and theme defaults.</p>
       </div>
-    </div>
-    <form id="settings-form" class="space-y-4">
-      <label class="inline-control">
-        <input type="checkbox" name="include_adult_in_search" />
-        <span>Include adult titles in search results</span>
-      </label>
-      <button class="btn btn-primary" type="submit">Save</button>
-      <p id="settings-message" class="form-message" role="status" hidden></p>
-    </form>
-  </div>
+    </summary>
+    <div class="settings-panel">
+      <div class="grid gap-4 lg:grid-cols-2">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="section-title">Search</h2>
+              <p class="section-subtitle">Control how lookups behave.</p>
+            </div>
+          </div>
+          <form id="settings-form" class="space-y-4">
+            <label class="inline-control">
+              <input type="checkbox" name="include_adult_in_search" />
+              <span>Include adult titles in search results</span>
+            </label>
+            <button class="btn btn-primary" type="submit">Save</button>
+            <p id="settings-message" class="form-message" role="status" hidden></p>
+          </form>
+        </div>
 
-  <div>
-    <h2 class="section-title">Metadata providers</h2>
-    <p class="section-subtitle">Enable providers and store API keys where needed.</p>
-    <div class="mt-4 grid gap-4 lg:grid-cols-2">
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <h3 class="section-title">TMDB</h3>
-            <p class="section-subtitle">Movies + TV metadata.</p>
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="section-title">Appearance</h2>
+              <p class="section-subtitle">Choose how the interface is rendered.</p>
+            </div>
+          </div>
+          <div class="space-y-3">
+            <label class="inline-control">
+              <input type="radio" name="theme_mode" value="system" data-theme-option />
+              <span>System</span>
+            </label>
+            <label class="inline-control">
+              <input type="radio" name="theme_mode" value="light" data-theme-option />
+              <span>Light</span>
+            </label>
+            <label class="inline-control">
+              <input type="radio" name="theme_mode" value="dark" data-theme-option />
+              <span>Dark</span>
+            </label>
+            <p class="helper-text">Defaults to system when unset.</p>
           </div>
         </div>
-        <form id="tmdb-form" class="space-y-4">
-          <label class="inline-control">
-            <input type="checkbox" name="enabled" />
-            <span>Enable TMDB</span>
-          </label>
-          <label class="field">
-            <span>TMDB API Key</span>
-            <input class="input" type="text" name="api_key" autocomplete="off" />
-          </label>
-          <div class="grid gap-3 md:grid-cols-2">
+      </div>
+    </div>
+  </details>
+
+  <details class="settings-group">
+    <summary class="settings-summary">
+      <div>
+        <h2 class="section-title">Sync providers</h2>
+        <p class="section-subtitle">Connect services for history and ratings sync.</p>
+      </div>
+    </summary>
+    <div class="settings-panel">
+      <div class="grid gap-4 lg:grid-cols-2">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">Letterboxd</h3>
+              <p class="section-subtitle">Paste your OAuth refresh command.</p>
+            </div>
+            <span id="letterboxd-status" class="status-pill">Not connected</span>
+          </div>
+          <form id="letterboxd-form" class="space-y-4">
+            <label class="field">
+              <span>Paste curl/httpie command</span>
+              <textarea
+                class="textarea"
+                name="command"
+                id="letterboxd-command"
+                rows="6"
+                placeholder="curl -H 'Cookie: ...' -d 'client_id=...&client_secret=...&refresh_token=...' https://api.letterboxd.com/api/v0/oauth/token"
+              ></textarea>
+            </label>
+            <button type="button" id="letterboxd-parse" class="btn btn-ghost btn-sm">
+              Parse command
+            </button>
+            <div class="grid gap-3 md:grid-cols-2">
+              <label class="field md:col-span-2">
+                <span>API Base URL</span>
+                <input
+                  class="input"
+                  type="url"
+                  name="api_base_url"
+                  placeholder="https://api.letterboxd.com/api/v0"
+                />
+              </label>
+              <label class="field">
+                <span>Client ID</span>
+                <input class="input" type="text" name="client_id" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Client Secret</span>
+                <input class="input" type="password" name="client_secret" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Refresh Token</span>
+                <input class="input" type="password" name="refresh_token" autocomplete="off" />
+              </label>
+            </div>
+            <label class="field">
+              <span>Cookies (JSON)</span>
+              <textarea
+                class="textarea"
+                name="cookies"
+                rows="5"
+                placeholder='{"letterboxd.signed.in.as":"..."}'
+              ></textarea>
+            </label>
+            <p class="helper-text">
+              Paste a JSON object of cookie names to values from your captured session.
+            </p>
+            <div class="flex flex-wrap gap-2">
+              <button class="btn btn-primary" type="submit">Save</button>
+              <button type="button" id="letterboxd-test" class="btn btn-secondary">
+                Test
+              </button>
+              <button
+                type="button"
+                id="letterboxd-disconnect"
+                class="btn btn-ghost"
+                hidden
+              >
+                Disconnect
+              </button>
+            </div>
+            <p id="letterboxd-message" class="form-message" role="status" hidden></p>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">Trakt</h3>
+              <p class="section-subtitle">OAuth connection for sync + imports.</p>
+            </div>
+            <span id="trakt-status" class="status-pill">Not connected</span>
+          </div>
+          <p id="trakt-message" class="form-message" role="status" hidden></p>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" id="trakt-connect" class="btn btn-primary">
+              Connect Trakt
+            </button>
+            <button type="button" id="trakt-disconnect" class="btn btn-ghost" hidden>
+              Disconnect
+            </button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">SIMKL</h3>
+              <p class="section-subtitle">OAuth connection for sync + imports.</p>
+            </div>
+            <span id="simkl-status" class="status-pill">Not connected</span>
+          </div>
+          <p id="simkl-message" class="form-message" role="status" hidden></p>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" id="simkl-connect" class="btn btn-primary">
+              Connect SIMKL
+            </button>
+            <button type="button" id="simkl-disconnect" class="btn btn-ghost" hidden>
+              Disconnect
+            </button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">Stremio</h3>
+              <p class="section-subtitle">Sign in with your Stremio account.</p>
+            </div>
+            <span id="stremio-status" class="status-pill">Not connected</span>
+          </div>
+          <form id="stremio-form" class="space-y-4">
+            <label class="field">
+              <span>Email</span>
+              <input class="input" type="email" name="email" autocomplete="username" required />
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input
+                class="input"
+                type="password"
+                name="password"
+                autocomplete="current-password"
+                required
+              />
+            </label>
+            <label class="field">
+              <span>API Base URL (optional)</span>
+              <input class="input" type="url" name="api_base_url" placeholder="https://api.strem.io" />
+            </label>
+            <div class="flex flex-wrap gap-2">
+              <button type="submit" id="stremio-connect" class="btn btn-primary">
+                Connect Stremio
+              </button>
+              <button type="button" id="stremio-disconnect" class="btn btn-ghost" hidden>
+                Disconnect
+              </button>
+            </div>
+            <p id="stremio-message" class="form-message" role="status" hidden></p>
+          </form>
+        </div>
+      </div>
+      <p class="mt-4 text-xs text-muted">
+        Secrets are encrypted at rest and stored in the integration secrets table. Config fields
+        are kept in provider configs only.
+      </p>
+    </div>
+  </details>
+
+  <details class="settings-group" open>
+    <summary class="settings-summary">
+      <div>
+        <h2 class="section-title">History imports</h2>
+        <p class="section-subtitle">
+          Pull recent history or full backfills in priority order (Trakt → Letterboxd → SIMKL →
+          Stremio).
+        </p>
+      </div>
+    </summary>
+    <div class="settings-panel">
+      <div class="grid gap-4 lg:grid-cols-2">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">Quick import</h3>
+              <p class="section-subtitle">Sync the last 7 days on a schedule.</p>
+            </div>
+          </div>
+          <form id="quick-import-form" class="space-y-4">
+            <label class="field">
+              <span>Import schedule</span>
+              <select class="select" name="quick_import_interval">
+                <option value="">Manual only</option>
+                <option value="21600">Every 6 hours</option>
+                <option value="43200">Every 12 hours</option>
+                <option value="86400">Every day</option>
+                <option value="259200">Every 3 days</option>
+                <option value="604800">Every 7 days</option>
+              </select>
+            </label>
+            <div class="flex flex-wrap gap-2">
+              <button class="btn btn-primary" type="submit">Save schedule</button>
+              <button type="button" id="quick-import-now" class="btn btn-secondary">
+                Import now
+              </button>
+            </div>
+            <p id="quick-import-last" class="helper-text"></p>
+            <p id="quick-import-message" class="form-message" role="status" hidden></p>
+          </form>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">Import all</h3>
+              <p class="section-subtitle">
+                Full-history import using your configured lookback window.
+              </p>
+            </div>
+          </div>
+          <div class="space-y-3">
+            <button type="button" id="import-all-button" class="btn btn-primary">
+              Import all
+            </button>
+            <p id="import-all-message" class="form-message" role="status" hidden></p>
+            <p class="helper-text">
+              Outbox delivery resumes after the merge completes.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <details class="settings-group">
+    <summary class="settings-summary">
+      <div>
+        <h2 class="section-title">Metadata providers</h2>
+        <p class="section-subtitle">Enable providers and store API keys where needed.</p>
+      </div>
+    </summary>
+    <div class="settings-panel">
+      <div class="grid gap-4 lg:grid-cols-2">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">TMDB</h3>
+              <p class="section-subtitle">Movies + TV metadata.</p>
+            </div>
+          </div>
+          <form id="tmdb-form" class="space-y-4">
+            <label class="inline-control">
+              <input type="checkbox" name="enabled" />
+              <span>Enable TMDB</span>
+            </label>
+            <label class="field">
+              <span>TMDB API Key</span>
+              <input class="input" type="text" name="api_key" autocomplete="off" />
+            </label>
+            <div class="grid gap-3 md:grid-cols-2">
+              <label class="field">
+                <span>Language (optional)</span>
+                <input class="input" type="text" name="language" placeholder="en-US" />
+              </label>
+              <label class="field">
+                <span>Region (optional)</span>
+                <input class="input" type="text" name="region" placeholder="US" />
+              </label>
+            </div>
+            <button class="btn btn-secondary" type="submit">Save</button>
+            <p id="tmdb-message" class="form-message" role="status" hidden></p>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">TVDB</h3>
+              <p class="section-subtitle">Episode metadata and IDs.</p>
+            </div>
+          </div>
+          <form id="tvdb-form" class="space-y-4">
+            <label class="inline-control">
+              <input type="checkbox" name="enabled" />
+              <span>Enable TVDB</span>
+            </label>
+            <label class="field">
+              <span>TVDB API Key</span>
+              <input class="input" type="text" name="api_key" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>TVDB PIN (optional)</span>
+              <input class="input" type="text" name="pin" autocomplete="off" />
+            </label>
             <label class="field">
               <span>Language (optional)</span>
-              <input class="input" type="text" name="language" placeholder="en-US" />
+              <input class="input" type="text" name="language" placeholder="en" />
+            </label>
+            <button class="btn btn-secondary" type="submit">Save</button>
+            <p id="tvdb-message" class="form-message" role="status" hidden></p>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">TVMaze</h3>
+              <p class="section-subtitle">No API key required.</p>
+            </div>
+          </div>
+          <form id="tvmaze-form" class="space-y-4">
+            <label class="inline-control">
+              <input type="checkbox" name="enabled" />
+              <span>Enable TVMaze</span>
+            </label>
+            <p class="helper-text">No API key required for TVMaze metadata lookups.</p>
+            <button class="btn btn-secondary" type="submit">Save</button>
+            <p id="tvmaze-message" class="form-message" role="status" hidden></p>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">IMDb</h3>
+              <p class="section-subtitle">No API key required.</p>
+            </div>
+          </div>
+          <form id="imdb-form" class="space-y-4">
+            <label class="inline-control">
+              <input type="checkbox" name="enabled" />
+              <span>Enable IMDb</span>
+            </label>
+            <p class="helper-text">No API key required for IMDb metadata lookups.</p>
+            <button class="btn btn-secondary" type="submit">Save</button>
+            <p id="imdb-message" class="form-message" role="status" hidden></p>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">Kitsu</h3>
+              <p class="section-subtitle">Anime metadata provider.</p>
+            </div>
+          </div>
+          <form id="kitsu-form" class="space-y-4">
+            <label class="inline-control">
+              <input type="checkbox" name="enabled" />
+              <span>Enable Kitsu</span>
             </label>
             <label class="field">
-              <span>Region (optional)</span>
-              <input class="input" type="text" name="region" placeholder="US" />
+              <span>Title language (optional)</span>
+              <input class="input" type="text" name="language" placeholder="en, en_jp, ja_jp" />
             </label>
-          </div>
-          <button class="btn btn-secondary" type="submit">Save</button>
-          <p id="tmdb-message" class="form-message" role="status" hidden></p>
-        </form>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <h3 class="section-title">TVDB</h3>
-            <p class="section-subtitle">Episode metadata and IDs.</p>
-          </div>
+            <p class="helper-text">No API key required for Kitsu metadata lookups.</p>
+            <button class="btn btn-secondary" type="submit">Save</button>
+            <p id="kitsu-message" class="form-message" role="status" hidden></p>
+          </form>
         </div>
-        <form id="tvdb-form" class="space-y-4">
-          <label class="inline-control">
-            <input type="checkbox" name="enabled" />
-            <span>Enable TVDB</span>
-          </label>
-          <label class="field">
-            <span>TVDB API Key</span>
-            <input class="input" type="text" name="api_key" autocomplete="off" />
-          </label>
-          <label class="field">
-            <span>TVDB PIN (optional)</span>
-            <input class="input" type="text" name="pin" autocomplete="off" />
-          </label>
-          <label class="field">
-            <span>Language (optional)</span>
-            <input class="input" type="text" name="language" placeholder="en" />
-          </label>
-          <button class="btn btn-secondary" type="submit">Save</button>
-          <p id="tvdb-message" class="form-message" role="status" hidden></p>
-        </form>
-      </div>
 
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <h3 class="section-title">TVMaze</h3>
-            <p class="section-subtitle">No API key required.</p>
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">MyAnimeList</h3>
+              <p class="section-subtitle">Anime metadata provider.</p>
+            </div>
           </div>
+          <form id="myanimelist-form" class="space-y-4">
+            <label class="inline-control">
+              <input type="checkbox" name="enabled" />
+              <span>Enable MyAnimeList</span>
+            </label>
+            <p class="helper-text">No API key required for MyAnimeList lookups.</p>
+            <button class="btn btn-secondary" type="submit">Save</button>
+            <p id="myanimelist-message" class="form-message" role="status" hidden></p>
+          </form>
         </div>
-        <form id="tvmaze-form" class="space-y-4">
-          <label class="inline-control">
-            <input type="checkbox" name="enabled" />
-            <span>Enable TVMaze</span>
-          </label>
-          <p class="helper-text">No API key required for TVMaze metadata lookups.</p>
-          <button class="btn btn-secondary" type="submit">Save</button>
-          <p id="tvmaze-message" class="form-message" role="status" hidden></p>
-        </form>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <h3 class="section-title">IMDb</h3>
-            <p class="section-subtitle">No API key required.</p>
-          </div>
-        </div>
-        <form id="imdb-form" class="space-y-4">
-          <label class="inline-control">
-            <input type="checkbox" name="enabled" />
-            <span>Enable IMDb</span>
-          </label>
-          <p class="helper-text">No API key required for IMDb metadata lookups.</p>
-          <button class="btn btn-secondary" type="submit">Save</button>
-          <p id="imdb-message" class="form-message" role="status" hidden></p>
-        </form>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <h3 class="section-title">Kitsu</h3>
-            <p class="section-subtitle">Anime metadata provider.</p>
-          </div>
-        </div>
-        <form id="kitsu-form" class="space-y-4">
-          <label class="inline-control">
-            <input type="checkbox" name="enabled" />
-            <span>Enable Kitsu</span>
-          </label>
-          <label class="field">
-            <span>Title language (optional)</span>
-            <input class="input" type="text" name="language" placeholder="en, en_jp, ja_jp" />
-          </label>
-          <p class="helper-text">No API key required for Kitsu metadata lookups.</p>
-          <button class="btn btn-secondary" type="submit">Save</button>
-          <p id="kitsu-message" class="form-message" role="status" hidden></p>
-        </form>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <h3 class="section-title">MyAnimeList</h3>
-            <p class="section-subtitle">Anime metadata provider.</p>
-          </div>
-        </div>
-        <form id="myanimelist-form" class="space-y-4">
-          <label class="inline-control">
-            <input type="checkbox" name="enabled" />
-            <span>Enable MyAnimeList</span>
-          </label>
-          <p class="helper-text">No API key required for MyAnimeList lookups.</p>
-          <button class="btn btn-secondary" type="submit">Save</button>
-          <p id="myanimelist-message" class="form-message" role="status" hidden></p>
-        </form>
       </div>
     </div>
-  </div>
+  </details>
+
+  </details>
 </section>
 {% endblock %}
