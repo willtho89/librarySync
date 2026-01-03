@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -252,14 +252,8 @@ def create_app() -> FastAPI:
         request: Request,
         current_user: User | None = Depends(get_optional_user),
     ):
-        return _render_page(
-            request,
-            "integrations.html",
-            page_title="Integrations",
-            active_page="integrations",
-            requires_auth=True,
-            current_user=current_user,
-        )
+        # Redirect to settings page (integrations merged into settings)
+        return RedirectResponse(url="/settings", status_code=302)
 
     @app.get("/activity", include_in_schema=False)
     async def activity(

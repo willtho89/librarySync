@@ -75,7 +75,7 @@
             </div>
           </a>
           <!-- Desktop Navigation - Hidden on mobile -->
-          <nav class="hidden items-center gap-2 text-sm md:flex">
+          <nav class="hidden items-center gap-2 text-sm lg:flex">
             <a
               href="/"
               class="nav-link{% if active_page == 'home' %} nav-link-active{% endif %}"
@@ -104,13 +104,6 @@
               History
             </a>
             <a
-              href="/integrations"
-              data-auth-only
-              class="nav-link{% if active_page == 'integrations' %} nav-link-active{% endif %}"
-            >
-              Integrations
-            </a>
-            <a
               href="/activity"
               data-auth-only
               class="nav-link{% if active_page == 'activity' %} nav-link-active{% endif %}"
@@ -120,7 +113,7 @@
             <a
               href="/settings"
               data-auth-only
-              class="nav-link{% if active_page == 'settings' %} nav-link-active{% endif %}"
+              class="nav-link{% if active_page == 'settings' or active_page == 'integrations' %} nav-link-active{% endif %}"
             >
               Settings
             </a>
@@ -128,7 +121,7 @@
           <!-- Burger Menu Button - Visible on mobile only -->
           <button
             type="button"
-            class="flex flex-col gap-1 md:hidden"
+            class="flex flex-col gap-1 lg:hidden"
             data-mobile-menu-toggle
             aria-label="Toggle menu"
             aria-expanded="false"
@@ -142,12 +135,6 @@
               <span class="sr-only">Toggle theme</span>
               <span data-theme-label>System</span>
             </button>
-            <span class="text-xs text-muted" data-auth-only>
-              Signed in as
-              <strong data-user-username>
-                {% if current_user %}{{ current_user.username }}{% endif %}
-              </strong>
-            </span>
             <button type="button" class="btn btn-ghost" data-logout data-auth-only>
               Log out
             </button>
@@ -216,13 +203,6 @@
           History
         </a>
         <a
-          href="/integrations"
-          data-auth-only
-          class="mobile-nav-link{% if active_page == 'integrations' %} mobile-nav-link-active{% endif %}"
-        >
-          Integrations
-        </a>
-        <a
           href="/activity"
           data-auth-only
           class="mobile-nav-link{% if active_page == 'activity' %} mobile-nav-link-active{% endif %}"
@@ -232,7 +212,7 @@
         <a
           href="/settings"
           data-auth-only
-          class="mobile-nav-link{% if active_page == 'settings' %} mobile-nav-link-active{% endif %}"
+          class="mobile-nav-link{% if active_page == 'settings' or active_page == 'integrations' %} mobile-nav-link-active{% endif %}"
         >
           Settings
         </a>
@@ -241,11 +221,6 @@
             <button type="button" class="btn btn-ghost w-full justify-start" data-theme-toggle>
               <span data-theme-label>System</span>
             </button>
-            <div class="text-xs text-muted" data-auth-only>
-              <strong data-user-username>
-                {% if current_user %}{{ current_user.username }}{% endif %}
-              </strong>
-            </div>
             <button type="button" class="btn btn-ghost w-full justify-start" data-logout data-auth-only>
               Log out
             </button>
