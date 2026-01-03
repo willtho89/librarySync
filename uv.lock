@@ -335,7 +335,7 @@ wheels = [
 
 [[package]]
 name = "librarysync"
-version = "0.4.4"
+version = "0.4.5"
 source = { editable = "backend" }
 dependencies = [
     { name = "alembic" },
@@ -374,7 +374,7 @@ dev = [{ name = "ruff", specifier = ">=0.5.0" }]
 
 [[package]]
 name = "librarysync-worker"
-version = "0.4.4"
+version = "0.4.5"
 source = { editable = "worker" }
 dependencies = [
     { name = "greenlet" },
@@ -709,7 +709,7 @@ wheels = [
 
 [[package]]
 name = "typing-inspection"
-version = "0.4.4"
+version = "0.4.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions" },
