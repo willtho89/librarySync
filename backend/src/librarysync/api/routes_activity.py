@@ -7,7 +7,6 @@ from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.core.import_all import IMPORT_ALL_PROVIDER, parse_import_all_state
-from librarysync.core.import_history import parse_import_history
 from librarysync.core.import_control import (
     MERGE_COMPLETED_AT_KEY,
     MERGE_ERROR_KEY,
@@ -15,6 +14,7 @@ from librarysync.core.import_control import (
     next_quick_import_at,
     parse_quick_import_state,
 )
+from librarysync.core.import_history import parse_import_history
 from librarysync.core.import_schedule import parse_datetime
 from librarysync.db.models import (
     EpisodeItem,
