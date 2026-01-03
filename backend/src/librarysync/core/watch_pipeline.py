@@ -778,6 +778,7 @@ class StremioSyncStrategy(SyncStrategy):
 
         watch_sync.status = "pending"
         watch_sync.last_error = None
+        db.add(watch_sync)
 
         await enqueue_outbox_job(
             db,
@@ -1059,7 +1060,12 @@ async def _is_latest_watched_episode(
     episode_item: EpisodeItem,
     watched_at: datetime,
 ) -> bool:
-    """Check if this episode has the latest watch time for this show."""
+    """Check if this episode has the latest watch time for this show.
+    
+    Returns True if watched_at is greater than or equal to any other episode's
+    watch time. Using >= (not >) ensures that if a user edits an episode to have
+    the same timestamp as the current latest, we still update Stremio's lastWatched.
+    """
     result = await db.execute(
         select(func.max(WatchedItem.watched_at))
         .join(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
