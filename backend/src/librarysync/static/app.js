@@ -3861,6 +3861,90 @@ function renderDashboardCharts(data) {
   }
 }
 
+async function loadRecentWatches() {
+  const moviesContainer = document.getElementById("recent-movies-list");
+  const episodesContainer = document.getElementById("recent-episodes-list");
+  
+  if (!moviesContainer && !episodesContainer) {
+    return;
+  }
+
+  try {
+    // Fetch recent movies (last 5)
+    const moviesData = await requestJSON("/api/history/items?limit=5&media_type=movie");
+    const movies = moviesData && moviesData.items ? moviesData.items : [];
+    
+    // Fetch recent TV episodes (last 5)
+    const episodesData = await requestJSON("/api/history/items?limit=5&media_type=tv");
+    const episodes = episodesData && episodesData.items ? episodesData.items : [];
+
+    // Render movies
+    if (moviesContainer) {
+      if (movies.length === 0) {
+        moviesContainer.innerHTML = '<p class="text-sm text-muted">No movies watched yet</p>';
+      } else {
+        moviesContainer.innerHTML = movies.map(item => {
+          const watchedDate = new Date(item.watched_at);
+          const dateStr = !Number.isNaN(watchedDate.valueOf()) 
+            ? watchedDate.toLocaleDateString()
+            : '';
+          return `
+            <div class="flex items-start gap-2 py-2 border-b border-line last:border-b-0">
+              ${item.poster_url 
+                ? `<img src="${item.poster_url}" alt="" class="w-10 h-14 object-cover rounded flex-shrink-0" loading="lazy" />`
+                : '<div class="w-10 h-14 bg-elevated rounded flex-shrink-0"></div>'
+              }
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium truncate">${item.title}</p>
+                <p class="text-xs text-muted">${item.year || ''} ${item.rating ? '· ' + item.rating.toFixed(1) + '★' : ''}</p>
+                ${dateStr ? `<p class="text-xs text-muted">${dateStr}</p>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    // Render TV episodes
+    if (episodesContainer) {
+      if (episodes.length === 0) {
+        episodesContainer.innerHTML = '<p class="text-sm text-muted">No episodes watched yet</p>';
+      } else {
+        episodesContainer.innerHTML = episodes.map(item => {
+          const watchedDate = new Date(item.watched_at);
+          const dateStr = !Number.isNaN(watchedDate.valueOf()) 
+            ? watchedDate.toLocaleDateString()
+            : '';
+          const episodeLabel = item.season_number && item.episode_number
+            ? `S${String(item.season_number).padStart(2, '0')}E${String(item.episode_number).padStart(2, '0')}`
+            : '';
+          return `
+            <div class="flex items-start gap-2 py-2 border-b border-line last:border-b-0">
+              ${item.poster_url 
+                ? `<img src="${item.poster_url}" alt="" class="w-10 h-14 object-cover rounded flex-shrink-0" loading="lazy" />`
+                : '<div class="w-10 h-14 bg-elevated rounded flex-shrink-0"></div>'
+              }
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium truncate">${item.title}</p>
+                ${episodeLabel ? `<p class="text-xs text-muted">${episodeLabel}${item.episode_title ? ' · ' + item.episode_title : ''}</p>` : ''}
+                <p class="text-xs text-muted">${item.year || ''} ${item.rating ? '· ' + item.rating.toFixed(1) + '★' : ''}</p>
+                ${dateStr ? `<p class="text-xs text-muted">${dateStr}</p>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  } catch (error) {
+    console.error("Failed to load recent watches", error);
+    if (moviesContainer) {
+      moviesContainer.innerHTML = '<p class="text-sm text-muted">Unable to load movies</p>';
+    }
+    if (episodesContainer) {
+      episodesContainer.innerHTML = '<p class="text-sm text-muted">Unable to load episodes</p>';
+    }
+  }
+}
 
 document.addEventListener("DOMContentLoaded", async () => {
   const body = document.body;
@@ -3976,6 +4060,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         loadHistory(),
         loadActivity(),
         loadDashboardStats(),
+        loadRecentWatches(),
       ]);
       if (document.getElementById("activity-summary")) {
         startActivityAutoRefresh();

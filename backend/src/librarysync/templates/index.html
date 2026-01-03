@@ -26,17 +26,24 @@
   </div>
   <div class="card card-muted">
     <div data-auth-only>
-      <h2 class="section-title">Quick actions</h2>
-      <p class="section-subtitle">Jump back into your routine.</p>
-      <div class="mt-4 grid gap-3">
-        <a class="action-card" href="/add-watched">
-          <span class="action-title">Add watched</span>
-          <span class="action-meta">Search titles and log episodes</span>
-        </a>
-        <a class="action-card" href="/settings">
-          <span class="action-title">Settings & integrations</span>
-          <span class="action-meta">Configure providers, imports, and metadata</span>
-        </a>
+      <h2 class="section-title">Recent Watches</h2>
+      <p class="section-subtitle">Your last watched items</p>
+      <div class="mt-4 grid gap-6 sm:grid-cols-2">
+        <div>
+          <h3 class="text-sm font-medium mb-3">Movies</h3>
+          <div id="recent-movies-list" class="space-y-2">
+            <p class="text-sm text-muted">Loading...</p>
+          </div>
+        </div>
+        <div>
+          <h3 class="text-sm font-medium mb-3">TV Episodes</h3>
+          <div id="recent-episodes-list" class="space-y-2">
+            <p class="text-sm text-muted">Loading...</p>
+          </div>
+        </div>
+      </div>
+      <div class="mt-4">
+        <a class="btn btn-secondary w-full" href="/history">View History</a>
       </div>
     </div>
     <div data-guest-only>
