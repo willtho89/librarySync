@@ -1065,7 +1065,8 @@ async def _is_latest_watched_episode(
     
     Excludes the current watched item being edited from the comparison to avoid
     always returning True. Returns True if watched_at is greater than or equal
-    to any other episode's watch time in the show.
+    to any other episode's watch time in the show, or if no other episodes exist
+    (making this the only/latest episode).
     """
     result = await db.execute(
         select(func.max(WatchedItem.watched_at))
