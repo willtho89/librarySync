@@ -215,7 +215,7 @@ async def get_dashboard_stats(
         SELECT
             DATE(w.watched_at AT TIME ZONE 'UTC') as watch_date,
             COUNT(DISTINCT CASE WHEN m.media_type = 'movie' THEN w.id END) as movies_count,
-            COUNT(DISTINCT CASE WHEN m.media_type = 'tv' THEN w.id END) as episodes_count
+            COUNT(DISTINCT CASE WHEN w.episode_item_id IS NOT NULL THEN w.id END) as episodes_count
         FROM watched_items w
         LEFT JOIN media_items m ON w.media_item_id = m.id
         WHERE w.watched_at >= NOW() - INTERVAL '90 days'

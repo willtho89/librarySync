@@ -2913,9 +2913,10 @@ function renderActivitySummary(statusData) {
   const nextOutbox = outbox.next_run_at || null;
   const quickImport = statusData.imports ? statusData.imports.quick : null;
   const nextImport = quickImport ? quickImport.next_run_at : null;
-  const lastRefresh = activityState.lastRefresh
-    ? activityState.lastRefresh.toLocaleTimeString()
-    : "Unknown";
+  const queue =
+    quickImport && Array.isArray(quickImport.queue) && quickImport.queue.length
+      ? quickImport.queue.map((entry) => formatProvider(entry)).join(" → ")
+      : "Idle";
 
   const stats = [
     {
@@ -2937,12 +2938,12 @@ function renderActivitySummary(statusData) {
       title: formatMetadataDate(nextImport),
     },
     {
-      label: "Metadata pending",
-      value: String(metadataCounts.pending || 0),
+      label: "Import queue",
+      value: queue,
     },
     {
-      label: "Last refresh",
-      value: lastRefresh,
+      label: "Metadata pending",
+      value: String(metadataCounts.pending || 0),
     },
   ];
 
