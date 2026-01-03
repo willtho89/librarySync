@@ -3569,7 +3569,12 @@ function renderDashboardCharts(data) {
     const index = legendItem.datasetIndex;
     const chart = legend.chart;
     const meta = chart.getDatasetMeta(index);
-    meta.hidden = meta.hidden === null ? !chart.data.datasets[index].hidden : null;
+    // Toggle the hidden state: if null, use the dataset's initial hidden property, otherwise toggle
+    if (meta.hidden === null) {
+      meta.hidden = !chart.data.datasets[index].hidden;
+    } else {
+      meta.hidden = !meta.hidden;
+    }
     chart.update();
   }
 
