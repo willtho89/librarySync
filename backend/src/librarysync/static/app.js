@@ -3255,27 +3255,39 @@ function formatItemCountShell(count) {
   return `${value} Item${value === 1 ? "" : "s"}`;
 }
 
-function isActiveImportStatus(status) {
-  return status === "pending" || status === "in_progress";
+function isImportHistoryEvent(event) {
+  return Boolean(event && event.event_category === "import");
 }
 
-function formatSyncStatus(status) {
-  if (status === "in_progress") {
-    return "running";
+function formatImportType(value) {
+  const normalized = value ? String(value).toLowerCase() : "";
+  if (normalized === "quick_import") {
+    return "Quick Import";
   }
-  if (status === "pending") {
-    return "queued";
+  if (normalized === "import_all") {
+    return "Import All";
   }
-  if (status === "failed") {
-    return "needs attention";
-  }
-  if (status === "completed") {
-    return "done";
-  }
-  return formatLabel(status);
+  return "Import";
 }
 
-function countImportedByProvider(events, since) {
+function importBadgeStatus(status) {
+  const normalized = status ? String(status) : "";
+  if (normalized === "completed") {
+    return "succeeded";
+  }
+  if (normalized === "failed") {
+    return "failed";
+  }
+  if (normalized === "in_progress") {
+    return "in_progress";
+  }
+  if (normalized === "pending") {
+    return "pending";
+  }
+  return normalized || "pending";
+}
+
+function countImportedByProvider(events, since, until = null) {
   if (!since) {
     return {};
   }
@@ -3283,81 +3295,30 @@ function countImportedByProvider(events, since) {
   if (Number.isNaN(sinceDate.valueOf())) {
     return {};
   }
+  const untilDate = until ? new Date(until) : null;
+  if (untilDate && Number.isNaN(untilDate.valueOf())) {
+    return {};
+  }
   const counts = {};
   events.forEach((event) => {
     if (!event || !event.event_type || !event.event_type.endsWith("_imported")) {
       return;
     }
-    if (!event.source_provider || !event.occurred_at) {
+    if (!event.source_provider || !(event.created_at || event.occurred_at)) {
       return;
     }
-    const occurred = new Date(event.occurred_at);
-    if (Number.isNaN(occurred.valueOf()) || occurred < sinceDate) {
+    const occurred = new Date(event.created_at || event.occurred_at);
+    if (
+      Number.isNaN(occurred.valueOf()) ||
+      occurred < sinceDate ||
+      (untilDate && occurred > untilDate)
+    ) {
       return;
     }
     const provider = event.source_provider;
     counts[provider] = (counts[provider] || 0) + 1;
   });
   return counts;
-}
-
-function buildImportSummary(label, state, events) {
-  if (!state || !state.status) {
-    return null;
-  }
-  const status = String(state.status);
-  const headline = `${label} ${formatSyncStatus(status)}`;
-  const startAt = state.started_at || state.requested_at;
-  const queue = Array.isArray(state.queue) ? state.queue : [];
-  const counts = countImportedByProvider(events, startAt);
-  const parts = [];
-  const providerStats = [];
-  const indexValue = Number(state.index);
-  const index = Number.isFinite(indexValue) ? indexValue : 0;
-  queue.forEach((provider, idx) => {
-    const providerLabel = formatProvider(provider);
-    const count = counts[provider] || 0;
-    const isCurrent = status === "in_progress" && idx === index;
-    const isDone = idx < index || status === "completed";
-    let verb = "Syncing";
-    if (status === "pending") {
-      verb = "Queued";
-    } else if (status === "completed") {
-      verb = "Synced";
-    } else if (status === "failed") {
-      verb = "Failed";
-    } else if (isDone) {
-      verb = "Synced";
-    } else if (!isCurrent) {
-      verb = "Queued";
-    }
-    if (count > 0) {
-      parts.push(`${providerLabel} ${formatItemCount(count)}`);
-    } else if (isCurrent) {
-      parts.push(`${providerLabel} checking`);
-    } else if (isDone) {
-      parts.push(`${providerLabel} done`);
-    } else {
-      parts.push(`${providerLabel} queued`);
-    }
-    providerStats.push({
-      verb,
-      providerLabel,
-      count,
-    });
-  });
-  const detail = parts.length ? parts.join(" - ") : formatSyncStatus(status);
-  return {
-    label,
-    headline,
-    detail,
-    status,
-    error: state.error || null,
-    providerStats,
-    requested_at: state.requested_at,
-    started_at: state.started_at,
-    completed_at: state.completed_at,
-  };
 }
 
 function buildMergeSummary(merge) {
@@ -3385,206 +3346,113 @@ function buildMergeSummary(merge) {
   return null;
 }
 
-function buildOutboxSummary(outbox) {
-  if (!outbox) {
-    return null;
-  }
-  const counts = outbox.counts || {};
-  const failedPermanent = counts.failed_permanent || 0;
-  const retrying = counts.failed_retryable || 0;
-  const pending = (counts.pending || 0) + retrying;
-  const inProgress = counts.in_progress || 0;
-  const total = pending + inProgress;
-  if (!total && !failedPermanent) {
-    return null;
-  }
-  const detailParts = [];
-  if (failedPermanent) {
-    detailParts.push(`${formatItemCount(failedPermanent)} failed permanently`);
-  }
-  if (inProgress) {
-    detailParts.push(`${formatItemCount(inProgress)} sending now`);
-  }
-  if (pending) {
-    const label = retrying
-      ? `${formatItemCount(pending)} ready to retry`
-      : `${formatItemCount(pending)} ready to send`;
-    detailParts.push(label);
-  }
-  const summary = failedPermanent
-    ? `Attention needed (${formatItemCount(failedPermanent)} failed)`
-    : `Sending ${formatItemCount(total)}`;
-  return {
-    summary,
-    detail: detailParts.join(" - "),
-    total,
-    failedPermanent,
-  };
+function buildImportEventMetrics(event, events) {
+  const label = formatImportType(event.event_type);
+  const status = event.import_status || (event.raw ? event.raw.status : null);
+  const queue = Array.isArray(event.import_queue)
+    ? event.import_queue
+    : event.raw && Array.isArray(event.raw.queue)
+      ? event.raw.queue
+      : [];
+  const startAtRaw =
+    (event.raw && (event.raw.started_at || event.raw.requested_at)) || event.occurred_at;
+  const endAtRaw =
+    (event.raw && (event.raw.completed_at || event.raw.started_at)) || event.occurred_at;
+  const counts = countImportedByProvider(events, startAtRaw, endAtRaw);
+  const merge =
+    event.import_merge || (event.raw ? {
+      required_at: event.raw.merge_required_at,
+      completed_at: event.raw.merge_completed_at,
+      error: event.raw.merge_error,
+    } : null);
+  const mergeSummary = merge ? buildMergeSummary(merge) : null;
+  const startAt = startAtRaw ? new Date(startAtRaw) : null;
+  const endAt = endAtRaw ? new Date(endAtRaw) : null;
+  return { label, status, queue, counts, mergeSummary, startAt, endAt };
 }
 
-function buildSyncEvent(statusData, events) {
-  if (!statusData) {
-    return null;
+function buildImportEventItems(event, events, metrics) {
+  const startAt = metrics.startAt;
+  const endAt = metrics.endAt;
+  if (!startAt || !endAt || Number.isNaN(startAt.valueOf()) || Number.isNaN(endAt.valueOf())) {
+    return [];
   }
-  const imports = statusData.imports || {};
-  const quickSummary = buildImportSummary("Quick import", imports.quick, events);
-  const importAllSummary = buildImportSummary("Import all", imports.import_all, events);
-  const mergeSummary = buildMergeSummary(imports.merge);
-  const outboxSummary = buildOutboxSummary(statusData.outbox);
-
-  const importSummaries = [quickSummary, importAllSummary].filter(Boolean);
-  const summaryParts = [];
-  const detailRows = [];
-  const activeImports = importSummaries.filter((entry) =>
-    isActiveImportStatus(entry.status)
-  );
-  const completedImports = importSummaries
-    .filter((entry) => entry.status && !isActiveImportStatus(entry.status))
-    .sort((a, b) => {
-      const aTime = new Date(a.completed_at || a.started_at || a.requested_at || 0).getTime();
-      const bTime = new Date(b.completed_at || b.started_at || b.requested_at || 0).getTime();
-      return bTime - aTime;
-    });
-  const shellLines = [];
-  const hasError =
-    (quickSummary && quickSummary.error) ||
-    (importAllSummary && importAllSummary.error) ||
-    (mergeSummary && mergeSummary.error) ||
-    (outboxSummary && outboxSummary.failedPermanent);
-
-  if (activeImports.length) {
-    activeImports.forEach((entry) => {
-      summaryParts.push(entry.headline);
-    });
-  }
-  if (outboxSummary) {
-    summaryParts.push(outboxSummary.summary);
-  }
-  if (!summaryParts.length) {
-    summaryParts.push(hasError ? "Needs attention" : "All caught up");
-  }
-
-  if (quickSummary) {
-    detailRows.push({ label: "Quick import", value: quickSummary.detail });
-    if (quickSummary.error) {
-      detailRows.push({ label: "Quick import error", value: quickSummary.error });
+  const providers = metrics.queue.map((provider) => String(provider));
+  const providerSet = new Set(providers);
+  const filterProviders = providerSet.size > 0;
+  const matches = events.filter((entry) => {
+    if (!entry || entry.event_category === "import") {
+      return false;
     }
-  }
-  if (importAllSummary) {
-    detailRows.push({ label: "Import all", value: importAllSummary.detail });
-    if (importAllSummary.error) {
-      detailRows.push({ label: "Import all error", value: importAllSummary.error });
+    if (!entry.event_type || !entry.event_type.endsWith("_imported")) {
+      return false;
     }
-  }
-  if (mergeSummary) {
-    detailRows.push({ label: "Merge", value: mergeSummary.detail });
-    if (mergeSummary.error) {
-      detailRows.push({ label: "Merge error", value: mergeSummary.error });
+    const provider = entry.source_provider;
+    if (!provider) {
+      return false;
     }
-  }
-  if (outboxSummary) {
-    detailRows.push({ label: "Outbox", value: outboxSummary.detail });
-    if (outboxSummary.failedPermanent) {
-      detailRows.push({
-        label: "Failures",
-        value: `${formatItemCount(outboxSummary.failedPermanent)} failed permanently`,
-      });
+    if (filterProviders && !providerSet.has(String(provider))) {
+      return false;
     }
-  }
-  if (!detailRows.length) {
-    detailRows.push({ label: "Status", value: "No recent sync activity." });
-  }
+    const timestamp = entry.created_at || entry.occurred_at;
+    if (!timestamp) {
+      return false;
+    }
+    const occurred = new Date(timestamp);
+    if (Number.isNaN(occurred.valueOf())) {
+      return false;
+    }
+    return occurred >= startAt && occurred <= endAt;
+  });
+  return matches.sort((a, b) => {
+    const aTime = new Date(a.created_at || a.occurred_at || 0).getTime();
+    const bTime = new Date(b.created_at || b.occurred_at || 0).getTime();
+    return bTime - aTime;
+  });
+}
 
-  const buildShellProviderLines = (entries, header) => {
-    const stats = entries.flatMap((entry) => entry.providerStats || []);
+function buildImportEventShellLines(event, events) {
+  const metrics = buildImportEventMetrics(event, events);
+  const providerStats = metrics.queue.map((provider) => {
+    const providerLabel = formatProvider(provider);
+    const count = metrics.counts[provider] || 0;
+    let verb = "Synced";
+    if (metrics.status === "pending") {
+      verb = "Queued";
+    } else if (metrics.status === "in_progress") {
+      verb = "Syncing";
+    } else if (metrics.status === "failed") {
+      verb = "Failed";
+    }
+    return { verb, providerLabel, count };
+  });
+
+  const lines = [];
+  lines.push(`${metrics.label}:`);
+  if (providerStats.length) {
     let maxPrefix = 0;
-    stats.forEach((stat) => {
+    providerStats.forEach((stat) => {
       const prefix = `${stat.verb} ${stat.providerLabel}...`;
       maxPrefix = Math.max(maxPrefix, prefix.length);
     });
-    if (header) {
-      shellLines.push(header);
-    }
-    const multipleImports = entries.length > 1;
-    entries.forEach((entry) => {
-      if (multipleImports) {
-        shellLines.push(`${entry.label}:`);
-      }
-      if (entry.providerStats && entry.providerStats.length) {
-        entry.providerStats.forEach((stat) => {
-          const prefix = `${stat.verb} ${stat.providerLabel}...`;
-          const padded = prefix.padEnd(maxPrefix + 2, " ");
-          shellLines.push(`${padded}${formatItemCountShell(stat.count)}`);
-        });
-      } else {
-        const fallback = formatSyncStatus(entry.status);
-        shellLines.push(`${entry.label} ${fallback}...`);
-      }
-      if (entry.error) {
-        shellLines.push(`${entry.label} error: ${entry.error}`);
-      }
+    providerStats.forEach((stat) => {
+      const prefix = `${stat.verb} ${stat.providerLabel}...`;
+      const padded = prefix.padEnd(maxPrefix + 2, " ");
+      lines.push(`${padded}${formatItemCountShell(stat.count)}`);
     });
-  };
-
-  if (activeImports.length) {
-    buildShellProviderLines(activeImports, "Starting Sync...");
-  } else if (completedImports.length) {
-    const anyFailed = completedImports.some((entry) => entry.status === "failed");
-    buildShellProviderLines(completedImports, anyFailed ? "Sync needs attention..." : "Last Sync...");
-  } else if (hasError) {
-    shellLines.push("Sync needs attention...");
-  } else if (mergeSummary || outboxSummary) {
-    shellLines.push("Sync status...");
+  } else {
+    lines.push("No providers.");
   }
-
-  if (!activeImports.length && !completedImports.length) {
-    if (quickSummary && quickSummary.error) {
-      shellLines.push(`Quick import error: ${quickSummary.error}`);
-    }
-    if (importAllSummary && importAllSummary.error) {
-      shellLines.push(`Import all error: ${importAllSummary.error}`);
-    }
+  if (metrics.mergeSummary && metrics.mergeSummary.detail) {
+    lines.push(`${metrics.mergeSummary.detail}...`);
   }
-  if (mergeSummary && mergeSummary.error) {
-    shellLines.push(`Merge error: ${mergeSummary.error}`);
+  if (metrics.mergeSummary && metrics.mergeSummary.error) {
+    lines.push(`Merge error: ${metrics.mergeSummary.error}`);
   }
-  if (mergeSummary && mergeSummary.detail) {
-    shellLines.push(`${mergeSummary.detail}...`);
+  if (event.import_error) {
+    lines.push(`Import error: ${event.import_error}`);
   }
-  if (outboxSummary && outboxSummary.failedPermanent) {
-    shellLines.push(
-      `Failed deliveries... ${formatItemCountShell(outboxSummary.failedPermanent)}`
-    );
-  }
-  if (outboxSummary && outboxSummary.total) {
-    shellLines.push(`Sending to services... ${formatItemCountShell(outboxSummary.total)}`);
-  }
-  if (!shellLines.length) {
-    shellLines.push("All caught up.");
-  }
-
-  let badgeStatus = "succeeded";
-  let badgeLabel = "Up to date";
-  if (hasError) {
-    badgeStatus = "failed_permanent";
-    badgeLabel = "Needs attention";
-  } else if (activeImports.length) {
-    badgeStatus = "in_progress";
-    badgeLabel = "In progress";
-  } else if (outboxSummary) {
-    badgeStatus = "pending";
-    badgeLabel = "Queued";
-  }
-
-  return {
-    title: "Sync",
-    meta: summaryParts.join(" - "),
-    statusLabel: badgeLabel,
-    status: badgeStatus,
-    occurredAt: statusData.server_time || new Date().toISOString(),
-    details: detailRows,
-    shellLines,
-  };
+  return lines;
 }
 
 function buildOutboxSearchText(job) {
@@ -3863,68 +3731,22 @@ function renderOutboxList() {
   });
 }
 
-function renderSyncEventRow(syncEvent) {
-  const details = document.createElement("details");
-  details.className = "activity-row";
-  const summary = document.createElement("summary");
-
-  const main = document.createElement("div");
-  main.className = "activity-main";
-  const title = document.createElement("div");
-  title.className = "activity-title";
-  title.textContent = syncEvent.title;
-  const meta = document.createElement("div");
-  meta.className = "activity-meta";
-  meta.textContent = syncEvent.meta;
-  main.appendChild(title);
-  main.appendChild(meta);
-
-  const status = document.createElement("div");
-  status.className = "activity-status";
-  status.appendChild(createStatusBadge(syncEvent.statusLabel, syncEvent.status));
-  const time = document.createElement("span");
-  time.textContent = formatRelativeTime(syncEvent.occurredAt);
-  time.title = formatMetadataDate(syncEvent.occurredAt);
-  status.appendChild(time);
-
-  summary.appendChild(main);
-  summary.appendChild(status);
-  details.appendChild(summary);
-
-  const detail = document.createElement("div");
-  detail.className = "activity-detail";
-  if (syncEvent.shellLines && syncEvent.shellLines.length) {
-    const pre = document.createElement("pre");
-    pre.className = "activity-shell";
-    pre.textContent = syncEvent.shellLines.join("\n");
-    detail.appendChild(pre);
-  } else {
-    syncEvent.details.forEach((row) => {
-      detail.appendChild(buildDetailRow(row.label, row.value));
-    });
-  }
-  details.appendChild(detail);
-  return details;
-}
-
 function renderEventsList() {
   const container = document.getElementById("events");
   if (!container) {
     return;
   }
   container.innerHTML = "";
-  const syncEvent = buildSyncEvent(activityState.status, activityState.events);
   const totalEvents = activityState.events.length;
   const visibleTotal = Math.max(activityState.eventsVisible || 0, ACTIVITY_PAGE_SIZE);
-  const visibleEventsCount = Math.max(visibleTotal - (syncEvent ? 1 : 0), 0);
-  const visibleEvents = activityState.events.slice(0, visibleEventsCount);
+  const visibleEvents = activityState.events.slice(0, visibleTotal);
 
   const showMore = document.getElementById("events-show-more");
   if (showMore) {
-    showMore.hidden = totalEvents <= visibleEventsCount;
+    showMore.hidden = totalEvents <= visibleTotal;
   }
 
-  if (!syncEvent && !totalEvents) {
+  if (!totalEvents) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
     empty.textContent = "No recent events.";
@@ -3932,28 +3754,38 @@ function renderEventsList() {
     return;
   }
 
-  if (syncEvent) {
-    container.appendChild(renderSyncEventRow(syncEvent));
-  }
-
   visibleEvents.forEach((event) => {
+    const isImportEvent = isImportHistoryEvent(event);
+    const importStatus = event.import_status || (event.raw ? event.raw.status : null);
+    const importQueue = event.import_queue || (event.raw ? event.raw.queue : null);
     const details = document.createElement("details");
-    details.className = "activity-row";
+    details.className = isImportEvent ? "activity-row activity-import" : "activity-row";
     const summary = document.createElement("summary");
 
     const main = document.createElement("div");
     main.className = "activity-main";
     const title = document.createElement("div");
     title.className = "activity-title";
-    title.textContent = formatActivityTitle(event.item);
+    title.textContent = isImportEvent
+      ? formatImportType(event.event_type)
+      : formatActivityTitle(event.item);
     const meta = document.createElement("div");
     meta.className = "activity-meta";
     const parts = [];
-    if (event.source_provider) {
-      parts.push(formatProvider(event.source_provider));
-    }
-    if (event.event_type) {
-      parts.push(formatLabel(event.event_type));
+    if (isImportEvent) {
+      if (importStatus) {
+        parts.push(formatLabel(importStatus));
+      }
+      if (Array.isArray(importQueue) && importQueue.length) {
+        parts.push(importQueue.map((provider) => formatProvider(provider)).join(" → "));
+      }
+    } else {
+      if (event.source_provider) {
+        parts.push(formatProvider(event.source_provider));
+      }
+      if (event.event_type) {
+        parts.push(formatLabel(event.event_type));
+      }
     }
     meta.textContent = parts.join(" · ");
     main.appendChild(title);
@@ -3961,7 +3793,13 @@ function renderEventsList() {
 
     const status = document.createElement("div");
     status.className = "activity-status";
-    status.appendChild(createStatusBadge("Event", "succeeded"));
+    if (isImportEvent) {
+      status.appendChild(
+        createStatusBadge(formatLabel(importStatus) || "Import", importBadgeStatus(importStatus))
+      );
+    } else {
+      status.appendChild(createStatusBadge("Event", "succeeded"));
+    }
     const time = document.createElement("span");
     time.textContent = formatRelativeTime(event.occurred_at);
     time.title = formatMetadataDate(event.occurred_at);
@@ -3973,13 +3811,99 @@ function renderEventsList() {
 
     const detail = document.createElement("div");
     detail.className = "activity-detail";
-    detail.appendChild(buildDetailRow("Event type", formatLabel(event.event_type)));
-    detail.appendChild(buildDetailRow("Occurred", formatMetadataDate(event.occurred_at)));
-    detail.appendChild(buildDetailRow("Recorded", formatMetadataDate(event.created_at)));
-    if (event.raw) {
-      const pre = document.createElement("pre");
-      pre.textContent = JSON.stringify(event.raw, null, 2);
-      detail.appendChild(pre);
+    if (isImportEvent) {
+      const metrics = buildImportEventMetrics(event, activityState.events);
+      const shellLines = buildImportEventShellLines(event, activityState.events);
+      if (shellLines.length) {
+        const pre = document.createElement("pre");
+        pre.className = "activity-shell";
+        pre.textContent = shellLines.join("\n");
+        detail.appendChild(pre);
+      }
+      const importedItems = buildImportEventItems(event, activityState.events, metrics);
+      if (importedItems.length) {
+        const tree = document.createElement("div");
+        tree.className = "activity-import-tree";
+        const providerGroups = new Map();
+        importedItems.forEach((entry) => {
+          const provider = entry.source_provider || "unknown";
+          const group = providerGroups.get(provider) || [];
+          group.push(entry);
+          providerGroups.set(provider, group);
+        });
+        const sortedProviders = Array.from(providerGroups.keys()).sort((a, b) =>
+          formatProvider(a).localeCompare(formatProvider(b))
+        );
+        const totalShown = importedItems.length;
+        const importLimit = 50;
+        let shownCount = 0;
+        sortedProviders.forEach((provider) => {
+          if (shownCount >= importLimit) {
+            return;
+          }
+          const entries = providerGroups.get(provider) || [];
+          const remaining = importLimit - shownCount;
+          const visibleEntries = entries.slice(0, remaining);
+          if (!visibleEntries.length) {
+            return;
+          }
+          shownCount += visibleEntries.length;
+          const branch = document.createElement("div");
+          branch.className = "activity-import-branch";
+          const header = document.createElement("div");
+          header.className = "activity-import-branch-title";
+          header.textContent = `${formatProvider(provider)} (${entries.length})`;
+          branch.appendChild(header);
+          const list = document.createElement("ul");
+          list.className = "activity-import-list";
+          visibleEntries.forEach((entry) => {
+            const item = document.createElement("li");
+            item.textContent = formatActivityTitle(entry.item);
+            list.appendChild(item);
+          });
+          branch.appendChild(list);
+          tree.appendChild(branch);
+        });
+        detail.appendChild(tree);
+        const remainingCount = totalShown - shownCount;
+        if (remainingCount > 0) {
+          const more = document.createElement("div");
+          more.className = "activity-import-more";
+          more.textContent = `…and ${formatItemCount(remainingCount)} more not shown`;
+          detail.appendChild(more);
+        }
+      }
+      detail.appendChild(buildDetailRow("Import type", formatImportType(event.event_type)));
+      if (importStatus) {
+        detail.appendChild(buildDetailRow("Status", formatLabel(importStatus)));
+      }
+      detail.appendChild(buildDetailRow("Occurred", formatMetadataDate(event.occurred_at)));
+      detail.appendChild(buildDetailRow("Recorded", formatMetadataDate(event.created_at)));
+      if (Array.isArray(importQueue) && importQueue.length) {
+        detail.appendChild(
+          buildDetailRow(
+            "Providers",
+            importQueue.map((provider) => formatProvider(provider)).join(" → ")
+          )
+        );
+      }
+      if (event.import_error) {
+        detail.appendChild(buildDetailRow("Error", event.import_error));
+      }
+      if (event.raw) {
+        const pre = document.createElement("pre");
+        pre.textContent = JSON.stringify(event.raw, null, 2);
+        detail.appendChild(pre);
+      }
+    } else {
+      detail.appendChild(buildDetailRow("Event type", formatLabel(event.event_type)));
+      detail.appendChild(buildDetailRow("Occurred", formatMetadataDate(event.occurred_at)));
+      detail.appendChild(buildDetailRow("Recorded", formatMetadataDate(event.created_at)));
+      if (event.raw) {
+        const pre = document.createElement("pre");
+        pre.textContent = JSON.stringify(event.raw, null, 2);
+        detail.appendChild(pre);
+      }
     }
     details.appendChild(detail);
     container.appendChild(details);

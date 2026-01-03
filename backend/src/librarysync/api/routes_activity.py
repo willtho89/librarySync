@@ -7,6 +7,7 @@ from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.core.import_all import IMPORT_ALL_PROVIDER, parse_import_all_state
+from librarysync.core.import_history import parse_import_history
 from librarysync.core.import_control import (
     MERGE_COMPLETED_AT_KEY,
     MERGE_ERROR_KEY,
@@ -149,6 +150,18 @@ async def events(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    system_result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == IMPORT_ALL_PROVIDER,
+        )
+    )
+    system_integration = system_result.scalars().first()
+    import_history = parse_import_history(
+        system_integration.config if system_integration else None
+    )
+    watch_limit = min(limit + len(import_history), 200)
+
     show_item = aliased(MediaItem)
     result = await db.execute(
         select(WatchEvent, MediaItem, EpisodeItem, show_item)
@@ -157,7 +170,7 @@ async def events(
         .outerjoin(show_item, EpisodeItem.show_media_item_id == show_item.id)
         .where(WatchEvent.user_id == current_user.id)
         .order_by(WatchEvent.occurred_at.desc())
-        .limit(limit)
+        .limit(watch_limit)
     )
     events_out: list[dict] = []
     for event, media, episode, show in result.all():
@@ -172,6 +185,52 @@ async def events(
                 "raw": event.raw,
             }
         )
+
+    now = datetime.now(timezone.utc)
+    for entry in import_history:
+        occurred_at = (
+            entry.get("completed_at")
+            or entry.get("started_at")
+            or entry.get("requested_at")
+            or now
+        )
+        merge_payload = {
+            "required_at": entry.get("merge_required_at"),
+            "completed_at": entry.get("merge_completed_at"),
+            "error": entry.get("merge_error"),
+        }
+        events_out.append(
+            {
+                "id": f"import:{entry['id']}",
+                "event_type": entry.get("event_type"),
+                "event_category": "import",
+                "source_provider": None,
+                "occurred_at": occurred_at,
+                "created_at": occurred_at,
+                "item": None,
+                "raw": {
+                    "status": entry.get("status"),
+                    "requested_at": entry.get("requested_at"),
+                    "started_at": entry.get("started_at"),
+                    "completed_at": entry.get("completed_at"),
+                    "error": entry.get("error"),
+                    "queue": entry.get("queue"),
+                    "merge_required_at": entry.get("merge_required_at"),
+                    "merge_completed_at": entry.get("merge_completed_at"),
+                    "merge_error": entry.get("merge_error"),
+                },
+                "import_status": entry.get("status"),
+                "import_error": entry.get("error"),
+                "import_queue": entry.get("queue"),
+                "import_merge": merge_payload,
+            }
+        )
+
+    events_out.sort(
+        key=lambda event: event.get("occurred_at") or event.get("created_at") or now,
+        reverse=True,
+    )
+    events_out = events_out[:limit]
     return {"events": events_out}
 
 
