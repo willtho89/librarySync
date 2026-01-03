@@ -65,7 +65,7 @@
     <div class="flex min-h-screen flex-col">
       <header class="sticky top-0 z-40 border-b border-line/60 bg-surface/90 backdrop-blur">
         <div
-          class="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-4"
+          class="mx-auto flex w-full max-w-6xl flex-nowrap items-center justify-between gap-4 px-4 py-4"
         >
           <a href="/" class="flex items-center gap-3">
             <img class="h-10 w-10" src="/favicon.svg" alt="" />
@@ -74,27 +74,13 @@
               <span class="block text-xs uppercase tracking-[0.3em] text-muted">Sync Hub</span>
             </div>
           </a>
-          <!-- Desktop Navigation - Hidden on mobile -->
-          <nav class="hidden items-center gap-2 text-sm lg:flex">
-            <a
-              href="/"
-              class="nav-link{% if active_page == 'home' %} nav-link-active{% endif %}"
-            >
-              Home
-            </a>
-            <a
-              href="/login"
-              data-guest-only
-              class="nav-link{% if active_page == 'login' %} nav-link-active{% endif %}"
-            >
-              Login
-            </a>
+          <nav class="flex items-center gap-2 text-sm" data-auth-only>
             <a
               href="/add-watched"
               data-auth-only
               class="nav-link{% if active_page == 'add-watched' %} nav-link-active{% endif %}"
             >
-              Add Watched
+              Add
             </a>
             <a
               href="/history"
@@ -110,18 +96,11 @@
             >
               Activity
             </a>
-            <a
-              href="/settings"
-              data-auth-only
-              class="nav-link{% if active_page == 'settings' or active_page == 'integrations' %} nav-link-active{% endif %}"
-            >
-              Settings
-            </a>
           </nav>
-          <!-- Burger Menu Button - Visible on mobile only -->
+          <!-- Burger Menu Button -->
           <button
             type="button"
-            class="flex flex-col gap-1 lg:hidden"
+            class="flex flex-col gap-1"
             data-mobile-menu-toggle
             aria-label="Toggle menu"
             aria-expanded="false"
@@ -130,15 +109,6 @@
             <span class="h-0.5 w-6 bg-ink transition-opacity"></span>
             <span class="h-0.5 w-6 bg-ink transition-transform"></span>
           </button>
-          <div class="flex items-center gap-2">
-            <button type="button" class="btn btn-ghost" data-theme-toggle>
-              <span class="sr-only">Toggle theme</span>
-              <span data-theme-label>System</span>
-            </button>
-            <button type="button" class="btn btn-ghost" data-logout data-auth-only>
-              Log out
-            </button>
-          </div>
         </div>
       </header>
       <!-- Mobile Menu Overlay -->
@@ -189,20 +159,6 @@
           Login
         </a>
         <a
-          href="/add-watched"
-          data-auth-only
-          class="mobile-nav-link{% if active_page == 'add-watched' %} mobile-nav-link-active{% endif %}"
-        >
-          Add Watched
-        </a>
-        <a
-          href="/history"
-          data-auth-only
-          class="mobile-nav-link{% if active_page == 'history' %} mobile-nav-link-active{% endif %}"
-        >
-          History
-        </a>
-        <a
           href="/activity"
           data-auth-only
           class="mobile-nav-link{% if active_page == 'activity' %} mobile-nav-link-active{% endif %}"
@@ -218,9 +174,6 @@
         </a>
         <div class="mt-auto border-t border-line/60 pt-4">
           <div class="flex flex-col gap-2">
-            <button type="button" class="btn btn-ghost w-full justify-start" data-theme-toggle>
-              <span data-theme-label>System</span>
-            </button>
             <button type="button" class="btn btn-ghost w-full justify-start" data-logout data-auth-only>
               Log out
             </button>

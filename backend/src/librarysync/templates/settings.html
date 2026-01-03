@@ -239,6 +239,30 @@
     </form>
   </div>
 
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <h2 class="section-title">Appearance</h2>
+        <p class="section-subtitle">Choose how the interface is rendered.</p>
+      </div>
+    </div>
+    <div class="space-y-3">
+      <label class="inline-control">
+        <input type="radio" name="theme_mode" value="system" data-theme-option />
+        <span>System</span>
+      </label>
+      <label class="inline-control">
+        <input type="radio" name="theme_mode" value="light" data-theme-option />
+        <span>Light</span>
+      </label>
+      <label class="inline-control">
+        <input type="radio" name="theme_mode" value="dark" data-theme-option />
+        <span>Dark</span>
+      </label>
+      <p class="helper-text">Defaults to system when unset.</p>
+    </div>
+  </div>
+
   <div>
     <h2 class="section-title">Metadata providers</h2>
     <p class="section-subtitle">Enable providers and store API keys where needed.</p>
