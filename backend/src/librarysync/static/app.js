@@ -3496,7 +3496,7 @@ async function loadDashboardStats() {
   } catch (error) {
     console.error("Failed to load dashboard stats", error);
     // If dashboard stats are disabled (403), hide the dashboard sections
-    if (error.message && error.message.includes("disabled")) {
+    if (error.status === 403) {
       const dashboardSections = document.querySelectorAll("[data-dashboard-section]");
       dashboardSections.forEach((section) => {
         section.style.display = "none";
@@ -3563,6 +3563,15 @@ function renderDashboardCharts(data) {
   const ratingDistribution = data.rating_distribution || [];
   const overallDailyActivity = data.overall_daily_activity || [];
   const overallRatingDistribution = data.overall_rating_distribution || [];
+
+  // Reusable legend click handler for toggling datasets
+  function toggleLegendItem(e, legendItem, legend) {
+    const index = legendItem.datasetIndex;
+    const chart = legend.chart;
+    const meta = chart.getDatasetMeta(index);
+    meta.hidden = meta.hidden === null ? !chart.data.datasets[index].hidden : null;
+    chart.update();
+  }
 
   // Get theme colors
   const isDark = document.documentElement.dataset.theme === "dark" || 
@@ -3676,13 +3685,7 @@ function renderDashboardCharts(data) {
                 family: "IBM Plex Sans",
               },
             },
-            onClick: function(e, legendItem, legend) {
-              const index = legendItem.datasetIndex;
-              const chart = legend.chart;
-              const meta = chart.getDatasetMeta(index);
-              meta.hidden = meta.hidden === null ? !chart.data.datasets[index].hidden : null;
-              chart.update();
-            },
+            onClick: toggleLegendItem,
           },
           tooltip: {
             callbacks: {
@@ -3811,13 +3814,7 @@ function renderDashboardCharts(data) {
                 family: "IBM Plex Sans",
               },
             },
-            onClick: function(e, legendItem, legend) {
-              const index = legendItem.datasetIndex;
-              const chart = legend.chart;
-              const meta = chart.getDatasetMeta(index);
-              meta.hidden = meta.hidden === null ? !chart.data.datasets[index].hidden : null;
-              chart.update();
-            },
+            onClick: toggleLegendItem,
           },
         },
         scales: {
