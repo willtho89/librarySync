@@ -419,6 +419,24 @@
     transform: translateY(0);
   }
 
+  .modal {
+    @apply fixed inset-0 z-50 flex items-center justify-center p-6;
+  }
+
+  .modal-backdrop {
+    @apply absolute inset-0 bg-slate/70;
+  }
+
+  .modal-panel {
+    @apply relative z-10 w-full max-w-lg rounded-2xl border border-line/70 bg-surface p-6 shadow-card;
+    max-height: calc(100vh - 3rem);
+    overflow-y: auto;
+  }
+
+  .modal-header {
+    @apply mb-4 flex items-center justify-between;
+  }
+
   .metadata-drawer {
     @apply fixed inset-0 z-40 flex;
   }

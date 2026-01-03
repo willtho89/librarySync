@@ -1104,6 +1104,44 @@ h1,
   color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
 }
 
+.\!input {
+  width: 100%;
+  border-radius: 1rem;
+  border-width: 1px;
+  border-color: rgb(var(--color-line) / 0.7);
+  --tw-bg-opacity: 1;
+  background-color: rgb(var(--color-surface) / var(--tw-bg-opacity, 1));
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
+  --tw-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --tw-shadow-colored: 0 1px 2px 0 var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.\!input::-moz-placeholder {
+  color: rgb(var(--color-muted) / 0.7);
+}
+
+.\!input::placeholder {
+  color: rgb(var(--color-muted) / 0.7);
+}
+
+.\!input:focus {
+  border-color: rgb(var(--color-primary) / 0.6);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
+  --tw-ring-color: rgb(var(--color-primary) / 0.2);
+}
+
 .input,
   .select,
   .textarea {
@@ -1524,6 +1562,57 @@ h1,
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
+}
+
+.\!modal {
+  position: fixed;
+  inset: 0px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.modal {
+  position: fixed;
+  inset: 0px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0px;
+  background-color: rgb(var(--color-slate) / 0.7);
+}
+
+.modal-panel {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  max-width: 32rem;
+  border-radius: 1.5rem;
+  border-width: 1px;
+  border-color: rgb(var(--color-line) / 0.7);
+  --tw-bg-opacity: 1;
+  background-color: rgb(var(--color-surface) / var(--tw-bg-opacity, 1));
+  padding: 1.5rem;
+  --tw-shadow: 0 18px 40px -24px rgba(15, 27, 36, 0.45);
+  --tw-shadow-colored: 0 18px 40px -24px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+}
+
+.modal-header {
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .metadata-drawer {

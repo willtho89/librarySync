@@ -290,6 +290,36 @@
   <details class="settings-group">
     <summary class="settings-summary">
       <div>
+        <h2 class="section-title">History management</h2>
+        <p class="section-subtitle">Remove all watched items from your account.</p>
+      </div>
+    </summary>
+    <div class="settings-panel">
+      <div class="grid gap-4 lg:grid-cols-2">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">Clear history</h3>
+              <p class="section-subtitle">Permanently delete all watched items.</p>
+            </div>
+          </div>
+          <p class="helper-text">
+            This cannot be undone and will remove all watched items from your account.
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <button id="history-clear-open" type="button" class="btn btn-danger btn-sm">
+              Clear history
+            </button>
+          </div>
+          <p id="history-clear-message" class="form-message" role="status" hidden></p>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <details class="settings-group">
+    <summary class="settings-summary">
+      <div>
         <h2 class="section-title">Metadata providers</h2>
         <p class="section-subtitle">Enable providers and store API keys where needed.</p>
       </div>
@@ -437,4 +467,49 @@
 
   </details>
 </section>
+
+<div id="history-clear-modal" class="modal" hidden>
+  <div class="modal-backdrop" data-modal-close></div>
+  <div
+    class="modal-panel"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="history-clear-title"
+  >
+    <header class="modal-header">
+      <h2 id="history-clear-title" class="section-title">Clear history</h2>
+      <button type="button" class="btn btn-ghost btn-sm" data-modal-close>Close</button>
+    </header>
+    <form id="history-clear-form" class="space-y-4">
+      <p class="helper-text">
+        Type <strong>delete</strong> to confirm. This will remove all watched items.
+      </p>
+      <label class="field">
+        <span>Confirmation</span>
+        <input
+          id="history-clear-input"
+          class="input"
+          type="text"
+          name="confirmation"
+          autocomplete="off"
+          placeholder="delete"
+        />
+      </label>
+      <p id="history-clear-modal-message" class="form-message" role="status" hidden></p>
+      <div class="flex flex-wrap gap-2">
+        <button
+          id="history-clear-confirm"
+          type="submit"
+          class="btn btn-danger"
+          disabled
+        >
+          Delete history
+        </button>
+        <button type="button" class="btn btn-secondary" data-modal-close>
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
 {% endblock %}

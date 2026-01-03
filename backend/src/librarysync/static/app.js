@@ -2553,7 +2553,6 @@ async function loadHistory() {
     return;
   }
   bindHistoryUi();
-  const clearButton = document.getElementById("history-clear");
   container.textContent = "Loading...";
   const params = buildHistoryQueryParams();
   let data = null;
@@ -2574,9 +2573,6 @@ async function loadHistory() {
     return;
   }
   resetHistorySelection(items);
-  if (clearButton) {
-    clearButton.disabled = !total && !historyHasActiveFilters();
-  }
   updateHistoryPagination();
   if (!items.length) {
     container.textContent = historyHasActiveFilters()
@@ -2872,24 +2868,90 @@ async function loadHistory() {
 }
 
 function bindHistoryClear() {
-  const clearButton = document.getElementById("history-clear");
-  if (!clearButton) {
+  const openButton = document.getElementById("history-clear-open");
+  const modal = document.getElementById("history-clear-modal");
+  if (!openButton || !modal) {
     return;
   }
-  clearButton.addEventListener("click", async () => {
-    const confirmed = window.confirm(
-      "Clear your entire watch history? This cannot be undone."
-    );
-    if (!confirmed) {
-      return;
+  const form = document.getElementById("history-clear-form");
+  const input = document.getElementById("history-clear-input");
+  const confirmButton = document.getElementById("history-clear-confirm");
+  const modalMessageId = "history-clear-modal-message";
+  const statusMessageId = "history-clear-message";
+
+  const updateConfirmState = () => {
+    if (!input || !confirmButton) {
+      return false;
     }
-    try {
-      setMessage("history-message", "Clearing history...");
-      await requestJSON("/api/history/items", { method: "DELETE" });
-      setMessage("history-message", "History cleared.");
-      await loadHistory();
-    } catch (error) {
-      setMessage("history-message", error.message, true);
+    const value = input.value.trim().toLowerCase();
+    const isValid = value === "delete";
+    confirmButton.disabled = !isValid;
+    return isValid;
+  };
+
+  const closeModal = () => {
+    modal.setAttribute("hidden", "");
+    if (form) {
+      form.reset();
+    }
+    if (confirmButton) {
+      confirmButton.disabled = true;
+    }
+    setMessage(modalMessageId, "");
+  };
+
+  openButton.addEventListener("click", () => {
+    modal.removeAttribute("hidden");
+    setMessage(statusMessageId, "");
+    setMessage(modalMessageId, "");
+    if (confirmButton) {
+      confirmButton.disabled = true;
+    }
+    if (input) {
+      input.value = "";
+      input.focus();
+    }
+  });
+
+  modal.querySelectorAll("[data-modal-close]").forEach((button) => {
+    button.addEventListener("click", closeModal);
+  });
+
+  if (input) {
+    input.addEventListener("input", () => {
+      updateConfirmState();
+    });
+  }
+
+  if (form) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const isValid = updateConfirmState();
+      if (!isValid) {
+        setMessage(modalMessageId, "Type delete to confirm.", true);
+        return;
+      }
+      if (confirmButton) {
+        confirmButton.disabled = true;
+      }
+      setMessage(modalMessageId, "Clearing history...");
+      try {
+        await requestJSON("/api/history/items", { method: "DELETE" });
+        setMessage(statusMessageId, "History cleared.");
+        await loadHistory();
+        closeModal();
+      } catch (error) {
+        setMessage(modalMessageId, error.message, true);
+        if (confirmButton) {
+          confirmButton.disabled = false;
+        }
+      }
+    });
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !modal.hasAttribute("hidden")) {
+      closeModal();
     }
   });
 }
