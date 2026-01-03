@@ -3861,6 +3861,12 @@ function renderDashboardCharts(data) {
   }
 }
 
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 async function loadRecentWatches() {
   const moviesContainer = document.getElementById("recent-movies-list");
   const episodesContainer = document.getElementById("recent-episodes-list");
@@ -3888,16 +3894,18 @@ async function loadRecentWatches() {
           const dateStr = !Number.isNaN(watchedDate.valueOf()) 
             ? watchedDate.toLocaleDateString()
             : '';
+          const safeTitle = escapeHtml(item.title);
+          const safePosterUrl = item.poster_url ? escapeHtml(item.poster_url) : '';
           return `
             <div class="flex items-start gap-2 py-2 border-b border-line last:border-b-0">
-              ${item.poster_url 
-                ? `<img src="${item.poster_url}" alt="" class="w-10 h-14 object-cover rounded flex-shrink-0" loading="lazy" />`
+              ${safePosterUrl 
+                ? `<img src="${safePosterUrl}" alt="" class="w-10 h-14 object-cover rounded flex-shrink-0" loading="lazy" />`
                 : '<div class="w-10 h-14 bg-elevated rounded flex-shrink-0"></div>'
               }
               <div class="flex-1 min-w-0">
-                <p class="text-sm font-medium truncate">${item.title}</p>
+                <p class="text-sm font-medium truncate">${safeTitle}</p>
                 <p class="text-xs text-muted">${item.year || ''} ${item.rating ? '· ' + item.rating.toFixed(1) + '★' : ''}</p>
-                ${dateStr ? `<p class="text-xs text-muted">${dateStr}</p>` : ''}
+                ${dateStr ? `<p class="text-xs text-muted">${escapeHtml(dateStr)}</p>` : ''}
               </div>
             </div>
           `;
@@ -3918,17 +3926,20 @@ async function loadRecentWatches() {
           const episodeLabel = item.season_number && item.episode_number
             ? `S${String(item.season_number).padStart(2, '0')}E${String(item.episode_number).padStart(2, '0')}`
             : '';
+          const safeTitle = escapeHtml(item.title);
+          const safeEpisodeTitle = item.episode_title ? escapeHtml(item.episode_title) : '';
+          const safePosterUrl = item.poster_url ? escapeHtml(item.poster_url) : '';
           return `
             <div class="flex items-start gap-2 py-2 border-b border-line last:border-b-0">
-              ${item.poster_url 
-                ? `<img src="${item.poster_url}" alt="" class="w-10 h-14 object-cover rounded flex-shrink-0" loading="lazy" />`
+              ${safePosterUrl 
+                ? `<img src="${safePosterUrl}" alt="" class="w-10 h-14 object-cover rounded flex-shrink-0" loading="lazy" />`
                 : '<div class="w-10 h-14 bg-elevated rounded flex-shrink-0"></div>'
               }
               <div class="flex-1 min-w-0">
-                <p class="text-sm font-medium truncate">${item.title}</p>
-                ${episodeLabel ? `<p class="text-xs text-muted">${episodeLabel}${item.episode_title ? ' · ' + item.episode_title : ''}</p>` : ''}
+                <p class="text-sm font-medium truncate">${safeTitle}</p>
+                ${episodeLabel ? `<p class="text-xs text-muted">${episodeLabel}${safeEpisodeTitle ? ' · ' + safeEpisodeTitle : ''}</p>` : ''}
                 <p class="text-xs text-muted">${item.year || ''} ${item.rating ? '· ' + item.rating.toFixed(1) + '★' : ''}</p>
-                ${dateStr ? `<p class="text-xs text-muted">${dateStr}</p>` : ''}
+                ${dateStr ? `<p class="text-xs text-muted">${escapeHtml(dateStr)}</p>` : ''}
               </div>
             </div>
           `;
