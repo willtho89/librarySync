@@ -3862,8 +3862,11 @@ function renderDashboardCharts(data) {
 }
 
 function escapeHtml(text) {
+  if (text === null || text === undefined) {
+    return "";
+  }
   const div = document.createElement("div");
-  div.textContent = text;
+  div.textContent = String(text);
   return div.innerHTML;
 }
 
@@ -3876,13 +3879,19 @@ async function loadRecentWatches() {
   }
 
   try {
-    // Fetch recent movies (last 5)
-    const moviesData = await requestJSON("/api/history/items?limit=5&media_type=movie");
-    const movies = moviesData && moviesData.items ? moviesData.items : [];
+    // Fetch recent movies (last 5) only if container exists
+    let movies = [];
+    if (moviesContainer) {
+      const moviesData = await requestJSON("/api/history/items?limit=5&media_type=movie");
+      movies = moviesData && moviesData.items ? moviesData.items : [];
+    }
     
-    // Fetch recent TV episodes (last 5)
-    const episodesData = await requestJSON("/api/history/items?limit=5&media_type=tv");
-    const episodes = episodesData && episodesData.items ? episodesData.items : [];
+    // Fetch recent TV episodes (last 5) only if container exists
+    let episodes = [];
+    if (episodesContainer) {
+      const episodesData = await requestJSON("/api/history/items?limit=5&media_type=tv");
+      episodes = episodesData && episodesData.items ? episodesData.items : [];
+    }
 
     // Render movies
     if (moviesContainer) {
