@@ -503,6 +503,14 @@
     @apply rounded-xl border border-line/60 bg-surface/80 p-3;
   }
 
+  .activity-row.activity-import {
+    border-color: rgb(var(--color-teal) / 0.45);
+    border-left-width: 4px;
+    border-left-color: rgb(var(--color-teal) / 0.8);
+    background-color: rgb(var(--color-teal) / 0.08);
+    box-shadow: inset 0 0 0 1px rgb(var(--color-teal) / 0.12);
+  }
+
   .activity-row summary {
     @apply flex cursor-pointer flex-wrap items-center justify-between gap-3;
   }
@@ -533,6 +541,26 @@
 
   .activity-detail pre {
     @apply mt-2 rounded-lg bg-elevated/80 p-3 text-[11px] text-muted;
+  }
+
+  .activity-import-tree {
+    @apply grid gap-3;
+  }
+
+  .activity-import-branch {
+    @apply rounded-lg border border-line/50 bg-elevated/40 p-3;
+  }
+
+  .activity-import-branch-title {
+    @apply text-xs font-semibold text-ink;
+  }
+
+  .activity-import-list {
+    @apply mt-2 list-disc space-y-1 pl-5 text-xs text-muted;
+  }
+
+  .activity-import-more {
+    @apply text-xs text-muted;
   }
 
   .empty-state {

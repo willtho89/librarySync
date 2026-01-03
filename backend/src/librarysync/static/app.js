@@ -1,3 +1,4 @@
+const ACTIVITY_PAGE_SIZE = 10;
 const authState = {
   user: null,
   loaded: false,
@@ -18,6 +19,8 @@ const activityState = {
   events: [],
   lastRefresh: null,
   timer: null,
+  eventsVisible: ACTIVITY_PAGE_SIZE,
+  jobsVisible: ACTIVITY_PAGE_SIZE,
   filters: {
     status: "all",
     provider: "all",
@@ -491,6 +494,7 @@ async function loadIntegrations() {
     importAllButton.disabled = !integrationState.hasAnyImports;
   }
   applyQuickImportControls(activityState.status);
+  renderSchedule(activityState.status);
 
   renderHistorySyncButtons(integrations);
 }
@@ -887,8 +891,10 @@ async function handleQuickImportScheduleSave(data) {
   }
 }
 
-async function handleQuickImportNow() {
-  setMessage("quick-import-message", "Requesting import...");
+async function handleQuickImportNow(options = {}) {
+  const opts = options instanceof Event ? {} : options;
+  const messageId = opts.messageId || "quick-import-message";
+  setMessage(messageId, "Requesting import...");
   try {
     const response = await requestJSON("/api/integrations/import/quick", {
       method: "POST",
@@ -897,19 +903,31 @@ async function handleQuickImportNow() {
     const label = providers.length
       ? `Quick import queued: ${providers.join(", ")}.`
       : "Quick import requested.";
-    setMessage("quick-import-message", label);
+    setMessage(messageId, label);
     await loadActivity();
   } catch (error) {
-    setMessage("quick-import-message", error.message, true);
+    setMessage(messageId, error.message, true);
   }
 }
 
-async function handleImportAll() {
-  const button = document.getElementById("import-all-button");
+async function handleImportAll(options = {}) {
+  const opts = options instanceof Event ? {} : options;
+  const buttonId = opts.buttonId || "import-all-button";
+  const messageId = opts.messageId || "import-all-message";
+  const confirmMessage =
+    opts.confirmMessage ||
+    "Start import all? This can take a while and will re-sync your full history.";
+  if (opts.requireConfirm !== false) {
+    const confirmed = window.confirm(confirmMessage);
+    if (!confirmed) {
+      return;
+    }
+  }
+  const button = document.getElementById(buttonId);
   if (button) {
     button.disabled = true;
   }
-  setMessage("import-all-message", "Requesting import...");
+  setMessage(messageId, "Requesting import...");
   try {
     const response = await requestJSON("/api/integrations/import/all", {
       method: "POST",
@@ -918,10 +936,10 @@ async function handleImportAll() {
     const label = providers.length
       ? `Import queued: ${providers.join(", ")}.`
       : "Import requested.";
-    setMessage("import-all-message", label);
+    setMessage(messageId, label);
     await loadActivity();
   } catch (error) {
-    setMessage("import-all-message", error.message, true);
+    setMessage(messageId, error.message, true);
   } finally {
     if (button) {
       button.disabled = false;
@@ -3007,13 +3025,33 @@ function buildQuickImportRow(quick) {
     time.prepend(createStatusBadge("Running", "in_progress"));
   }
 
+  const actions = document.createElement("div");
+  actions.className = "schedule-actions";
+  const runButton = document.createElement("button");
+  runButton.type = "button";
+  runButton.className = "btn btn-secondary btn-sm";
+  runButton.textContent = "Run now";
+  runButton.disabled =
+    !integrationState.hasAnyImports ||
+    quick.status === "pending" ||
+    quick.status === "in_progress";
+  runButton.addEventListener("click", () =>
+    handleQuickImportNow({ messageId: "activity-import-message" })
+  );
+  actions.appendChild(runButton);
+
+  const side = document.createElement("div");
+  side.className = "schedule-side";
+  side.appendChild(time);
+  side.appendChild(actions);
+
   row.appendChild(main);
-  row.appendChild(time);
+  row.appendChild(side);
   return row;
 }
 
 function buildImportAllRow(importAll) {
-  if (!importAll || !importAll.status) {
+  if (!importAll) {
     return null;
   }
   const row = document.createElement("div");
@@ -3025,7 +3063,7 @@ function buildImportAllRow(importAll) {
   title.textContent = "Import all";
   const meta = document.createElement("div");
   meta.className = "schedule-meta";
-  const metaParts = [formatLabel(importAll.status)];
+  const metaParts = [formatLabel(importAll.status || "idle")];
   if (importAll.requested_at) {
     metaParts.push(`Requested ${formatMetadataDate(importAll.requested_at)}`);
   }
@@ -3049,8 +3087,32 @@ function buildImportAllRow(importAll) {
     time.prepend(createStatusBadge("Running", "in_progress"));
   }
 
+  const actions = document.createElement("div");
+  actions.className = "schedule-actions";
+  const runButton = document.createElement("button");
+  runButton.type = "button";
+  runButton.className = "btn btn-secondary btn-sm";
+  runButton.textContent = "Run now";
+  runButton.disabled =
+    !integrationState.hasAnyImports ||
+    importAll.status === "pending" ||
+    importAll.status === "in_progress";
+  runButton.addEventListener("click", () =>
+    handleImportAll({
+      messageId: "activity-import-message",
+      confirmMessage:
+        "Start import all? This can take a while and will re-sync your full history.",
+    })
+  );
+  actions.appendChild(runButton);
+
+  const side = document.createElement("div");
+  side.className = "schedule-side";
+  side.appendChild(time);
+  side.appendChild(actions);
+
   row.appendChild(main);
-  row.appendChild(time);
+  row.appendChild(side);
   return row;
 }
 
@@ -3089,8 +3151,12 @@ function buildJobScheduleRow(job) {
     time.prepend(createStatusBadge("Running", "in_progress"));
   }
 
+  const side = document.createElement("div");
+  side.className = "schedule-side";
+  side.appendChild(time);
+
   row.appendChild(main);
-  row.appendChild(time);
+  row.appendChild(side);
   return row;
 }
 
@@ -3151,6 +3217,244 @@ function buildDetailRow(label, value) {
   return row;
 }
 
+const SENSITIVE_PAYLOAD_KEYS = new Set([
+  "access_token",
+  "refresh_token",
+  "client_secret",
+  "password",
+  "api_key",
+  "apikey",
+  "token",
+]);
+
+function maskSensitivePayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return payload;
+  }
+  if (Array.isArray(payload)) {
+    return payload.map((value) => maskSensitivePayload(value));
+  }
+  const masked = {};
+  Object.entries(payload).forEach(([key, value]) => {
+    if (SENSITIVE_PAYLOAD_KEYS.has(key.toLowerCase())) {
+      masked[key] = "REDACTED";
+    } else {
+      masked[key] = maskSensitivePayload(value);
+    }
+  });
+  return masked;
+}
+
+function formatItemCount(count) {
+  const value = Number(count) || 0;
+  return `${value} item${value === 1 ? "" : "s"}`;
+}
+
+function formatItemCountShell(count) {
+  const value = Number(count) || 0;
+  return `${value} Item${value === 1 ? "" : "s"}`;
+}
+
+function isImportHistoryEvent(event) {
+  return Boolean(event && event.event_category === "import");
+}
+
+function formatImportType(value) {
+  const normalized = value ? String(value).toLowerCase() : "";
+  if (normalized === "quick_import") {
+    return "Quick Import";
+  }
+  if (normalized === "import_all") {
+    return "Import All";
+  }
+  return "Import";
+}
+
+function importBadgeStatus(status) {
+  const normalized = status ? String(status) : "";
+  if (normalized === "completed") {
+    return "succeeded";
+  }
+  if (normalized === "failed") {
+    return "failed";
+  }
+  if (normalized === "in_progress") {
+    return "in_progress";
+  }
+  if (normalized === "pending") {
+    return "pending";
+  }
+  return normalized || "pending";
+}
+
+function countImportedByProvider(events, since, until = null) {
+  if (!since) {
+    return {};
+  }
+  const sinceDate = new Date(since);
+  if (Number.isNaN(sinceDate.valueOf())) {
+    return {};
+  }
+  const untilDate = until ? new Date(until) : null;
+  if (untilDate && Number.isNaN(untilDate.valueOf())) {
+    return {};
+  }
+  const counts = {};
+  events.forEach((event) => {
+    if (!event || !event.event_type || !event.event_type.endsWith("_imported")) {
+      return;
+    }
+    if (!event.source_provider || !(event.created_at || event.occurred_at)) {
+      return;
+    }
+    const occurred = new Date(event.created_at || event.occurred_at);
+    if (
+      Number.isNaN(occurred.valueOf()) ||
+      occurred < sinceDate ||
+      (untilDate && occurred > untilDate)
+    ) {
+      return;
+    }
+    const provider = event.source_provider;
+    counts[provider] = (counts[provider] || 0) + 1;
+  });
+  return counts;
+}
+
+function buildMergeSummary(merge) {
+  if (!merge) {
+    return null;
+  }
+  if (merge.error) {
+    return {
+      detail: "Merge needs attention",
+      error: merge.error,
+    };
+  }
+  if (merge.required_at && !merge.completed_at) {
+    return {
+      detail: "Merging duplicates",
+      error: null,
+    };
+  }
+  if (merge.completed_at) {
+    return {
+      detail: "Merge complete",
+      error: null,
+    };
+  }
+  return null;
+}
+
+function buildImportEventMetrics(event, events) {
+  const label = formatImportType(event.event_type);
+  const status = event.import_status || (event.raw ? event.raw.status : null);
+  const queue = Array.isArray(event.import_queue)
+    ? event.import_queue
+    : event.raw && Array.isArray(event.raw.queue)
+      ? event.raw.queue
+      : [];
+  const startAtRaw =
+    (event.raw && (event.raw.started_at || event.raw.requested_at)) || event.occurred_at;
+  const endAtRaw =
+    (event.raw && (event.raw.completed_at || event.raw.started_at)) || event.occurred_at;
+  const counts = countImportedByProvider(events, startAtRaw, endAtRaw);
+  const merge =
+    event.import_merge || (event.raw ? {
+      required_at: event.raw.merge_required_at,
+      completed_at: event.raw.merge_completed_at,
+      error: event.raw.merge_error,
+    } : null);
+  const mergeSummary = merge ? buildMergeSummary(merge) : null;
+  const startAt = startAtRaw ? new Date(startAtRaw) : null;
+  const endAt = endAtRaw ? new Date(endAtRaw) : null;
+  return { label, status, queue, counts, mergeSummary, startAt, endAt };
+}
+
+function buildImportEventItems(event, events, metrics) {
+  const startAt = metrics.startAt;
+  const endAt = metrics.endAt;
+  if (!startAt || !endAt || Number.isNaN(startAt.valueOf()) || Number.isNaN(endAt.valueOf())) {
+    return [];
+  }
+  const providers = metrics.queue.map((provider) => String(provider));
+  const providerSet = new Set(providers);
+  const filterProviders = providerSet.size > 0;
+  const matches = events.filter((entry) => {
+    if (!entry || entry.event_category === "import") {
+      return false;
+    }
+    if (!entry.event_type || !entry.event_type.endsWith("_imported")) {
+      return false;
+    }
+    const provider = entry.source_provider;
+    if (!provider) {
+      return false;
+    }
+    if (filterProviders && !providerSet.has(String(provider))) {
+      return false;
+    }
+    const timestamp = entry.created_at || entry.occurred_at;
+    if (!timestamp) {
+      return false;
+    }
+    const occurred = new Date(timestamp);
+    if (Number.isNaN(occurred.valueOf())) {
+      return false;
+    }
+    return occurred >= startAt && occurred <= endAt;
+  });
+  return matches.sort((a, b) => {
+    const aTime = new Date(a.created_at || a.occurred_at || 0).getTime();
+    const bTime = new Date(b.created_at || b.occurred_at || 0).getTime();
+    return bTime - aTime;
+  });
+}
+
+function buildImportEventShellLines(event, events) {
+  const metrics = buildImportEventMetrics(event, events);
+  const providerStats = metrics.queue.map((provider) => {
+    const providerLabel = formatProvider(provider);
+    const count = metrics.counts[provider] || 0;
+    let verb = "Synced";
+    if (metrics.status === "pending") {
+      verb = "Queued";
+    } else if (metrics.status === "in_progress") {
+      verb = "Syncing";
+    } else if (metrics.status === "failed") {
+      verb = "Failed";
+    }
+    return { verb, providerLabel, count };
+  });
+
+  const lines = [];
+  lines.push(`${metrics.label}:`);
+  if (providerStats.length) {
+    let maxPrefix = 0;
+    providerStats.forEach((stat) => {
+      const prefix = `${stat.verb} ${stat.providerLabel}...`;
+      maxPrefix = Math.max(maxPrefix, prefix.length);
+    });
+    providerStats.forEach((stat) => {
+      const prefix = `${stat.verb} ${stat.providerLabel}...`;
+      const padded = prefix.padEnd(maxPrefix + 2, " ");
+      lines.push(`${padded}${formatItemCountShell(stat.count)}`);
+    });
+  } else {
+    lines.push("No providers.");
+  }
+  if (metrics.mergeSummary && metrics.mergeSummary.detail) {
+    lines.push(`${metrics.mergeSummary.detail}...`);
+  }
+  if (metrics.mergeSummary && metrics.mergeSummary.error) {
+    lines.push(`Merge error: ${metrics.mergeSummary.error}`);
+  }
+  if (event.import_error) {
+    lines.push(`Import error: ${event.import_error}`);
+  }
+  return lines;
+}
+
 function buildOutboxSearchText(job) {
   const parts = [];
   if (job.target_provider) {
@@ -3186,25 +3490,103 @@ function buildOutboxSearchText(job) {
   return parts.join(" ").toLowerCase();
 }
 
-function applyOutboxFilters(jobs) {
+function jobMatchesFilters(job) {
   const statusFilter = activityState.filters.status;
   const providerFilter = activityState.filters.provider;
   const searchFilter = activityState.filters.search.toLowerCase();
-  return jobs.filter((job) => {
-    if (statusFilter !== "all" && job.status !== statusFilter) {
+  if (statusFilter !== "all" && job.status !== statusFilter) {
+    return false;
+  }
+  if (providerFilter !== "all" && job.target_provider !== providerFilter) {
+    return false;
+  }
+  if (searchFilter) {
+    const haystack = buildOutboxSearchText(job);
+    if (!haystack.includes(searchFilter)) {
       return false;
     }
-    if (providerFilter !== "all" && job.target_provider !== providerFilter) {
-      return false;
+  }
+  return true;
+}
+
+function applyOutboxFilters(jobs) {
+  return jobs.filter((job) => jobMatchesFilters(job));
+}
+
+function buildOutboxGroups(jobs) {
+  const groups = new Map();
+  jobs.forEach((job) => {
+    const groupKey = job.watched_item_id ? `watched:${job.watched_item_id}` : `job:${job.id}`;
+    const group = groups.get(groupKey) || {
+      key: groupKey,
+      item: null,
+      source_provider: null,
+      jobs: [],
+      updated_at: null,
+    };
+    if (!group.item && job.item) {
+      group.item = job.item;
     }
-    if (searchFilter) {
-      const haystack = buildOutboxSearchText(job);
-      if (!haystack.includes(searchFilter)) {
-        return false;
-      }
+    if (!group.source_provider && job.source_provider) {
+      group.source_provider = job.source_provider;
     }
-    return true;
+    group.jobs.push(job);
+    const timeValue = job.updated_at || job.created_at;
+    if (!group.updated_at || (timeValue && new Date(timeValue) > new Date(group.updated_at))) {
+      group.updated_at = timeValue;
+    }
+    groups.set(groupKey, group);
   });
+  return Array.from(groups.values()).sort((a, b) => {
+    const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+    const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+    return bTime - aTime;
+  });
+}
+
+function applyOutboxGroupFilters(groups) {
+  const filtered = groups
+    .map((group) => {
+      const filteredJobs = group.jobs.filter((job) => jobMatchesFilters(job));
+      if (!filteredJobs.length) {
+        return null;
+      }
+      const updatedAt = filteredJobs.reduce((latest, job) => {
+        const timeValue = job.updated_at || job.created_at;
+        if (!timeValue) {
+          return latest;
+        }
+        if (!latest) {
+          return timeValue;
+        }
+        return new Date(timeValue) > new Date(latest) ? timeValue : latest;
+      }, null);
+      return {
+        ...group,
+        jobs: filteredJobs,
+        updated_at: updatedAt,
+      };
+    })
+    .filter(Boolean);
+  return filtered.sort((a, b) => {
+    const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+    const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+    return bTime - aTime;
+  });
+}
+
+function formatSyncJobType(jobType) {
+  const labels = {
+    push_watched: "Watched",
+    push_rating: "Rating",
+    update_history: "History update",
+    remove_history: "History removal",
+    update_log_entry: "History update",
+    delete_log_entry: "History removal",
+    remove_watched: "Remove watched",
+    new_item_added: "New item",
+  };
+  return labels[jobType] || formatLabel(jobType);
 }
 
 function renderOutboxList() {
@@ -3213,15 +3595,24 @@ function renderOutboxList() {
     return;
   }
   container.innerHTML = "";
-  const jobs = applyOutboxFilters(activityState.jobs);
-  if (!jobs.length) {
+  const allGroups = buildOutboxGroups(activityState.jobs);
+  const groups = applyOutboxGroupFilters(allGroups);
+  const visibleCount = Math.max(activityState.jobsVisible || 0, ACTIVITY_PAGE_SIZE);
+  const visibleGroups = groups.slice(0, visibleCount);
+
+  const showMore = document.getElementById("sync-show-more");
+  if (showMore) {
+    showMore.hidden = groups.length <= visibleCount;
+  }
+
+  if (!groups.length) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
     empty.textContent = "No sync jobs match your filters.";
     container.appendChild(empty);
     return;
   }
-  jobs.forEach((job) => {
+  visibleGroups.forEach((group) => {
     const details = document.createElement("details");
     details.className = "activity-row";
     const summary = document.createElement("summary");
@@ -3230,17 +3621,18 @@ function renderOutboxList() {
     main.className = "activity-main";
     const title = document.createElement("div");
     title.className = "activity-title";
-    title.textContent = formatActivityTitle(job.item);
+    title.textContent = group.item ? formatActivityTitle(group.item) : "Sync item";
     const meta = document.createElement("div");
     meta.className = "activity-meta";
-    const metaParts = [
-      `${formatProvider(job.source_provider)} -> ${formatProvider(job.target_provider)}`,
-    ];
-    if (job.job_type) {
-      metaParts.push(formatLabel(job.job_type));
+    const metaParts = [];
+    if (group.source_provider) {
+      metaParts.push(`From ${formatProvider(group.source_provider)}`);
     }
-    if (job.attempts) {
-      metaParts.push(`${job.attempts} attempt${job.attempts === 1 ? "" : "s"}`);
+    const jobTypes = Array.from(
+      new Set(group.jobs.map((entry) => formatSyncJobType(entry.job_type)).filter(Boolean))
+    );
+    if (jobTypes.length) {
+      metaParts.push(jobTypes.join(" + "));
     }
     meta.textContent = metaParts.join(" · ");
     main.appendChild(title);
@@ -3248,9 +3640,19 @@ function renderOutboxList() {
 
     const status = document.createElement("div");
     status.className = "activity-status";
-    status.appendChild(createStatusBadge(formatLabel(job.status), job.status));
+    const badges = document.createElement("div");
+    badges.className = "activity-badges";
+    const sortedJobs = [...group.jobs].sort((a, b) =>
+      String(a.target_provider || "").localeCompare(String(b.target_provider || ""))
+    );
+    sortedJobs.forEach((job) => {
+      const badge = createStatusBadge(formatProvider(job.target_provider), job.status);
+      badge.title = formatLabel(job.status);
+      badges.appendChild(badge);
+    });
+    status.appendChild(badges);
     const time = document.createElement("span");
-    const timeValue = job.updated_at || job.created_at;
+    const timeValue = group.updated_at;
     time.textContent = formatRelativeTime(timeValue);
     time.title = formatMetadataDate(timeValue);
     status.appendChild(time);
@@ -3261,23 +3663,69 @@ function renderOutboxList() {
 
     const detail = document.createElement("div");
     detail.className = "activity-detail";
-    detail.appendChild(buildDetailRow("Job ID", job.id));
-    detail.appendChild(buildDetailRow("Source", formatProvider(job.source_provider)));
-    detail.appendChild(buildDetailRow("Target", formatProvider(job.target_provider)));
-    detail.appendChild(buildDetailRow("Job type", formatLabel(job.job_type)));
-    detail.appendChild(buildDetailRow("Status", formatLabel(job.status)));
-    detail.appendChild(buildDetailRow("Attempts", job.attempts));
-    detail.appendChild(buildDetailRow("Run after", formatMetadataDate(job.run_after)));
-    detail.appendChild(buildDetailRow("Created", formatMetadataDate(job.created_at)));
-    detail.appendChild(buildDetailRow("Updated", formatMetadataDate(job.updated_at)));
-    if (job.last_error) {
-      detail.appendChild(buildDetailRow("Last error", job.last_error));
-    }
-    if (job.payload && Object.keys(job.payload).length) {
-      const pre = document.createElement("pre");
-      pre.textContent = JSON.stringify(job.payload, null, 2);
-      detail.appendChild(pre);
-    }
+    sortedJobs.forEach((job) => {
+      const card = document.createElement("div");
+      card.className = "activity-subdetail";
+      const header = document.createElement("div");
+      header.className = "activity-subdetail-header";
+      header.textContent = `${formatProvider(job.target_provider)} - ${formatSyncJobType(
+        job.job_type
+      )}`;
+      const metaLine = document.createElement("div");
+      metaLine.className = "activity-subdetail-meta";
+      const metaParts = [formatLabel(job.status)];
+      if (job.attempts !== undefined && job.attempts !== null) {
+        metaParts.push(`${job.attempts} attempt${job.attempts === 1 ? "" : "s"}`);
+      }
+      const updatedAt = job.updated_at || job.created_at;
+      if (updatedAt) {
+        metaParts.push(formatMetadataDate(updatedAt));
+      }
+      metaLine.textContent = metaParts.join(" - ");
+      card.appendChild(header);
+      card.appendChild(metaLine);
+
+      card.appendChild(buildDetailRow("Job ID", job.id));
+      card.appendChild(buildDetailRow("Status", formatLabel(job.status)));
+      card.appendChild(buildDetailRow("Next run", formatMetadataDate(job.run_after)));
+      if (job.last_error) {
+        card.appendChild(buildDetailRow("Last error", job.last_error));
+      }
+      if (job.sync_attempts && job.sync_attempts.length) {
+        const attemptLabel = document.createElement("div");
+        attemptLabel.className = "activity-subdetail-meta";
+        attemptLabel.textContent = "Recent attempts";
+        card.appendChild(attemptLabel);
+        const attemptList = document.createElement("div");
+        attemptList.className = "activity-attempts";
+        job.sync_attempts.forEach((attempt) => {
+          const attemptRow = document.createElement("div");
+          const attemptParts = [
+            formatMetadataDate(attempt.attempted_at),
+            formatLabel(attempt.status),
+          ];
+          if (attempt.response_code !== null && attempt.response_code !== undefined) {
+            attemptParts.push(`HTTP ${attempt.response_code}`);
+          }
+          if (attempt.error) {
+            attemptParts.push(attempt.error);
+          }
+          attemptRow.textContent = attemptParts.join(" - ");
+          attemptList.appendChild(attemptRow);
+        });
+        card.appendChild(attemptList);
+      }
+      if (job.payload && Object.keys(job.payload).length) {
+        const payloadLabel = document.createElement("div");
+        payloadLabel.className = "activity-subdetail-meta";
+        payloadLabel.textContent = "Payload";
+        card.appendChild(payloadLabel);
+        const pre = document.createElement("pre");
+        pre.textContent = JSON.stringify(maskSensitivePayload(job.payload), null, 2);
+        card.appendChild(pre);
+      }
+      detail.appendChild(card);
+    });
     details.appendChild(detail);
     container.appendChild(details);
   });
@@ -3289,31 +3737,55 @@ function renderEventsList() {
     return;
   }
   container.innerHTML = "";
-  if (!activityState.events.length) {
+  const totalEvents = activityState.events.length;
+  const visibleTotal = Math.max(activityState.eventsVisible || 0, ACTIVITY_PAGE_SIZE);
+  const visibleEvents = activityState.events.slice(0, visibleTotal);
+
+  const showMore = document.getElementById("events-show-more");
+  if (showMore) {
+    showMore.hidden = totalEvents <= visibleTotal;
+  }
+
+  if (!totalEvents) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
     empty.textContent = "No recent events.";
     container.appendChild(empty);
     return;
   }
-  activityState.events.forEach((event) => {
+
+  visibleEvents.forEach((event) => {
+    const isImportEvent = isImportHistoryEvent(event);
+    const importStatus = event.import_status || (event.raw ? event.raw.status : null);
+    const importQueue = event.import_queue || (event.raw ? event.raw.queue : null);
     const details = document.createElement("details");
-    details.className = "activity-row";
+    details.className = isImportEvent ? "activity-row activity-import" : "activity-row";
     const summary = document.createElement("summary");
 
     const main = document.createElement("div");
     main.className = "activity-main";
     const title = document.createElement("div");
     title.className = "activity-title";
-    title.textContent = formatActivityTitle(event.item);
+    title.textContent = isImportEvent
+      ? formatImportType(event.event_type)
+      : formatActivityTitle(event.item);
     const meta = document.createElement("div");
     meta.className = "activity-meta";
     const parts = [];
-    if (event.source_provider) {
-      parts.push(formatProvider(event.source_provider));
-    }
-    if (event.event_type) {
-      parts.push(formatLabel(event.event_type));
+    if (isImportEvent) {
+      if (importStatus) {
+        parts.push(formatLabel(importStatus));
+      }
+      if (Array.isArray(importQueue) && importQueue.length) {
+        parts.push(importQueue.map((provider) => formatProvider(provider)).join(" → "));
+      }
+    } else {
+      if (event.source_provider) {
+        parts.push(formatProvider(event.source_provider));
+      }
+      if (event.event_type) {
+        parts.push(formatLabel(event.event_type));
+      }
     }
     meta.textContent = parts.join(" · ");
     main.appendChild(title);
@@ -3321,7 +3793,13 @@ function renderEventsList() {
 
     const status = document.createElement("div");
     status.className = "activity-status";
-    status.appendChild(createStatusBadge("Event", "succeeded"));
+    if (isImportEvent) {
+      status.appendChild(
+        createStatusBadge(formatLabel(importStatus) || "Import", importBadgeStatus(importStatus))
+      );
+    } else {
+      status.appendChild(createStatusBadge("Event", "succeeded"));
+    }
     const time = document.createElement("span");
     time.textContent = formatRelativeTime(event.occurred_at);
     time.title = formatMetadataDate(event.occurred_at);
@@ -3333,13 +3811,99 @@ function renderEventsList() {
 
     const detail = document.createElement("div");
     detail.className = "activity-detail";
-    detail.appendChild(buildDetailRow("Event type", formatLabel(event.event_type)));
-    detail.appendChild(buildDetailRow("Occurred", formatMetadataDate(event.occurred_at)));
-    detail.appendChild(buildDetailRow("Recorded", formatMetadataDate(event.created_at)));
-    if (event.raw) {
-      const pre = document.createElement("pre");
-      pre.textContent = JSON.stringify(event.raw, null, 2);
-      detail.appendChild(pre);
+    if (isImportEvent) {
+      const metrics = buildImportEventMetrics(event, activityState.events);
+      const shellLines = buildImportEventShellLines(event, activityState.events);
+      if (shellLines.length) {
+        const pre = document.createElement("pre");
+        pre.className = "activity-shell";
+        pre.textContent = shellLines.join("\n");
+        detail.appendChild(pre);
+      }
+      const importedItems = buildImportEventItems(event, activityState.events, metrics);
+      if (importedItems.length) {
+        const tree = document.createElement("div");
+        tree.className = "activity-import-tree";
+        const providerGroups = new Map();
+        importedItems.forEach((entry) => {
+          const provider = entry.source_provider || "unknown";
+          const group = providerGroups.get(provider) || [];
+          group.push(entry);
+          providerGroups.set(provider, group);
+        });
+        const sortedProviders = Array.from(providerGroups.keys()).sort((a, b) =>
+          formatProvider(a).localeCompare(formatProvider(b))
+        );
+        const totalShown = importedItems.length;
+        const importLimit = 50;
+        let shownCount = 0;
+        sortedProviders.forEach((provider) => {
+          if (shownCount >= importLimit) {
+            return;
+          }
+          const entries = providerGroups.get(provider) || [];
+          const remaining = importLimit - shownCount;
+          const visibleEntries = entries.slice(0, remaining);
+          if (!visibleEntries.length) {
+            return;
+          }
+          shownCount += visibleEntries.length;
+          const branch = document.createElement("div");
+          branch.className = "activity-import-branch";
+          const header = document.createElement("div");
+          header.className = "activity-import-branch-title";
+          header.textContent = `${formatProvider(provider)} (${entries.length})`;
+          branch.appendChild(header);
+          const list = document.createElement("ul");
+          list.className = "activity-import-list";
+          visibleEntries.forEach((entry) => {
+            const item = document.createElement("li");
+            item.textContent = formatActivityTitle(entry.item);
+            list.appendChild(item);
+          });
+          branch.appendChild(list);
+          tree.appendChild(branch);
+        });
+        detail.appendChild(tree);
+        const remainingCount = totalShown - shownCount;
+        if (remainingCount > 0) {
+          const more = document.createElement("div");
+          more.className = "activity-import-more";
+          more.textContent = `…and ${formatItemCount(remainingCount)} more not shown`;
+          detail.appendChild(more);
+        }
+      }
+      detail.appendChild(buildDetailRow("Import type", formatImportType(event.event_type)));
+      if (importStatus) {
+        detail.appendChild(buildDetailRow("Status", formatLabel(importStatus)));
+      }
+      detail.appendChild(buildDetailRow("Occurred", formatMetadataDate(event.occurred_at)));
+      detail.appendChild(buildDetailRow("Recorded", formatMetadataDate(event.created_at)));
+      if (Array.isArray(importQueue) && importQueue.length) {
+        detail.appendChild(
+          buildDetailRow(
+            "Providers",
+            importQueue.map((provider) => formatProvider(provider)).join(" → ")
+          )
+        );
+      }
+      if (event.import_error) {
+        detail.appendChild(buildDetailRow("Error", event.import_error));
+      }
+      if (event.raw) {
+        const pre = document.createElement("pre");
+        pre.textContent = JSON.stringify(event.raw, null, 2);
+        detail.appendChild(pre);
+      }
+    } else {
+      detail.appendChild(buildDetailRow("Event type", formatLabel(event.event_type)));
+      detail.appendChild(buildDetailRow("Occurred", formatMetadataDate(event.occurred_at)));
+      detail.appendChild(buildDetailRow("Recorded", formatMetadataDate(event.created_at)));
+      if (event.raw) {
+        const pre = document.createElement("pre");
+        pre.textContent = JSON.stringify(event.raw, null, 2);
+        detail.appendChild(pre);
+      }
     }
     details.appendChild(detail);
     container.appendChild(details);
@@ -3403,6 +3967,14 @@ async function loadActivity(silent = false) {
     activityState.events =
       eventsData && eventsData.events ? eventsData.events : [];
     activityState.lastRefresh = new Date();
+    activityState.eventsVisible = Math.max(
+      activityState.eventsVisible || 0,
+      ACTIVITY_PAGE_SIZE
+    );
+    activityState.jobsVisible = Math.max(
+      activityState.jobsVisible || 0,
+      ACTIVITY_PAGE_SIZE
+    );
     applyQuickImportControls(statusData);
     updateProviderFilterOptions(activityState.jobs);
     renderActivitySummary(statusData);
@@ -3440,6 +4012,20 @@ function bindActivityControls() {
   const refreshButton = document.getElementById("activity-refresh");
   if (refreshButton) {
     refreshButton.addEventListener("click", () => loadActivity());
+  }
+  const eventsMore = document.getElementById("events-show-more");
+  if (eventsMore) {
+    eventsMore.addEventListener("click", () => {
+      activityState.eventsVisible += ACTIVITY_PAGE_SIZE;
+      renderEventsList();
+    });
+  }
+  const syncMore = document.getElementById("sync-show-more");
+  if (syncMore) {
+    syncMore.addEventListener("click", () => {
+      activityState.jobsVisible += ACTIVITY_PAGE_SIZE;
+      renderOutboxList();
+    });
   }
 }
 

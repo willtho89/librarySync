@@ -21,6 +21,8 @@ from librarysync.core.import_all import (
     parse_import_all_state,
 )
 from librarysync.core.import_control import (
+    MERGE_COMPLETED_AT_KEY,
+    MERGE_ERROR_KEY,
     MERGE_REQUIRED_AT_KEY,
     QUICK_IMPORT_ERROR_KEY,
     QUICK_IMPORT_INDEX_KEY,
@@ -36,6 +38,12 @@ from librarysync.core.import_control import (
     parse_quick_import_state,
     should_run_quick_import,
 )
+from librarysync.core.import_history import (
+    IMPORT_HISTORY_KEY,
+    append_import_history,
+    build_import_history_entry,
+)
+from librarysync.core.import_schedule import parse_datetime
 from librarysync.db.models import Integration
 from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.import_base import ImportContext, ImportStrategyRegistry
@@ -171,7 +179,14 @@ async def _process_quick_import_run(
         run.config = dict(run.config or {})
         run.config[QUICK_IMPORT_ERROR_KEY] = None
         run.config[QUICK_IMPORT_INDEX_KEY] = len(queue)
-        await _finalize_merge(db, run, now, mark_quick_import_completed)
+        await _finalize_merge(
+            db,
+            run,
+            now,
+            mark_quick_import_completed,
+            history_event_type="quick_import",
+            history_parser=parse_quick_import_state,
+        )
         return 1
 
     provider = queue[state.index]
@@ -201,7 +216,14 @@ async def _process_quick_import_run(
         next_index = state.index + 1
         run.config[QUICK_IMPORT_INDEX_KEY] = next_index
         if next_index >= len(queue):
-            await _finalize_merge(db, run, now, mark_quick_import_completed)
+            await _finalize_merge(
+                db,
+                run,
+                now,
+                mark_quick_import_completed,
+                history_event_type="quick_import",
+                history_parser=parse_quick_import_state,
+            )
             return 1
         db.add(run)
         await db.commit()
@@ -211,7 +233,14 @@ async def _process_quick_import_run(
         run.config[QUICK_IMPORT_INDEX_KEY] = (
             next_index if next_index is not None else state.index
         )
-        await _finalize_merge(db, run, now, None)
+        await _finalize_merge(
+            db,
+            run,
+            now,
+            None,
+            history_event_type="quick_import",
+            history_parser=parse_quick_import_state,
+        )
         return 1
 
 
@@ -225,7 +254,14 @@ async def _advance_quick_import_run(
     run.config = dict(run.config or {})
     run.config[QUICK_IMPORT_INDEX_KEY] = next_index
     if next_index >= len(queue):
-        await _finalize_merge(db, run, now, mark_quick_import_completed)
+        await _finalize_merge(
+            db,
+            run,
+            now,
+            mark_quick_import_completed,
+            history_event_type="quick_import",
+            history_parser=parse_quick_import_state,
+        )
         return 1
     db.add(run)
     await db.commit()
@@ -241,7 +277,14 @@ async def _process_import_all_run(
         run.config = dict(run.config or {})
         run.config[IMPORT_ALL_ERROR_KEY] = None
         run.config[IMPORT_ALL_INDEX_KEY] = len(queue)
-        await _finalize_merge(db, run, now, mark_import_all_completed)
+        await _finalize_merge(
+            db,
+            run,
+            now,
+            mark_import_all_completed,
+            history_event_type="import_all",
+            history_parser=parse_import_all_state,
+        )
         return 1
 
     provider = queue[state.index]
@@ -271,7 +314,14 @@ async def _process_import_all_run(
         next_index = state.index + 1
         run.config[IMPORT_ALL_INDEX_KEY] = next_index
         if next_index >= len(queue):
-            await _finalize_merge(db, run, now, mark_import_all_completed)
+            await _finalize_merge(
+                db,
+                run,
+                now,
+                mark_import_all_completed,
+                history_event_type="import_all",
+                history_parser=parse_import_all_state,
+            )
             return 1
         db.add(run)
         await db.commit()
@@ -281,7 +331,14 @@ async def _process_import_all_run(
         run.config[IMPORT_ALL_INDEX_KEY] = (
             next_index if next_index is not None else state.index
         )
-        await _finalize_merge(db, run, now, None)
+        await _finalize_merge(
+            db,
+            run,
+            now,
+            None,
+            history_event_type="import_all",
+            history_parser=parse_import_all_state,
+        )
         return 1
 
 
@@ -295,7 +352,14 @@ async def _advance_import_all_run(
     run.config = dict(run.config or {})
     run.config[IMPORT_ALL_INDEX_KEY] = next_index
     if next_index >= len(queue):
-        await _finalize_merge(db, run, now, mark_import_all_completed)
+        await _finalize_merge(
+            db,
+            run,
+            now,
+            mark_import_all_completed,
+            history_event_type="import_all",
+            history_parser=parse_import_all_state,
+        )
         return 1
     db.add(run)
     await db.commit()
@@ -307,16 +371,26 @@ async def _finalize_merge(
     run: Integration,
     now: datetime,
     finalize_run: callable | None,
+    history_event_type: str | None = None,
+    history_parser: callable | None = None,
 ) -> None:
     try:
         await merge_history_for_user(db, run.user_id)
         run.config = mark_merge_completed(run.config, now)
         if finalize_run is not None:
             run.config = finalize_run(run.config, now)
+        if history_event_type and history_parser:
+            run.config = _append_import_history_entry(
+                run.config, history_event_type, history_parser
+            )
     except Exception as exc:
         run.config = mark_merge_failed(run.config, now, str(exc)[:500])
         if finalize_run is not None and run.config:
             run.config = finalize_run(run.config, now)
+        if history_event_type and history_parser:
+            run.config = _append_import_history_entry(
+                run.config, history_event_type, history_parser
+            )
     db.add(run)
     await db.commit()
 
@@ -326,3 +400,51 @@ def _has_merge_required(config: dict | None) -> bool:
         return False
     value = config.get(MERGE_REQUIRED_AT_KEY)
     return bool(value)
+
+
+def _append_import_history_entry(
+    config: dict | None,
+    event_type: str,
+    parser: callable,
+) -> dict | None:
+    if config is None:
+        return None
+    state = parser(config)
+    if not state.status or state.status not in {"completed", "failed"}:
+        return config
+    if _already_recorded_import(config, event_type, state.status, state.completed_at):
+        return config
+    entry = build_import_history_entry(
+        event_type=event_type,
+        status=state.status,
+        requested_at=state.requested_at,
+        started_at=state.started_at,
+        completed_at=state.completed_at,
+        error=state.error,
+        queue=state.queue,
+        merge_required_at=parse_datetime(config.get(MERGE_REQUIRED_AT_KEY)),
+        merge_completed_at=parse_datetime(config.get(MERGE_COMPLETED_AT_KEY)),
+        merge_error=config.get(MERGE_ERROR_KEY),
+    )
+    return append_import_history(config, entry)
+
+
+def _already_recorded_import(
+    config: dict,
+    event_type: str,
+    status: str,
+    completed_at: datetime | None,
+) -> bool:
+    history = config.get(IMPORT_HISTORY_KEY)
+    if not isinstance(history, list) or not history:
+        return False
+    last = history[-1]
+    if not isinstance(last, dict):
+        return False
+    last_completed = last.get("completed_at")
+    current_completed = completed_at.isoformat() if completed_at else None
+    return (
+        last.get("event_type") == event_type
+        and last.get("status") == status
+        and last_completed == current_completed
+    )

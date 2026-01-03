@@ -709,7 +709,7 @@ wheels = [
 
 [[package]]
 name = "typing-inspection"
-version = "0.4.5"
+version = "0.4.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions" },

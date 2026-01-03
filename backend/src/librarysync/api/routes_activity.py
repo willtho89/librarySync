@@ -7,6 +7,7 @@ from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.core.import_all import IMPORT_ALL_PROVIDER, parse_import_all_state
+from librarysync.core.import_history import parse_import_history
 from librarysync.core.import_control import (
     MERGE_COMPLETED_AT_KEY,
     MERGE_ERROR_KEY,
@@ -22,6 +23,7 @@ from librarysync.db.models import (
     MetadataLookupRequest,
     OutboxJob,
     ScheduledJob,
+    SyncAttempt,
     User,
     WatchedItem,
     WatchEvent,
@@ -148,6 +150,18 @@ async def events(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    system_result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == IMPORT_ALL_PROVIDER,
+        )
+    )
+    system_integration = system_result.scalars().first()
+    import_history = parse_import_history(
+        system_integration.config if system_integration else None
+    )
+    watch_limit = min(limit + len(import_history), 200)
+
     show_item = aliased(MediaItem)
     result = await db.execute(
         select(WatchEvent, MediaItem, EpisodeItem, show_item)
@@ -156,7 +170,7 @@ async def events(
         .outerjoin(show_item, EpisodeItem.show_media_item_id == show_item.id)
         .where(WatchEvent.user_id == current_user.id)
         .order_by(WatchEvent.occurred_at.desc())
-        .limit(limit)
+        .limit(watch_limit)
     )
     events_out: list[dict] = []
     for event, media, episode, show in result.all():
@@ -171,6 +185,52 @@ async def events(
                 "raw": event.raw,
             }
         )
+
+    now = datetime.now(timezone.utc)
+    for entry in import_history:
+        occurred_at = (
+            entry.get("completed_at")
+            or entry.get("started_at")
+            or entry.get("requested_at")
+            or now
+        )
+        merge_payload = {
+            "required_at": entry.get("merge_required_at"),
+            "completed_at": entry.get("merge_completed_at"),
+            "error": entry.get("merge_error"),
+        }
+        events_out.append(
+            {
+                "id": f"import:{entry['id']}",
+                "event_type": entry.get("event_type"),
+                "event_category": "import",
+                "source_provider": None,
+                "occurred_at": occurred_at,
+                "created_at": occurred_at,
+                "item": None,
+                "raw": {
+                    "status": entry.get("status"),
+                    "requested_at": entry.get("requested_at"),
+                    "started_at": entry.get("started_at"),
+                    "completed_at": entry.get("completed_at"),
+                    "error": entry.get("error"),
+                    "queue": entry.get("queue"),
+                    "merge_required_at": entry.get("merge_required_at"),
+                    "merge_completed_at": entry.get("merge_completed_at"),
+                    "merge_error": entry.get("merge_error"),
+                },
+                "import_status": entry.get("status"),
+                "import_error": entry.get("error"),
+                "import_queue": entry.get("queue"),
+                "import_merge": merge_payload,
+            }
+        )
+
+    events_out.sort(
+        key=lambda event: event.get("occurred_at") or event.get("created_at") or now,
+        reverse=True,
+    )
+    events_out = events_out[:limit]
     return {"events": events_out}
 
 
@@ -200,6 +260,27 @@ async def outbox(
     query = query.order_by(OutboxJob.created_at.desc()).limit(limit)
     result = await db.execute(query)
     jobs = result.scalars().all()
+
+    attempt_map: dict[str, list[dict]] = {}
+    job_ids = [job.id for job in jobs]
+    if job_ids:
+        attempts_result = await db.execute(
+            select(SyncAttempt)
+            .where(SyncAttempt.job_id.in_(job_ids))
+            .order_by(SyncAttempt.attempted_at.desc())
+        )
+        for attempt in attempts_result.scalars().all():
+            bucket = attempt_map.setdefault(attempt.job_id, [])
+            if len(bucket) >= 5:
+                continue
+            bucket.append(
+                {
+                    "status": attempt.status,
+                    "attempted_at": attempt.attempted_at,
+                    "response_code": attempt.response_code,
+                    "error": attempt.error,
+                }
+            )
 
     watched_ids = []
     for job in jobs:
@@ -235,6 +316,7 @@ async def outbox(
                 "watched_item_id": watched_id,
                 "item": item,
                 "payload": payload,
+                "sync_attempts": attempt_map.get(job.id, []),
             }
         )
     return {"jobs": items}
