@@ -16,6 +16,8 @@ class Settings:
     trakt_client_secret: str | None
     simkl_client_id: str | None
     simkl_client_secret: str | None
+    anilist_client_id: str | None
+    anilist_client_secret: str | None
     admin_api_key: str | None
     history_lookback_days: int
     log_level: str
@@ -28,6 +30,7 @@ class Settings:
     simkl_rate_limit_per_minute: int
     letterboxd_rate_limit_per_minute: int
     stremio_rate_limit_per_minute: int
+    anilist_rate_limit_per_minute: int
     enable_dashboard_stats: bool
 
 
@@ -40,6 +43,8 @@ def load_settings() -> Settings:
         trakt_client_secret=_get_env("TRAKT_CLIENT_SECRET"),
         simkl_client_id=_get_env("SIMKL_CLIENT_ID"),
         simkl_client_secret=_get_env("SIMKL_CLIENT_SECRET"),
+        anilist_client_id=_get_env("ANILIST_CLIENT_ID"),
+        anilist_client_secret=_get_env("ANILIST_CLIENT_SECRET"),
         admin_api_key=_get_env("LIBRARYSYNC_ADMIN_API_KEY"),
         history_lookback_days=int(_get_env("HISTORY_LOOKBACK_DAYS", "30") or "30"),
         log_level=_get_env("LOG_LEVEL", "INFO") or "INFO",
@@ -65,6 +70,9 @@ def load_settings() -> Settings:
         ),
         stremio_rate_limit_per_minute=int(
             _get_env("LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE", "120") or "120"
+        ),
+        anilist_rate_limit_per_minute=int(
+            _get_env("LIBRARYSYNC_ANILIST_RATE_LIMIT_PER_MINUTE", "90") or "90"
         ),
         enable_dashboard_stats=(
             (_get_env("LIBRARYSYNC_ENABLE_DASHBOARD_STATS", "true") or "true").lower() == "true"
