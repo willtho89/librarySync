@@ -253,7 +253,7 @@ def create_app() -> FastAPI:
         current_user: User | None = Depends(get_optional_user),
     ):
         # Redirect to settings page (integrations merged into settings)
-        return RedirectResponse(url="/settings", status_code=302)
+        return RedirectResponse(url="/settings", status_code=301)
 
     @app.get("/activity", include_in_schema=False)
     async def activity(
