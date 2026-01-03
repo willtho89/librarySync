@@ -3101,7 +3101,7 @@ function buildImportAllRow(importAll) {
     handleImportAll({
       messageId: "activity-import-message",
       confirmMessage:
-        "Start import all? This will re-sync your entire history and can take a while.",
+        "Start import all? This can take a while and will re-sync your full history.",
     })
   );
   actions.appendChild(runButton);
