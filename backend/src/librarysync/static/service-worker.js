@@ -4,7 +4,6 @@ const CORE_ASSETS = [
   "/login",
   "/add-watched",
   "/history",
-  "/integrations",
   "/activity",
   "/settings",
   "/offline",

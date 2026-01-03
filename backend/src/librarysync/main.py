@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -45,6 +45,24 @@ OPENAPI_TAGS = [
 ]
 
 
+def get_app_version() -> str:
+    """Get the application version from package metadata."""
+    try:
+        return metadata.version("librarysync")
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def make_static_url(version: str) -> callable:
+    """Create a static_url function with the given version."""
+
+    def static_url(path: str) -> str:
+        """Generate a versioned static URL for cache busting."""
+        return f"{path}?v={version}"
+
+    return static_url
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="librarySync",
@@ -66,7 +84,9 @@ def create_app() -> FastAPI:
     app.include_router(routes_settings.router)
     app.include_router(routes_admin.router)
 
+    app_version = get_app_version()
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
+    templates.env.globals["static_url"] = make_static_url(app_version)
 
     class CachedStaticFiles(StaticFiles):
         async def get_response(self, path: str, scope):
@@ -156,11 +176,6 @@ def create_app() -> FastAPI:
         run_migrations()
         init_session_factory()
 
-    try:
-        app_version = metadata.version("librarysync")
-    except metadata.PackageNotFoundError:
-        app_version = "unknown"
-
     def _render_page(
         request: Request,
         template_name: str,
@@ -231,20 +246,6 @@ def create_app() -> FastAPI:
             "history.html",
             page_title="History",
             active_page="history",
-            requires_auth=True,
-            current_user=current_user,
-        )
-
-    @app.get("/integrations", include_in_schema=False)
-    async def integrations(
-        request: Request,
-        current_user: User | None = Depends(get_optional_user),
-    ):
-        return _render_page(
-            request,
-            "integrations.html",
-            page_title="Integrations",
-            active_page="integrations",
             requires_auth=True,
             current_user=current_user,
         )

@@ -115,6 +115,9 @@ function applyTheme(mode) {
     delete root.dataset.theme;
   }
   themeState.mode = mode;
+  document.querySelectorAll("[data-theme-option]").forEach((option) => {
+    option.checked = option.value === mode;
+  });
   document.querySelectorAll("[data-theme-label]").forEach((label) => {
     label.textContent = mode === "system" ? "System" : mode === "dark" ? "Dark" : "Light";
   });
@@ -125,6 +128,16 @@ function initThemeToggle() {
   const initial =
     stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
   applyTheme(initial);
+  document.querySelectorAll("[data-theme-option]").forEach((option) => {
+    option.addEventListener("change", () => {
+      if (!option.checked) {
+        return;
+      }
+      const value = option.value;
+      setStoredTheme(value);
+      applyTheme(value);
+    });
+  });
   document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
       const next =
