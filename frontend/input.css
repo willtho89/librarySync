@@ -169,6 +169,10 @@
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition;
   }
 
+  .btn-lg {
+    @apply px-6 py-3 text-base;
+  }
+
   .btn-primary {
     @apply bg-primary text-white shadow-glow hover:bg-accent;
   }
@@ -183,6 +187,10 @@
 
   .btn-danger {
     @apply bg-red-600 text-white hover:bg-red-500;
+  }
+
+  .card-elevated {
+    @apply shadow-lg;
   }
 
   .secondary-button {
