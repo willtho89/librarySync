@@ -43,6 +43,24 @@ OPENAPI_TAGS = [
 ]
 
 
+def get_app_version() -> str:
+    """Get the application version from package metadata."""
+    try:
+        return metadata.version("librarysync")
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def make_static_url(version: str) -> callable:
+    """Create a static_url function with the given version."""
+
+    def static_url(path: str) -> str:
+        """Generate a versioned static URL for cache busting."""
+        return f"{path}?v={version}"
+
+    return static_url
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="librarySync",
@@ -63,18 +81,9 @@ def create_app() -> FastAPI:
     app.include_router(routes_settings.router)
     app.include_router(routes_admin.router)
 
-    try:
-        app_version = metadata.version("librarysync")
-    except metadata.PackageNotFoundError:
-        app_version = "unknown"
-
+    app_version = get_app_version()
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
-
-    def static_url(path: str) -> str:
-        """Generate a versioned static URL for cache busting."""
-        return f"{path}?v={app_version}"
-
-    templates.env.globals["static_url"] = static_url
+    templates.env.globals["static_url"] = make_static_url(app_version)
 
     class CachedStaticFiles(StaticFiles):
         async def get_response(self, path: str, scope):
