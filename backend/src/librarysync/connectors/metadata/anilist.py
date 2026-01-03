@@ -127,11 +127,12 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
         return [self._normalize_candidate(item) for item in media_list]
 
     async def get_details(
-        self, provider_item_id: str, scope: str = "all"
+        self, provider_item_id: str, media_type: str
     ) -> MediaCandidate:
         """Get anime details by AniList ID."""
-        if scope != MEDIA_TYPE_ANIME and scope != "all":
-            raise ValueError(f"AniList only supports anime scope, got {scope}")
+        # AniList only supports anime, ignore media_type parameter
+        if media_type not in (MEDIA_TYPE_ANIME, "all"):
+            raise ValueError(f"AniList only supports anime scope, got {media_type}")
 
         graphql_query = """
         query ($id: Int) {
@@ -167,6 +168,15 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
             raise ValueError(f"AniList ID {provider_item_id} not found")
 
         return self._normalize_candidate(media)
+
+    async def validate_credentials(self) -> None:
+        """AniList metadata operations don't require authentication."""
+        # Public API - no credentials to validate
+        # Perform a simple test query to verify API is accessible
+        try:
+            await self.search("test", "anime")
+        except Exception as exc:
+            raise ValueError(f"AniList API is not accessible: {exc}") from exc
 
     async def find_by_external_id(
         self, external_id: str, scope: str = "all"
