@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "librarysync-worker"
-version = "0.4.5"
+version = "0.4.7"
 description = "librarySync worker"
 requires-python = ">=3.14"
 dependencies = [

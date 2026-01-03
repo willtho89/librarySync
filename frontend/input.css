@@ -169,6 +169,10 @@
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition;
   }
 
+  .btn-lg {
+    @apply px-6 py-3 text-base;
+  }
+
   .btn-primary {
     @apply bg-primary text-white shadow-glow hover:bg-accent;
   }
@@ -183,6 +187,10 @@
 
   .btn-danger {
     @apply bg-red-600 text-white hover:bg-red-500;
+  }
+
+  .card-elevated {
+    @apply shadow-lg;
   }
 
   .secondary-button {
@@ -622,5 +630,27 @@
   .rating-stars label:hover::before,
   .rating-stars label:hover ~ label::before {
     color: rgb(var(--color-primary));
+  }
+
+  .chart-container {
+    @apply relative p-4;
+    min-height: 300px;
+    height: 300px;
+  }
+
+  .stat-card {
+    @apply flex flex-col gap-1 rounded-xl border border-line/60 bg-elevated/70 p-4;
+  }
+
+  .stat-label {
+    @apply text-xs text-muted;
+  }
+
+  .stat-value {
+    @apply text-2xl font-semibold text-ink;
+  }
+
+  .stat-meta {
+    @apply text-xs text-muted;
   }
 }

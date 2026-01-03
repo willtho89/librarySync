@@ -11,6 +11,7 @@ from librarysync.api import (
     routes_activity,
     routes_admin,
     routes_auth,
+    routes_dashboard,
     routes_history,
     routes_integrations,
     routes_metadata,
@@ -37,6 +38,7 @@ OPENAPI_TAGS = [
     {"name": "metadata", "description": "Metadata providers and lookup workflows."},
     {"name": "history", "description": "Manual watched history operations."},
     {"name": "activity", "description": "Progress events, outbox, and status feeds."},
+    {"name": "dashboard", "description": "Dashboard statistics and analytics."},
     {"name": "settings", "description": "Per-user search settings."},
     {"name": "admin", "description": "Administrative operations."},
     {"name": "health", "description": "Service health check."},
@@ -78,6 +80,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_metadata.router)
     app.include_router(routes_history.router)
     app.include_router(routes_activity.router)
+    app.include_router(routes_dashboard.router)
     app.include_router(routes_settings.router)
     app.include_router(routes_admin.router)
 

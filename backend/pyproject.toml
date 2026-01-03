@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "librarysync"
-version = "0.4.5"
+version = "0.4.7"
 description = "librarySync backend"
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.110",
   "uvicorn[standard]>=0.30",

@@ -2913,9 +2913,10 @@ function renderActivitySummary(statusData) {
   const nextOutbox = outbox.next_run_at || null;
   const quickImport = statusData.imports ? statusData.imports.quick : null;
   const nextImport = quickImport ? quickImport.next_run_at : null;
-  const lastRefresh = activityState.lastRefresh
-    ? activityState.lastRefresh.toLocaleTimeString()
-    : "Unknown";
+  const queue =
+    quickImport && Array.isArray(quickImport.queue) && quickImport.queue.length
+      ? quickImport.queue.map((entry) => formatProvider(entry)).join(" → ")
+      : "Idle";
 
   const stats = [
     {
@@ -2937,12 +2938,12 @@ function renderActivitySummary(statusData) {
       title: formatMetadataDate(nextImport),
     },
     {
-      label: "Metadata pending",
-      value: String(metadataCounts.pending || 0),
+      label: "Import queue",
+      value: queue,
     },
     {
-      label: "Last refresh",
-      value: lastRefresh,
+      label: "Metadata pending",
+      value: String(metadataCounts.pending || 0),
     },
   ];
 
@@ -3475,6 +3476,392 @@ function startActivityAutoRefresh() {
   }, 30000);
 }
 
+// Dashboard state and functions
+const dashboardState = {
+  charts: {
+    timeline: null,
+    breakdown: null,
+    ratings: null,
+  },
+};
+
+async function loadDashboardStats() {
+  const statsElements = [
+    document.getElementById("dashboard-movies-count"),
+    document.getElementById("dashboard-shows-count"),
+    document.getElementById("dashboard-episodes-count"),
+    document.getElementById("dashboard-avg-rating"),
+  ];
+
+  const chartElements = [
+    document.getElementById("activity-timeline-chart"),
+    document.getElementById("content-breakdown-chart"),
+    document.getElementById("rating-distribution-chart"),
+  ];
+
+  if (!statsElements.some((el) => el) && !chartElements.some((el) => el)) {
+    return;
+  }
+
+  try {
+    const data = await requestJSON("/api/dashboard/stats");
+    renderDashboardStats(data);
+    renderDashboardCharts(data);
+  } catch (error) {
+    console.error("Failed to load dashboard stats", error);
+    // If dashboard stats are disabled (403), hide the dashboard sections
+    if (error.status === 403) {
+      const dashboardSections = document.querySelectorAll("[data-dashboard-section]");
+      dashboardSections.forEach((section) => {
+        section.style.display = "none";
+      });
+    }
+  }
+}
+
+function renderDashboardStats(data) {
+  const userStats = data.user_stats || {};
+  const systemStats = data.system_stats || {};
+  const integrationSummary = data.integration_summary || {};
+
+  const movieCount = document.getElementById("dashboard-movies-count");
+  if (movieCount) {
+    movieCount.textContent = String(userStats.movies_watched || 0);
+  }
+
+  const showsCount = document.getElementById("dashboard-shows-count");
+  if (showsCount) {
+    showsCount.textContent = String(userStats.shows_watched || 0);
+  }
+
+  const episodesCount = document.getElementById("dashboard-episodes-count");
+  if (episodesCount) {
+    episodesCount.textContent = String(userStats.episodes_watched || 0);
+  }
+
+  const avgRating = document.getElementById("dashboard-avg-rating");
+  if (avgRating) {
+    const rating = userStats.avg_rating || 0;
+    avgRating.textContent = rating > 0 ? rating.toFixed(1) : "—";
+  }
+
+  const systemMediaCount = document.getElementById("system-media-count");
+  if (systemMediaCount) {
+    systemMediaCount.textContent = String(systemStats.total_media_items || 0);
+  }
+
+  const systemEpisodesCount = document.getElementById("system-episodes-count");
+  if (systemEpisodesCount) {
+    systemEpisodesCount.textContent = String(systemStats.total_episode_items || 0);
+  }
+
+  const systemSyncCount = document.getElementById("system-sync-count");
+  if (systemSyncCount) {
+    systemSyncCount.textContent = String(systemStats.total_sync_events || 0);
+  }
+
+  const systemIntegrationsCount = document.getElementById("system-integrations-count");
+  if (systemIntegrationsCount) {
+    systemIntegrationsCount.textContent = String(integrationSummary.total_integrations || 0);
+  }
+}
+
+function renderDashboardCharts(data) {
+  if (!window.Chart) {
+    console.warn("Chart.js not loaded");
+    return;
+  }
+
+  const userStats = data.user_stats || {};
+  const dailyActivity = data.daily_activity || [];
+  const ratingDistribution = data.rating_distribution || [];
+  const overallDailyActivity = data.overall_daily_activity || [];
+  const overallRatingDistribution = data.overall_rating_distribution || [];
+
+  // Reusable legend click handler for toggling datasets
+  function toggleLegendItem(e, legendItem, legend) {
+    const index = legendItem.datasetIndex;
+    const chart = legend.chart;
+    const meta = chart.getDatasetMeta(index);
+    // Toggle the hidden state: if null, use the dataset's initial hidden property, otherwise toggle
+    if (meta.hidden === null) {
+      meta.hidden = !chart.data.datasets[index].hidden;
+    } else {
+      meta.hidden = !meta.hidden;
+    }
+    chart.update();
+  }
+
+  // Get theme colors
+  const isDark = document.documentElement.dataset.theme === "dark" || 
+    (document.documentElement.dataset.theme !== "light" && 
+     window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+  const colors = {
+    primary: isDark ? "rgba(20, 144, 228, 1)" : "rgba(13, 120, 211, 1)",
+    primaryAlpha: isDark ? "rgba(20, 144, 228, 0.2)" : "rgba(13, 120, 211, 0.2)",
+    accent: isDark ? "rgba(26, 170, 183, 1)" : "rgba(11, 138, 155, 1)",
+    accentAlpha: isDark ? "rgba(26, 170, 183, 0.2)" : "rgba(11, 138, 155, 0.2)",
+    overall: isDark ? "rgba(169, 182, 195, 1)" : "rgba(100, 116, 139, 1)",
+    overallAlpha: isDark ? "rgba(169, 182, 195, 0.2)" : "rgba(100, 116, 139, 0.2)",
+    text: isDark ? "rgb(231, 238, 245)" : "rgb(24, 32, 45)",
+    muted: isDark ? "rgb(169, 182, 195)" : "rgb(100, 116, 139)",
+    grid: isDark ? "rgba(46, 63, 79, 0.3)" : "rgba(214, 223, 230, 0.3)",
+  };
+
+  // Activity Timeline Chart
+  const timelineCanvas = document.getElementById("activity-timeline-chart");
+  if (timelineCanvas) {
+    if (dashboardState.charts.timeline) {
+      dashboardState.charts.timeline.destroy();
+    }
+
+    // Merge user and overall data by date
+    const dateMap = new Map();
+    dailyActivity.forEach((d) => {
+      dateMap.set(d.date, { 
+        userMovies: d.movies, 
+        userEpisodes: d.episodes,
+        overallMovies: 0,
+        overallEpisodes: 0
+      });
+    });
+    overallDailyActivity.forEach((d) => {
+      const existing = dateMap.get(d.date) || { userMovies: 0, userEpisodes: 0 };
+      dateMap.set(d.date, {
+        ...existing,
+        overallMovies: d.movies,
+        overallEpisodes: d.episodes
+      });
+    });
+
+    const sortedDates = Array.from(dateMap.keys()).sort();
+    const labels = sortedDates;
+    const userMoviesData = sortedDates.map((date) => dateMap.get(date).userMovies);
+    const userEpisodesData = sortedDates.map((date) => dateMap.get(date).userEpisodes);
+    const overallMoviesData = sortedDates.map((date) => dateMap.get(date).overallMovies);
+    const overallEpisodesData = sortedDates.map((date) => dateMap.get(date).overallEpisodes);
+
+    const datasets = [
+      {
+        label: "Your Movies",
+        data: userMoviesData,
+        borderColor: colors.primary,
+        backgroundColor: colors.primaryAlpha,
+        tension: 0.3,
+        fill: true,
+      },
+      {
+        label: "Your Episodes",
+        data: userEpisodesData,
+        borderColor: colors.accent,
+        backgroundColor: colors.accentAlpha,
+        tension: 0.3,
+        fill: true,
+      },
+    ];
+
+    // Only add overall data if there are other users
+    if (overallDailyActivity.length > 0) {
+      datasets.push(
+        {
+          label: "Overall Movies",
+          data: overallMoviesData,
+          borderColor: colors.overall,
+          backgroundColor: colors.overallAlpha,
+          tension: 0.3,
+          fill: false,
+          borderDash: [5, 5],
+          hidden: true, // Hidden by default
+        },
+        {
+          label: "Overall Episodes",
+          data: overallEpisodesData,
+          borderColor: colors.muted,
+          backgroundColor: colors.overallAlpha,
+          tension: 0.3,
+          fill: false,
+          borderDash: [5, 5],
+          hidden: true, // Hidden by default
+        }
+      );
+    }
+
+    dashboardState.charts.timeline = new Chart(timelineCanvas, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: datasets,
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            labels: {
+              color: colors.text,
+              font: {
+                family: "IBM Plex Sans",
+              },
+            },
+            onClick: toggleLegendItem,
+          },
+          tooltip: {
+            callbacks: {
+              title: function(context) {
+                return context[0].label;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: colors.muted,
+              maxRotation: 45,
+              minRotation: 45,
+            },
+            grid: {
+              color: colors.grid,
+            },
+          },
+          y: {
+            beginAtZero: true,
+            ticks: {
+              color: colors.muted,
+              precision: 0,
+            },
+            grid: {
+              color: colors.grid,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  // Content Breakdown Chart
+  const breakdownCanvas = document.getElementById("content-breakdown-chart");
+  if (breakdownCanvas && (userStats.movies_watched || userStats.episodes_watched)) {
+    if (dashboardState.charts.breakdown) {
+      dashboardState.charts.breakdown.destroy();
+    }
+
+    dashboardState.charts.breakdown = new Chart(breakdownCanvas, {
+      type: "doughnut",
+      data: {
+        labels: ["Movies", "Episodes"],
+        datasets: [
+          {
+            data: [userStats.movies_watched || 0, userStats.episodes_watched || 0],
+            backgroundColor: [colors.primary, colors.accent],
+            borderWidth: 0,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: "bottom",
+            labels: {
+              color: colors.text,
+              font: {
+                family: "IBM Plex Sans",
+              },
+              padding: 15,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  // Rating Distribution Chart
+  const ratingsCanvas = document.getElementById("rating-distribution-chart");
+  if (ratingsCanvas && (ratingDistribution.length > 0 || overallRatingDistribution.length > 0)) {
+    if (dashboardState.charts.ratings) {
+      dashboardState.charts.ratings.destroy();
+    }
+
+    const allRatings = [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5];
+    const userRatingCounts = allRatings.map((rating) => {
+      const found = ratingDistribution.find((r) => r.rating === rating);
+      return found ? found.count : 0;
+    });
+    const overallRatingCounts = allRatings.map((rating) => {
+      const found = overallRatingDistribution.find((r) => r.rating === rating);
+      return found ? found.count : 0;
+    });
+
+    const datasets = [
+      {
+        label: "Your Ratings",
+        data: userRatingCounts,
+        backgroundColor: colors.primary,
+        borderRadius: 6,
+      },
+    ];
+
+    // Only add overall data if there are ratings from other users
+    if (overallRatingDistribution.length > 0) {
+      datasets.push({
+        label: "Overall Ratings",
+        data: overallRatingCounts,
+        backgroundColor: colors.overall,
+        borderRadius: 6,
+        hidden: true, // Hidden by default
+      });
+    }
+
+    dashboardState.charts.ratings = new Chart(ratingsCanvas, {
+      type: "bar",
+      data: {
+        labels: allRatings.map((r) => r.toString()),
+        datasets: datasets,
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: overallRatingDistribution.length > 0,
+            labels: {
+              color: colors.text,
+              font: {
+                family: "IBM Plex Sans",
+              },
+            },
+            onClick: toggleLegendItem,
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: colors.muted,
+            },
+            grid: {
+              display: false,
+            },
+          },
+          y: {
+            beginAtZero: true,
+            ticks: {
+              color: colors.muted,
+              precision: 0,
+            },
+            grid: {
+              color: colors.grid,
+            },
+          },
+        },
+      },
+    });
+  }
+}
+
+
 document.addEventListener("DOMContentLoaded", async () => {
   const body = document.body;
   const requiresAuth = body && body.dataset.requiresAuth === "true";
@@ -3588,6 +3975,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         loadMetadataProviders(),
         loadHistory(),
         loadActivity(),
+        loadDashboardStats(),
       ]);
       if (document.getElementById("activity-summary")) {
         startActivityAutoRefresh();
