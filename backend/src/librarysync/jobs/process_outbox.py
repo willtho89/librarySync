@@ -84,6 +84,7 @@ from librarysync.db.session import SessionLocal, init_session_factory
 RETRYABLE_STATUSES = ("pending", "failed_retryable")
 BATCHABLE_PROVIDERS = {"trakt", "simkl"}
 BATCHABLE_JOB_TYPES = {"push_watched", "push_rating"}
+MIXED_PROVIDER_ORDER = ("trakt", "simkl", "letterboxd", "stremio")
 logger = logging.getLogger(__name__)
 
 
@@ -256,6 +257,19 @@ def _group_batchable_jobs(jobs: list[OutboxJob]) -> tuple[list[list[OutboxJob]],
     return batch_groups, remaining
 
 
+def _mixed_provider_limits(limit: int, providers: tuple[str, ...]) -> dict[str, int]:
+    if limit <= 0 or not providers:
+        return {}
+    per_provider = limit // len(providers)
+    remainder = limit % len(providers)
+    limits: dict[str, int] = {}
+    for idx, provider in enumerate(providers):
+        quota = per_provider + (1 if idx < remainder else 0)
+        if quota > 0:
+            limits[provider] = quota
+    return limits
+
+
 async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
     if not jobs:
         return
@@ -345,23 +359,41 @@ async def _deliver_batch(db: AsyncSession, jobs: list[OutboxJob]) -> int | None:
 async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
     now = datetime.now(timezone.utc)
     async with db.begin():
+        if limit <= 0:
+            return []
         blocked_users = await load_blocked_outbox_users(db)
-        query = (
-            select(OutboxJob)
-            .where(
-                OutboxJob.status.in_(RETRYABLE_STATUSES),
-                or_(OutboxJob.run_after.is_(None), OutboxJob.run_after <= now),
-            )
-        )
+        filters = [
+            OutboxJob.status.in_(RETRYABLE_STATUSES),
+            or_(OutboxJob.run_after.is_(None), OutboxJob.run_after <= now),
+        ]
         if blocked_users:
-            query = query.where(~OutboxJob.user_id.in_(blocked_users))
-        query = (
-            query.order_by(OutboxJob.user_id, OutboxJob.created_at)
-            .limit(limit)
+            filters.append(~OutboxJob.user_id.in_(blocked_users))
+        base_query = (
+            select(OutboxJob)
+            .where(*filters)
+            .order_by(OutboxJob.user_id, OutboxJob.created_at)
             .with_for_update(skip_locked=True)
         )
-        result = await db.execute(query)
-        jobs = result.scalars().all()
+        jobs: list[OutboxJob] = []
+        for provider, provider_limit in _mixed_provider_limits(
+            limit, MIXED_PROVIDER_ORDER
+        ).items():
+            result = await db.execute(
+                base_query.where(OutboxJob.target_provider == provider).limit(
+                    provider_limit
+                )
+            )
+            jobs.extend(result.scalars().all())
+        remaining_limit = limit - len(jobs)
+        if remaining_limit > 0:
+            claimed_ids = [job.id for job in jobs]
+            remainder_filters = []
+            if claimed_ids:
+                remainder_filters.append(~OutboxJob.id.in_(claimed_ids))
+            result = await db.execute(
+                base_query.where(*remainder_filters).limit(remaining_limit)
+            )
+            jobs.extend(result.scalars().all())
         for job in jobs:
             job.status = "in_progress"
             job.updated_at = now
