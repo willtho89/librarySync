@@ -3462,6 +3462,286 @@ function startActivityAutoRefresh() {
   }, 30000);
 }
 
+// Dashboard state and functions
+const dashboardState = {
+  charts: {
+    timeline: null,
+    breakdown: null,
+    ratings: null,
+  },
+};
+
+async function loadDashboardStats() {
+  const statsElements = [
+    document.getElementById("dashboard-movies-count"),
+    document.getElementById("dashboard-shows-count"),
+    document.getElementById("dashboard-episodes-count"),
+    document.getElementById("dashboard-avg-rating"),
+  ];
+
+  const chartElements = [
+    document.getElementById("activity-timeline-chart"),
+    document.getElementById("content-breakdown-chart"),
+    document.getElementById("rating-distribution-chart"),
+  ];
+
+  if (!statsElements.some((el) => el) && !chartElements.some((el) => el)) {
+    return;
+  }
+
+  try {
+    const data = await requestJSON("/api/dashboard/stats");
+    renderDashboardStats(data);
+    renderDashboardCharts(data);
+  } catch (error) {
+    console.error("Failed to load dashboard stats", error);
+  }
+}
+
+function renderDashboardStats(data) {
+  const userStats = data.user_stats || {};
+  const systemStats = data.system_stats || {};
+  const integrationSummary = data.integration_summary || {};
+
+  const movieCount = document.getElementById("dashboard-movies-count");
+  if (movieCount) {
+    movieCount.textContent = String(userStats.movies_watched || 0);
+  }
+
+  const showsCount = document.getElementById("dashboard-shows-count");
+  if (showsCount) {
+    showsCount.textContent = String(userStats.shows_watched || 0);
+  }
+
+  const episodesCount = document.getElementById("dashboard-episodes-count");
+  if (episodesCount) {
+    episodesCount.textContent = String(userStats.episodes_watched || 0);
+  }
+
+  const avgRating = document.getElementById("dashboard-avg-rating");
+  if (avgRating) {
+    const rating = userStats.avg_rating || 0;
+    avgRating.textContent = rating > 0 ? rating.toFixed(1) : "—";
+  }
+
+  const systemMediaCount = document.getElementById("system-media-count");
+  if (systemMediaCount) {
+    systemMediaCount.textContent = String(systemStats.total_media_items || 0);
+  }
+
+  const systemEpisodesCount = document.getElementById("system-episodes-count");
+  if (systemEpisodesCount) {
+    systemEpisodesCount.textContent = String(systemStats.total_episode_items || 0);
+  }
+
+  const systemSyncCount = document.getElementById("system-sync-count");
+  if (systemSyncCount) {
+    systemSyncCount.textContent = String(systemStats.total_sync_events || 0);
+  }
+
+  const systemIntegrationsCount = document.getElementById("system-integrations-count");
+  if (systemIntegrationsCount) {
+    systemIntegrationsCount.textContent = String(integrationSummary.total_integrations || 0);
+  }
+}
+
+function renderDashboardCharts(data) {
+  if (!window.Chart) {
+    console.warn("Chart.js not loaded");
+    return;
+  }
+
+  const userStats = data.user_stats || {};
+  const dailyActivity = data.daily_activity || [];
+  const ratingDistribution = data.rating_distribution || [];
+
+  // Get theme colors
+  const isDark = document.documentElement.dataset.theme === "dark" || 
+    (document.documentElement.dataset.theme !== "light" && 
+     window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+  const colors = {
+    primary: isDark ? "rgb(20, 144, 228)" : "rgb(13, 120, 211)",
+    accent: isDark ? "rgb(26, 170, 183)" : "rgb(11, 138, 155)",
+    text: isDark ? "rgb(231, 238, 245)" : "rgb(24, 32, 45)",
+    muted: isDark ? "rgb(169, 182, 195)" : "rgb(100, 116, 139)",
+    grid: isDark ? "rgba(46, 63, 79, 0.3)" : "rgba(214, 223, 230, 0.3)",
+  };
+
+  // Activity Timeline Chart
+  const timelineCanvas = document.getElementById("activity-timeline-chart");
+  if (timelineCanvas) {
+    if (dashboardState.charts.timeline) {
+      dashboardState.charts.timeline.destroy();
+    }
+
+    const labels = dailyActivity.map((d) => d.date);
+    const moviesData = dailyActivity.map((d) => d.movies);
+    const episodesData = dailyActivity.map((d) => d.episodes);
+
+    dashboardState.charts.timeline = new Chart(timelineCanvas, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "Movies",
+            data: moviesData,
+            borderColor: colors.primary,
+            backgroundColor: colors.primary + "20",
+            tension: 0.3,
+            fill: true,
+          },
+          {
+            label: "Episodes",
+            data: episodesData,
+            borderColor: colors.accent,
+            backgroundColor: colors.accent + "20",
+            tension: 0.3,
+            fill: true,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        aspectRatio: 2,
+        plugins: {
+          legend: {
+            labels: {
+              color: colors.text,
+              font: {
+                family: "IBM Plex Sans",
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: colors.muted,
+              maxRotation: 45,
+              minRotation: 45,
+            },
+            grid: {
+              color: colors.grid,
+            },
+          },
+          y: {
+            beginAtZero: true,
+            ticks: {
+              color: colors.muted,
+              precision: 0,
+            },
+            grid: {
+              color: colors.grid,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  // Content Breakdown Chart
+  const breakdownCanvas = document.getElementById("content-breakdown-chart");
+  if (breakdownCanvas && (userStats.movies_watched || userStats.episodes_watched)) {
+    if (dashboardState.charts.breakdown) {
+      dashboardState.charts.breakdown.destroy();
+    }
+
+    dashboardState.charts.breakdown = new Chart(breakdownCanvas, {
+      type: "doughnut",
+      data: {
+        labels: ["Movies", "Episodes"],
+        datasets: [
+          {
+            data: [userStats.movies_watched || 0, userStats.episodes_watched || 0],
+            backgroundColor: [colors.primary, colors.accent],
+            borderWidth: 0,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        aspectRatio: 1.5,
+        plugins: {
+          legend: {
+            position: "bottom",
+            labels: {
+              color: colors.text,
+              font: {
+                family: "IBM Plex Sans",
+              },
+              padding: 15,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  // Rating Distribution Chart
+  const ratingsCanvas = document.getElementById("rating-distribution-chart");
+  if (ratingsCanvas && ratingDistribution.length > 0) {
+    if (dashboardState.charts.ratings) {
+      dashboardState.charts.ratings.destroy();
+    }
+
+    const allRatings = [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5];
+    const ratingCounts = allRatings.map((rating) => {
+      const found = ratingDistribution.find((r) => r.rating === rating);
+      return found ? found.count : 0;
+    });
+
+    dashboardState.charts.ratings = new Chart(ratingsCanvas, {
+      type: "bar",
+      data: {
+        labels: allRatings.map((r) => r.toString()),
+        datasets: [
+          {
+            label: "Number of ratings",
+            data: ratingCounts,
+            backgroundColor: colors.primary,
+            borderRadius: 6,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        aspectRatio: 2.5,
+        plugins: {
+          legend: {
+            display: false,
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: colors.muted,
+            },
+            grid: {
+              display: false,
+            },
+          },
+          y: {
+            beginAtZero: true,
+            ticks: {
+              color: colors.muted,
+              precision: 0,
+            },
+            grid: {
+              color: colors.grid,
+            },
+          },
+        },
+      },
+    });
+  }
+}
+
+
 document.addEventListener("DOMContentLoaded", async () => {
   const body = document.body;
   const requiresAuth = body && body.dataset.requiresAuth === "true";
@@ -3575,6 +3855,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         loadMetadataProviders(),
         loadHistory(),
         loadActivity(),
+        loadDashboardStats(),
       ]);
       if (document.getElementById("activity-summary")) {
         startActivityAutoRefresh();

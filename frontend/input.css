@@ -623,4 +623,24 @@
   .rating-stars label:hover ~ label::before {
     color: rgb(var(--color-primary));
   }
+
+  .chart-container {
+    @apply relative min-h-[300px] p-4;
+  }
+
+  .stat-card {
+    @apply flex flex-col gap-1 rounded-xl border border-line/60 bg-elevated/70 p-4;
+  }
+
+  .stat-label {
+    @apply text-xs text-muted;
+  }
+
+  .stat-value {
+    @apply text-2xl font-semibold text-ink;
+  }
+
+  .stat-meta {
+    @apply text-xs text-muted;
+  }
 }

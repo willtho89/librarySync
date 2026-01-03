@@ -1932,6 +1932,45 @@ h1,
   color: rgb(var(--color-primary));
 }
 
+.chart-container {
+  position: relative;
+  min-height: 300px;
+  padding: 1rem;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-radius: 1rem;
+  border-width: 1px;
+  border-color: rgb(var(--color-line) / 0.6);
+  background-color: rgb(var(--color-elevated) / 0.7);
+  padding: 1rem;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  line-height: 2rem;
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
+}
+
+.stat-meta {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -2457,6 +2496,10 @@ h1,
 
   .lg\:grid-cols-3 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .lg\:grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .lg\:grid-cols-\[1\.2fr_0\.8fr\] {

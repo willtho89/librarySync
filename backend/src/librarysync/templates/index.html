@@ -55,6 +55,112 @@
   </div>
 </section>
 
+<!-- User Statistics Dashboard -->
+<section class="mt-8" data-auth-only>
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <h2 class="section-title">Your Watch Statistics</h2>
+        <p class="section-subtitle">Overview of your viewing habits and activity.</p>
+      </div>
+    </div>
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="stat-card">
+        <span class="stat-label">Movies watched</span>
+        <strong id="dashboard-movies-count" class="stat-value">—</strong>
+        <span class="stat-meta">Total unique movies</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Shows watched</span>
+        <strong id="dashboard-shows-count" class="stat-value">—</strong>
+        <span class="stat-meta">Unique TV shows</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Episodes watched</span>
+        <strong id="dashboard-episodes-count" class="stat-value">—</strong>
+        <span class="stat-meta">Total episodes</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Avg. rating</span>
+        <strong id="dashboard-avg-rating" class="stat-value">—</strong>
+        <span class="stat-meta">Your average score</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Activity Charts -->
+<section class="mt-8 grid gap-6 lg:grid-cols-2" data-auth-only>
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <h3 class="section-title">Activity Timeline</h3>
+        <p class="section-subtitle">Watches over the last 90 days</p>
+      </div>
+    </div>
+    <div class="chart-container">
+      <canvas id="activity-timeline-chart"></canvas>
+    </div>
+  </div>
+  
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <h3 class="section-title">Content Breakdown</h3>
+        <p class="section-subtitle">Movies vs TV Shows</p>
+      </div>
+    </div>
+    <div class="chart-container">
+      <canvas id="content-breakdown-chart"></canvas>
+    </div>
+  </div>
+</section>
+
+<!-- Rating Distribution -->
+<section class="mt-8 card" data-auth-only>
+  <div class="card-header">
+    <div>
+      <h3 class="section-title">Rating Distribution</h3>
+      <p class="section-subtitle">How you rate your watches</p>
+    </div>
+  </div>
+  <div class="chart-container">
+    <canvas id="rating-distribution-chart"></canvas>
+  </div>
+</section>
+
+<!-- System Statistics -->
+<section class="mt-8 card" data-auth-only>
+  <div class="card-header">
+    <div>
+      <h2 class="section-title">System Overview</h2>
+      <p class="section-subtitle">Overall statistics across the platform.</p>
+    </div>
+  </div>
+  <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="stat-card">
+      <span class="stat-label">Media items</span>
+      <strong id="system-media-count" class="stat-value">—</strong>
+      <span class="stat-meta">Movies + shows tracked</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Episodes tracked</span>
+      <strong id="system-episodes-count" class="stat-value">—</strong>
+      <span class="stat-meta">Total episode metadata</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Sync events</span>
+      <strong id="system-sync-count" class="stat-value">—</strong>
+      <span class="stat-meta">Total syncs performed</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Your integrations</span>
+      <strong id="system-integrations-count" class="stat-value">—</strong>
+      <span class="stat-meta">Connected services</span>
+    </div>
+  </div>
+</section>
+
 <section class="mt-8 card" data-auth-only>
   <div class="card-header">
     <div>
