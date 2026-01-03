@@ -100,6 +100,16 @@ Example values (replace `example.com` with your domain):
 5. Lint:
    `uv run ruff check ./backend/ ./worker/`
 
+## Static File Cache Invalidation
+
+librarySync automatically handles browser cache invalidation for static assets (CSS and JavaScript) by appending version query parameters to their URLs.
+
+- Static files are cached for 7 days by default
+- When you update the version in `backend/pyproject.toml`, browsers will automatically fetch new files
+- Example: `/static/app.js?v=0.4.3` becomes `/static/app.js?v=0.4.4` on version bump
+
+No manual cache busting or build-time hash generation is needed.
+
 ## Credits
 
 Thanks to @MunifTanjim with [https://github.com/MunifTanjim/stremthru.git](Stremthru) for the inspiration behind the
