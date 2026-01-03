@@ -63,7 +63,18 @@ def create_app() -> FastAPI:
     app.include_router(routes_settings.router)
     app.include_router(routes_admin.router)
 
+    try:
+        app_version = metadata.version("librarysync")
+    except metadata.PackageNotFoundError:
+        app_version = "unknown"
+
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+    def static_url(path: str) -> str:
+        """Generate a versioned static URL for cache busting."""
+        return f"{path}?v={app_version}"
+
+    templates.env.globals["static_url"] = static_url
 
     class CachedStaticFiles(StaticFiles):
         async def get_response(self, path: str, scope):
@@ -152,11 +163,6 @@ def create_app() -> FastAPI:
     def _startup() -> None:
         run_migrations()
         init_session_factory()
-
-    try:
-        app_version = metadata.version("librarysync")
-    except metadata.PackageNotFoundError:
-        app_version = "unknown"
 
     def _render_page(
         request: Request,
