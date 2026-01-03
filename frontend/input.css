@@ -625,7 +625,9 @@
   }
 
   .chart-container {
-    @apply relative min-h-[300px] p-4;
+    @apply relative p-4;
+    min-height: 300px;
+    height: 300px;
   }
 
   .stat-card {

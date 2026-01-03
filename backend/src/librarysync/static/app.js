@@ -3561,8 +3561,10 @@ function renderDashboardCharts(data) {
      window.matchMedia("(prefers-color-scheme: dark)").matches);
 
   const colors = {
-    primary: isDark ? "rgb(20, 144, 228)" : "rgb(13, 120, 211)",
-    accent: isDark ? "rgb(26, 170, 183)" : "rgb(11, 138, 155)",
+    primary: isDark ? "rgba(20, 144, 228, 1)" : "rgba(13, 120, 211, 1)",
+    primaryAlpha: isDark ? "rgba(20, 144, 228, 0.2)" : "rgba(13, 120, 211, 0.2)",
+    accent: isDark ? "rgba(26, 170, 183, 1)" : "rgba(11, 138, 155, 1)",
+    accentAlpha: isDark ? "rgba(26, 170, 183, 0.2)" : "rgba(11, 138, 155, 0.2)",
     text: isDark ? "rgb(231, 238, 245)" : "rgb(24, 32, 45)",
     muted: isDark ? "rgb(169, 182, 195)" : "rgb(100, 116, 139)",
     grid: isDark ? "rgba(46, 63, 79, 0.3)" : "rgba(214, 223, 230, 0.3)",
@@ -3588,7 +3590,7 @@ function renderDashboardCharts(data) {
             label: "Movies",
             data: moviesData,
             borderColor: colors.primary,
-            backgroundColor: colors.primary + "20",
+            backgroundColor: colors.primaryAlpha,
             tension: 0.3,
             fill: true,
           },
@@ -3596,7 +3598,7 @@ function renderDashboardCharts(data) {
             label: "Episodes",
             data: episodesData,
             borderColor: colors.accent,
-            backgroundColor: colors.accent + "20",
+            backgroundColor: colors.accentAlpha,
             tension: 0.3,
             fill: true,
           },
@@ -3604,8 +3606,7 @@ function renderDashboardCharts(data) {
       },
       options: {
         responsive: true,
-        maintainAspectRatio: true,
-        aspectRatio: 2,
+        maintainAspectRatio: false,
         plugins: {
           legend: {
             labels: {
@@ -3663,8 +3664,7 @@ function renderDashboardCharts(data) {
       },
       options: {
         responsive: true,
-        maintainAspectRatio: true,
-        aspectRatio: 1.5,
+        maintainAspectRatio: false,
         plugins: {
           legend: {
             position: "bottom",
@@ -3709,8 +3709,7 @@ function renderDashboardCharts(data) {
       },
       options: {
         responsive: true,
-        maintainAspectRatio: true,
-        aspectRatio: 2.5,
+        maintainAspectRatio: false,
         plugins: {
           legend: {
             display: false,
