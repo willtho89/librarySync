@@ -3495,6 +3495,13 @@ async function loadDashboardStats() {
     renderDashboardCharts(data);
   } catch (error) {
     console.error("Failed to load dashboard stats", error);
+    // If dashboard stats are disabled (403), hide the dashboard sections
+    if (error.message && error.message.includes("disabled")) {
+      const dashboardSections = document.querySelectorAll("[data-dashboard-section]");
+      dashboardSections.forEach((section) => {
+        section.style.display = "none";
+      });
+    }
   }
 }
 
@@ -3554,6 +3561,8 @@ function renderDashboardCharts(data) {
   const userStats = data.user_stats || {};
   const dailyActivity = data.daily_activity || [];
   const ratingDistribution = data.rating_distribution || [];
+  const overallDailyActivity = data.overall_daily_activity || [];
+  const overallRatingDistribution = data.overall_rating_distribution || [];
 
   // Get theme colors
   const isDark = document.documentElement.dataset.theme === "dark" || 
@@ -3565,6 +3574,8 @@ function renderDashboardCharts(data) {
     primaryAlpha: isDark ? "rgba(20, 144, 228, 0.2)" : "rgba(13, 120, 211, 0.2)",
     accent: isDark ? "rgba(26, 170, 183, 1)" : "rgba(11, 138, 155, 1)",
     accentAlpha: isDark ? "rgba(26, 170, 183, 0.2)" : "rgba(11, 138, 155, 0.2)",
+    overall: isDark ? "rgba(169, 182, 195, 1)" : "rgba(100, 116, 139, 1)",
+    overallAlpha: isDark ? "rgba(169, 182, 195, 0.2)" : "rgba(100, 116, 139, 0.2)",
     text: isDark ? "rgb(231, 238, 245)" : "rgb(24, 32, 45)",
     muted: isDark ? "rgb(169, 182, 195)" : "rgb(100, 116, 139)",
     grid: isDark ? "rgba(46, 63, 79, 0.3)" : "rgba(214, 223, 230, 0.3)",
@@ -3577,32 +3588,82 @@ function renderDashboardCharts(data) {
       dashboardState.charts.timeline.destroy();
     }
 
-    const labels = dailyActivity.map((d) => d.date);
-    const moviesData = dailyActivity.map((d) => d.movies);
-    const episodesData = dailyActivity.map((d) => d.episodes);
+    // Merge user and overall data by date
+    const dateMap = new Map();
+    dailyActivity.forEach((d) => {
+      dateMap.set(d.date, { 
+        userMovies: d.movies, 
+        userEpisodes: d.episodes,
+        overallMovies: 0,
+        overallEpisodes: 0
+      });
+    });
+    overallDailyActivity.forEach((d) => {
+      const existing = dateMap.get(d.date) || { userMovies: 0, userEpisodes: 0 };
+      dateMap.set(d.date, {
+        ...existing,
+        overallMovies: d.movies,
+        overallEpisodes: d.episodes
+      });
+    });
+
+    const sortedDates = Array.from(dateMap.keys()).sort();
+    const labels = sortedDates;
+    const userMoviesData = sortedDates.map((date) => dateMap.get(date).userMovies);
+    const userEpisodesData = sortedDates.map((date) => dateMap.get(date).userEpisodes);
+    const overallMoviesData = sortedDates.map((date) => dateMap.get(date).overallMovies);
+    const overallEpisodesData = sortedDates.map((date) => dateMap.get(date).overallEpisodes);
+
+    const datasets = [
+      {
+        label: "Your Movies",
+        data: userMoviesData,
+        borderColor: colors.primary,
+        backgroundColor: colors.primaryAlpha,
+        tension: 0.3,
+        fill: true,
+      },
+      {
+        label: "Your Episodes",
+        data: userEpisodesData,
+        borderColor: colors.accent,
+        backgroundColor: colors.accentAlpha,
+        tension: 0.3,
+        fill: true,
+      },
+    ];
+
+    // Only add overall data if there are other users
+    if (overallDailyActivity.length > 0) {
+      datasets.push(
+        {
+          label: "Overall Movies",
+          data: overallMoviesData,
+          borderColor: colors.overall,
+          backgroundColor: colors.overallAlpha,
+          tension: 0.3,
+          fill: false,
+          borderDash: [5, 5],
+          hidden: true, // Hidden by default
+        },
+        {
+          label: "Overall Episodes",
+          data: overallEpisodesData,
+          borderColor: colors.muted,
+          backgroundColor: colors.overallAlpha,
+          tension: 0.3,
+          fill: false,
+          borderDash: [5, 5],
+          hidden: true, // Hidden by default
+        }
+      );
+    }
 
     dashboardState.charts.timeline = new Chart(timelineCanvas, {
       type: "line",
       data: {
         labels: labels,
-        datasets: [
-          {
-            label: "Movies",
-            data: moviesData,
-            borderColor: colors.primary,
-            backgroundColor: colors.primaryAlpha,
-            tension: 0.3,
-            fill: true,
-          },
-          {
-            label: "Episodes",
-            data: episodesData,
-            borderColor: colors.accent,
-            backgroundColor: colors.accentAlpha,
-            tension: 0.3,
-            fill: true,
-          },
-        ],
+        datasets: datasets,
       },
       options: {
         responsive: true,
@@ -3613,6 +3674,20 @@ function renderDashboardCharts(data) {
               color: colors.text,
               font: {
                 family: "IBM Plex Sans",
+              },
+            },
+            onClick: function(e, legendItem, legend) {
+              const index = legendItem.datasetIndex;
+              const chart = legend.chart;
+              const meta = chart.getDatasetMeta(index);
+              meta.hidden = meta.hidden === null ? !chart.data.datasets[index].hidden : null;
+              chart.update();
+            },
+          },
+          tooltip: {
+            callbacks: {
+              title: function(context) {
+                return context[0].label;
               },
             },
           },
@@ -3683,36 +3758,66 @@ function renderDashboardCharts(data) {
 
   // Rating Distribution Chart
   const ratingsCanvas = document.getElementById("rating-distribution-chart");
-  if (ratingsCanvas && ratingDistribution.length > 0) {
+  if (ratingsCanvas && (ratingDistribution.length > 0 || overallRatingDistribution.length > 0)) {
     if (dashboardState.charts.ratings) {
       dashboardState.charts.ratings.destroy();
     }
 
     const allRatings = [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5];
-    const ratingCounts = allRatings.map((rating) => {
+    const userRatingCounts = allRatings.map((rating) => {
       const found = ratingDistribution.find((r) => r.rating === rating);
       return found ? found.count : 0;
     });
+    const overallRatingCounts = allRatings.map((rating) => {
+      const found = overallRatingDistribution.find((r) => r.rating === rating);
+      return found ? found.count : 0;
+    });
+
+    const datasets = [
+      {
+        label: "Your Ratings",
+        data: userRatingCounts,
+        backgroundColor: colors.primary,
+        borderRadius: 6,
+      },
+    ];
+
+    // Only add overall data if there are ratings from other users
+    if (overallRatingDistribution.length > 0) {
+      datasets.push({
+        label: "Overall Ratings",
+        data: overallRatingCounts,
+        backgroundColor: colors.overall,
+        borderRadius: 6,
+        hidden: true, // Hidden by default
+      });
+    }
 
     dashboardState.charts.ratings = new Chart(ratingsCanvas, {
       type: "bar",
       data: {
         labels: allRatings.map((r) => r.toString()),
-        datasets: [
-          {
-            label: "Number of ratings",
-            data: ratingCounts,
-            backgroundColor: colors.primary,
-            borderRadius: 6,
-          },
-        ],
+        datasets: datasets,
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
           legend: {
-            display: false,
+            display: overallRatingDistribution.length > 0,
+            labels: {
+              color: colors.text,
+              font: {
+                family: "IBM Plex Sans",
+              },
+            },
+            onClick: function(e, legendItem, legend) {
+              const index = legendItem.datasetIndex;
+              const chart = legend.chart;
+              const meta = chart.getDatasetMeta(index);
+              meta.hidden = meta.hidden === null ? !chart.data.datasets[index].hidden : null;
+              chart.update();
+            },
           },
         },
         scales: {

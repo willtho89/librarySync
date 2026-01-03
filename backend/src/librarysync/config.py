@@ -28,6 +28,7 @@ class Settings:
     simkl_rate_limit_per_minute: int
     letterboxd_rate_limit_per_minute: int
     stremio_rate_limit_per_minute: int
+    enable_dashboard_stats: bool
 
 
 def load_settings() -> Settings:
@@ -64,6 +65,9 @@ def load_settings() -> Settings:
         ),
         stremio_rate_limit_per_minute=int(
             _get_env("LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE", "120") or "120"
+        ),
+        enable_dashboard_stats=(
+            (_get_env("LIBRARYSYNC_ENABLE_DASHBOARD_STATS", "true") or "true").lower() == "true"
         ),
     )
 

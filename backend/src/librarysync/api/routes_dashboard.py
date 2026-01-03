@@ -1,10 +1,11 @@
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
+from librarysync.config import settings
 from librarysync.db.models import User
 
 router = APIRouter(
@@ -31,6 +32,13 @@ async def get_dashboard_stats(
     - Integration summary
     - System statistics
     """
+    
+    # Check if dashboard stats are enabled
+    if not settings.enable_dashboard_stats:
+        raise HTTPException(
+            status_code=403,
+            detail="Dashboard statistics are disabled by the administrator"
+        )
 
     # Get user watch statistics
     watch_stats_query = text("""
@@ -202,6 +210,44 @@ async def get_dashboard_stats(
     )
     last_30_days_count = last_30_days_result.scalar() or 0
 
+    # Get overall daily activity (last 90 days) for comparison
+    overall_daily_activity_query = text("""
+        SELECT
+            DATE(w.watched_at AT TIME ZONE 'UTC') as watch_date,
+            COUNT(DISTINCT CASE WHEN m.media_type = 'movie' THEN w.id END) as movies_count,
+            COUNT(DISTINCT CASE WHEN m.media_type = 'tv' THEN w.id END) as episodes_count
+        FROM watched_items w
+        LEFT JOIN media_items m ON w.media_item_id = m.id
+        WHERE w.watched_at >= NOW() - INTERVAL '90 days'
+        GROUP BY DATE(w.watched_at AT TIME ZONE 'UTC')
+        ORDER BY watch_date ASC
+    """)
+    overall_daily_activity_result = await db.execute(overall_daily_activity_query)
+    overall_daily_activity = [
+        {
+            "date": row.watch_date.isoformat(),
+            "movies": row.movies_count or 0,
+            "episodes": row.episodes_count or 0,
+        }
+        for row in overall_daily_activity_result.fetchall()
+    ]
+
+    # Get overall rating distribution for comparison
+    overall_rating_dist_query = text("""
+        SELECT
+            FLOOR(w.rating * 2) / 2 as rating_bucket,
+            COUNT(*) as count
+        FROM watched_items w
+        WHERE w.rating IS NOT NULL
+        GROUP BY FLOOR(w.rating * 2) / 2
+        ORDER BY rating_bucket
+    """)
+    overall_rating_dist_result = await db.execute(overall_rating_dist_query)
+    overall_rating_distribution = [
+        {"rating": float(row.rating_bucket), "count": row.count}
+        for row in overall_rating_dist_result.fetchall()
+    ]
+
     return {
         "user_stats": watch_stats,
         "daily_activity": daily_activity,
@@ -212,4 +258,6 @@ async def get_dashboard_stats(
             "last_7_days": last_7_days_count,
             "last_30_days": last_30_days_count,
         },
+        "overall_daily_activity": overall_daily_activity,
+        "overall_rating_distribution": overall_rating_distribution,
     }
