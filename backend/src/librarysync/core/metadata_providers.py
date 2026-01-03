@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import MetadataProvider, ProviderContext
+from librarysync.connectors.metadata.anilist import AniListMetadataProvider
 from librarysync.connectors.metadata.imdb import ImdbMetadataProvider
 from librarysync.connectors.metadata.kitsu import KitsuMetadataProvider
 from librarysync.connectors.metadata.myanimelist import MyAnimeListMetadataProvider
@@ -70,6 +71,10 @@ class ImdbProviderSettings(BaseModel):
 
 
 class MyAnimeListProviderSettings(BaseModel):
+    enabled: bool = True
+
+
+class AniListProviderSettings(BaseModel):
     enabled: bool = True
 
 
@@ -220,6 +225,11 @@ METADATA_PROVIDER_REGISTRY = MetadataProviderRegistry(
             provider="myanimelist",
             settings_model=MyAnimeListProviderSettings,
             provider_class=MyAnimeListMetadataProvider,
+        ),
+        ProviderDefinition(
+            provider="anilist",
+            settings_model=AniListProviderSettings,
+            provider_class=AniListMetadataProvider,
         ),
     ]
 )
