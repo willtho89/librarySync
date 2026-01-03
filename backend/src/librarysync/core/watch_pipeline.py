@@ -754,7 +754,7 @@ class StremioSyncStrategy(SyncStrategy):
 
         if episode_item:
             is_latest = await _is_latest_watched_episode(
-                db, watched.user_id, media_item.id, episode_item, watched.watched_at
+                db, watched.user_id, media_item.id, episode_item, watched.watched_at, watched.id
             )
             if not is_latest:
                 return
@@ -1059,12 +1059,13 @@ async def _is_latest_watched_episode(
     show_media_item_id: str,
     episode_item: EpisodeItem,
     watched_at: datetime,
+    exclude_watched_item_id: str,
 ) -> bool:
     """Check if this episode has the latest watch time for this show.
     
-    Returns True if watched_at is greater than or equal to any other episode's
-    watch time. Using >= (not >) ensures that if a user edits an episode to have
-    the same timestamp as the current latest, we still update Stremio's lastWatched.
+    Excludes the current watched item being edited from the comparison to avoid
+    always returning True. Returns True if watched_at is greater than or equal
+    to any other episode's watch time in the show.
     """
     result = await db.execute(
         select(func.max(WatchedItem.watched_at))
@@ -1072,11 +1073,12 @@ async def _is_latest_watched_episode(
         .where(
             WatchedItem.user_id == user_id,
             EpisodeItem.show_media_item_id == show_media_item_id,
+            WatchedItem.id != exclude_watched_item_id,
         )
     )
     latest_watched_at = result.scalar()
     if latest_watched_at is None:
-        return False
+        return True
     return watched_at >= latest_watched_at
 
 
