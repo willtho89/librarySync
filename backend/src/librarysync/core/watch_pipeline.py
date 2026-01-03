@@ -731,6 +731,63 @@ class StremioSyncStrategy(SyncStrategy):
             status="pending",
         )
 
+    async def enqueue_update(
+        self,
+        db: AsyncSession,
+        watched: WatchedItem,
+        media_item: MediaItem | None,
+        episode_item: EpisodeItem | None,
+        watched_at_updated: bool,
+        rating_updated: bool,
+    ) -> None:
+        if not media_item:
+            return
+        if not watched_at_updated:
+            return
+        integration, secret_data = await load_integration_with_secrets(
+            db, watched.user_id, "stremio"
+        )
+        if not integration or not secret_data:
+            return
+        if not has_required_stremio_fields(secret_data):
+            return
+
+        if episode_item:
+            is_latest = await _is_latest_watched_episode(
+                db, watched.user_id, media_item.id, episode_item, watched.watched_at
+            )
+            if not is_latest:
+                return
+
+        result = await db.execute(
+            select(WatchSync).where(
+                WatchSync.watched_item_id == watched.id,
+                WatchSync.provider == "stremio",
+            )
+        )
+        watch_sync = result.scalars().first()
+        if not watch_sync:
+            return
+
+        payload = build_stremio_payload(media_item, episode_item, watched.watched_at)
+        if not payload:
+            return
+
+        payload["watch_sync_id"] = watch_sync.id
+        payload["watched_item_id"] = watched.id
+
+        watch_sync.status = "pending"
+        watch_sync.last_error = None
+
+        await enqueue_outbox_job(
+            db,
+            user_id=watched.user_id,
+            target_provider="stremio",
+            job_type="push_watched",
+            payload=payload,
+            status="pending",
+        )
+
     async def enqueue_delete(
         self,
         db: AsyncSession,
@@ -993,6 +1050,28 @@ def _extract_stremio_state(
     if isinstance(state, dict):
         return state
     return {}
+
+
+async def _is_latest_watched_episode(
+    db: AsyncSession,
+    user_id: str,
+    show_media_item_id: str,
+    episode_item: EpisodeItem,
+    watched_at: datetime,
+) -> bool:
+    """Check if this episode has the latest watch time for this show."""
+    result = await db.execute(
+        select(func.max(WatchedItem.watched_at))
+        .join(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .where(
+            WatchedItem.user_id == user_id,
+            EpisodeItem.show_media_item_id == show_media_item_id,
+        )
+    )
+    latest_watched_at = result.scalar()
+    if latest_watched_at is None:
+        return False
+    return watched_at >= latest_watched_at
 
 
 def _coerce_str(value: object) -> str | None:
