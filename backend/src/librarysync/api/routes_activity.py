@@ -22,6 +22,7 @@ from librarysync.db.models import (
     MetadataLookupRequest,
     OutboxJob,
     ScheduledJob,
+    SyncAttempt,
     User,
     WatchedItem,
     WatchEvent,
@@ -201,6 +202,27 @@ async def outbox(
     result = await db.execute(query)
     jobs = result.scalars().all()
 
+    attempt_map: dict[str, list[dict]] = {}
+    job_ids = [job.id for job in jobs]
+    if job_ids:
+        attempts_result = await db.execute(
+            select(SyncAttempt)
+            .where(SyncAttempt.job_id.in_(job_ids))
+            .order_by(SyncAttempt.attempted_at.desc())
+        )
+        for attempt in attempts_result.scalars().all():
+            bucket = attempt_map.setdefault(attempt.job_id, [])
+            if len(bucket) >= 5:
+                continue
+            bucket.append(
+                {
+                    "status": attempt.status,
+                    "attempted_at": attempt.attempted_at,
+                    "response_code": attempt.response_code,
+                    "error": attempt.error,
+                }
+            )
+
     watched_ids = []
     for job in jobs:
         payload = job.payload if isinstance(job.payload, dict) else {}
@@ -235,6 +257,7 @@ async def outbox(
                 "watched_item_id": watched_id,
                 "item": item,
                 "payload": payload,
+                "sync_attempts": attempt_map.get(job.id, []),
             }
         )
     return {"jobs": items}

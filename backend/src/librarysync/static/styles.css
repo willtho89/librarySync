@@ -1786,6 +1786,20 @@ h1,
   color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
 }
 
+.schedule-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.schedule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 .activity-list {
   margin-top: 1rem;
   display: grid;
@@ -1836,12 +1850,19 @@ h1,
 
 .activity-status {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   font-size: 0.75rem;
   line-height: 1rem;
   --tw-text-opacity: 1;
   color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+}
+
+.activity-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 
 .activity-detail {
@@ -1862,6 +1883,53 @@ h1,
   font-size: 11px;
   --tw-text-opacity: 1;
   color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+}
+
+.activity-shell {
+  white-space: pre-wrap;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgb(var(--color-ink) / 0.85);
+}
+
+.activity-subdetail {
+  display: grid;
+  gap: 0.35rem;
+  border-radius: 0.75rem;
+  border-width: 1px;
+  border-color: rgb(var(--color-line) / 0.5);
+  background-color: rgb(var(--color-elevated) / 0.5);
+  padding: 0.75rem;
+}
+
+.activity-subdetail-header {
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
+}
+
+.activity-subdetail-meta {
+  font-size: 0.7rem;
+  line-height: 1rem;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+}
+
+.activity-attempts {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  line-height: 1rem;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+}
+
+.activity-footer {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: center;
 }
 
 .empty-state {
