@@ -446,6 +446,10 @@ async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
         response_code = exc.status_code
         error_message = _format_stremio_error(exc)
         status = _classify_failure(exc.status_code, error_message)
+    except AniListError as exc:
+        response_code = exc.status_code
+        error_message = _format_anilist_error(exc)
+        status = _classify_failure(exc.status_code, error_message)
     except ValueError as exc:
         error_message = str(exc)
         status = "failed_permanent"
@@ -604,6 +608,10 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     except StremioError as exc:
         response_code = exc.status_code
         error_message = _format_stremio_error(exc)
+        status = _classify_failure(exc.status_code, error_message)
+    except AniListError as exc:
+        response_code = exc.status_code
+        error_message = _format_anilist_error(exc)
         status = _classify_failure(exc.status_code, error_message)
     except ValueError as exc:
         error_message = str(exc)
@@ -2316,6 +2324,21 @@ def _format_simkl_error(error: SimklError) -> str:
 
 
 def _format_stremio_error(error: StremioError) -> str:
+    message = str(error)
+    status_code = error.status_code
+    response_body = error.response_body
+    if response_body:
+        response_body = _shorten(response_body)
+    if status_code and response_body:
+        return f"{message} (status={status_code}, body={response_body})"
+    if status_code:
+        return f"{message} (status={status_code})"
+    if response_body:
+        return f"{message} (body={response_body})"
+    return message
+
+
+def _format_anilist_error(error: AniListError) -> str:
     message = str(error)
     status_code = error.status_code
     response_body = error.response_body
