@@ -186,6 +186,11 @@ class MediaItem(Base):
             "myanimelist_id",
             name="uq_media_items_myanimelist_id_type",
         ),
+        UniqueConstraint(
+            "media_type",
+            "anilist_id",
+            name="uq_media_items_anilist_id_type",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -199,6 +204,9 @@ class MediaItem(Base):
     kitsu_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     tvmaze_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     myanimelist_id: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True
+    )
+    anilist_id: Mapped[str | None] = mapped_column(
         String(32), nullable=True, index=True
     )
     imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)

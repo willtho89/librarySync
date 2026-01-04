@@ -46,6 +46,7 @@ from librarysync.core.import_history import (
 from librarysync.core.import_schedule import parse_datetime
 from librarysync.db.models import Integration
 from librarysync.db.session import SessionLocal, init_session_factory
+from librarysync.jobs.anilist_import import AniListImportStrategy
 from librarysync.jobs.import_base import ImportContext, ImportStrategyRegistry
 from librarysync.jobs.letterboxd_import import LetterboxdImportStrategy
 from librarysync.jobs.merge_history import merge_history_for_user
@@ -63,6 +64,7 @@ def _build_registry(lookback_days: int) -> ImportStrategyRegistry:
             LetterboxdImportStrategy(lookback_days=lookback_days),
             TraktImportStrategy(lookback_days=lookback_days),
             SimklImportStrategy(lookback_days=lookback_days),
+            AniListImportStrategy(lookback_days=lookback_days),
             StremioImportStrategy(lookback_days=lookback_days),
         ]
     )

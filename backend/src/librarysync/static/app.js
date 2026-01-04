@@ -460,6 +460,35 @@ async function loadIntegrations() {
     }
   }
 
+  const anilist = integrations.find((item) => item.provider === "anilist");
+  const anilistMessage = document.getElementById("anilist-message");
+  const anilistConnect = document.getElementById("anilist-connect");
+  const anilistDisconnect = document.getElementById("anilist-disconnect");
+  const anilistConnected = isIntegrationConnected(anilist);
+  setIntegrationStatusBadge("anilist-status", anilistConnected);
+  if (anilistConnected) {
+    const username =
+      anilist.config && anilist.config.anilist_username ? anilist.config.anilist_username : null;
+    const label = username
+      ? `Connected as ${username}.`
+      : "AniList connection is active.";
+    setMessage("anilist-message", label);
+    if (anilistConnect) {
+      anilistConnect.hidden = true;
+    }
+    if (anilistDisconnect) {
+      anilistDisconnect.hidden = false;
+    }
+  } else {
+    setMessage("anilist-message", "");
+    if (anilistConnect) {
+      anilistConnect.hidden = false;
+    }
+    if (anilistDisconnect) {
+      anilistDisconnect.hidden = true;
+    }
+  }
+
   const stremio = integrations.find((item) => item.provider === "stremio");
   const stremioForm = document.getElementById("stremio-form");
   if (stremioForm) {
@@ -825,6 +854,23 @@ async function handleSimklDisconnect() {
   }
 }
 
+function handleAniListConnect() {
+  window.location.href = "/api/integrations/anilist/start";
+}
+
+async function handleAniListDisconnect() {
+  setMessage("anilist-message", "");
+  try {
+    await requestJSON("/api/integrations/anilist/disconnect", {
+      method: "POST",
+    });
+    setMessage("anilist-message", "AniList disconnected.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("anilist-message", error.message, true);
+  }
+}
+
 async function handleStremioConnect(data, form) {
   setMessage("stremio-message", "");
   const email = (data.get("email") || "").trim();
@@ -988,7 +1034,16 @@ async function loadMetadataProviders() {
   const imdbForm = document.getElementById("imdb-form");
   const kitsuForm = document.getElementById("kitsu-form");
   const myanimelistForm = document.getElementById("myanimelist-form");
-  if (!tmdbForm && !tvdbForm && !kitsuForm && !tvmazeForm && !imdbForm && !myanimelistForm) {
+  const anilistProviderForm = document.getElementById("anilist-provider-form");
+  if (
+    !tmdbForm &&
+    !tvdbForm &&
+    !kitsuForm &&
+    !tvmazeForm &&
+    !imdbForm &&
+    !myanimelistForm &&
+    !anilistProviderForm
+  ) {
     return;
   }
   const data = await requestJSON("/api/metadata/providers");
@@ -1014,6 +1069,10 @@ async function loadMetadataProviders() {
     config: {},
   };
   const myanimelist = providers.find((item) => item.provider === "myanimelist") || {
+    enabled: false,
+    config: {},
+  };
+  const anilist = providers.find((item) => item.provider === "anilist") || {
     enabled: false,
     config: {},
   };
@@ -1106,6 +1165,18 @@ async function loadMetadataProviders() {
       setMessage("myanimelist-message", "No API key required.");
     } else {
       setMessage("myanimelist-message", "");
+    }
+  }
+
+  if (anilistProviderForm) {
+    const enabledInput = anilistProviderForm.querySelector("input[name='enabled']");
+    if (enabledInput) {
+      enabledInput.checked = !!anilist.enabled;
+    }
+    if (anilist.enabled) {
+      setMessage("anilist-provider-message", "No API key required.");
+    } else {
+      setMessage("anilist-provider-message", "");
     }
   }
 }
@@ -1250,6 +1321,22 @@ async function handleMyAnimeListSave(data) {
     await loadMetadataProviders();
   } catch (error) {
     setMessage("myanimelist-message", error.message, true);
+  }
+}
+
+async function handleAniListProviderSave(data) {
+  setMessage("anilist-provider-message", "");
+  const enabled = data.get("enabled") === "on";
+  const payload = { enabled };
+  try {
+    await requestJSON("/api/metadata/providers/anilist", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    setMessage("anilist-provider-message", "Saved.");
+    await loadMetadataProviders();
+  } catch (error) {
+    setMessage("anilist-provider-message", error.message, true);
   }
 }
 
@@ -1654,6 +1741,9 @@ function buildHistoryPayload(candidate) {
   if (candidate.myanimelist_id) {
     payload.myanimelist_id = candidate.myanimelist_id;
   }
+  if (candidate.anilist_id) {
+    payload.anilist_id = candidate.anilist_id;
+  }
   if (candidate.title) {
     payload.title = candidate.title;
   }
@@ -1673,7 +1763,8 @@ function hasHistoryIds(payload) {
       payload.tvdb_id ||
       payload.tvmaze_id ||
       payload.kitsu_id ||
-      payload.myanimelist_id,
+      payload.myanimelist_id ||
+      payload.anilist_id,
   );
 }
 
@@ -2434,6 +2525,11 @@ function openMetadataModal(item) {
     return;
   }
   const metadata = item.metadata || {};
+  const hasEpisode =
+    item.season_number !== null &&
+    item.season_number !== undefined &&
+    item.episode_number !== null &&
+    item.episode_number !== undefined;
   const ids = {
     imdb_id: (metadata.ids && metadata.ids.imdb_id) || item.imdb_id,
     tmdb_id: (metadata.ids && metadata.ids.tmdb_id) || item.tmdb_id,
@@ -2442,6 +2538,7 @@ function openMetadataModal(item) {
     kitsu_id: (metadata.ids && metadata.ids.kitsu_id) || item.kitsu_id,
     myanimelist_id:
       (metadata.ids && metadata.ids.myanimelist_id) || item.myanimelist_id,
+    anilist_id: (metadata.ids && metadata.ids.anilist_id) || item.anilist_id,
   };
   const episodeIds = {
     imdb_id:
@@ -2467,7 +2564,7 @@ function openMetadataModal(item) {
       value: formatMetadataValue(metadata.media_item_id),
     },
   ];
-  if (item.media_type === "tv") {
+  if (hasEpisode || metadata.episode_item_id) {
     systemRows.push({
       label: "Episode item ID",
       value: formatMetadataValue(metadata.episode_item_id),
@@ -2482,10 +2579,11 @@ function openMetadataModal(item) {
     { label: "TVMaze", value: formatMetadataValue(ids.tvmaze_id) },
     { label: "Kitsu", value: formatMetadataValue(ids.kitsu_id) },
     { label: "MyAnimeList", value: formatMetadataValue(ids.myanimelist_id) },
+    { label: "AniList", value: formatMetadataValue(ids.anilist_id) },
   ];
   body.appendChild(renderMetadataSection("External IDs", externalRows));
 
-  if (item.media_type === "tv") {
+  if (hasEpisode) {
     const episodeRows = [
       { label: "Episode IMDb", value: formatMetadataValue(episodeIds.imdb_id) },
       { label: "Episode TMDB", value: formatMetadataValue(episodeIds.tmdb_id) },
@@ -2620,8 +2718,13 @@ async function loadHistory() {
       : watchedAt.toLocaleString();
     const year = item.year ? item.year : "Year unknown";
     const mediaType = formatMediaType(item.media_type);
+    const hasEpisode =
+      item.season_number !== null &&
+      item.season_number !== undefined &&
+      item.episode_number !== null &&
+      item.episode_number !== undefined;
     const detailParts = [year, mediaType];
-    if (item.media_type === "tv") {
+    if (hasEpisode) {
       const episodeLabel = formatSeasonEpisode(item.season_number, item.episode_number);
       if (episodeLabel) {
         detailParts.push(
@@ -4543,6 +4646,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindActivityControls();
   bindForm("kitsu-form", handleKitsuSave);
   bindForm("myanimelist-form", handleMyAnimeListSave);
+  bindForm("anilist-provider-form", handleAniListProviderSave);
   bindForm("lookup-form", handleLookupSubmit);
   bindForm("confirm-form", handleLookupConfirm);
   bindRatingClearControls();
@@ -4609,6 +4713,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const simklDisconnect = document.getElementById("simkl-disconnect");
   if (simklDisconnect) {
     simklDisconnect.addEventListener("click", handleSimklDisconnect);
+  }
+  const anilistConnect = document.getElementById("anilist-connect");
+  if (anilistConnect) {
+    anilistConnect.addEventListener("click", handleAniListConnect);
+  }
+  const anilistDisconnect = document.getElementById("anilist-disconnect");
+  if (anilistDisconnect) {
+    anilistDisconnect.addEventListener("click", handleAniListDisconnect);
   }
   const stremioDisconnect = document.getElementById("stremio-disconnect");
   if (stremioDisconnect) {

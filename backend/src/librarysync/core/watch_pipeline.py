@@ -9,10 +9,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.config import settings
+from librarysync.connectors.services.anilist import has_required_anilist_fields
 from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
 from librarysync.connectors.services.simkl import has_required_simkl_fields
 from librarysync.connectors.services.stremio import has_required_stremio_fields
 from librarysync.connectors.services.trakt import has_required_trakt_fields
+from librarysync.core.anime import is_anime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
 from librarysync.db.models import (
@@ -28,6 +30,7 @@ SUCCESS_STATUSES = {
     "assumed_tracked",
     "synced_from_trakt",
     "synced_from_letterboxd",
+    "synced_from_anilist",
     "synced_from_simkl",
     "synced_from_stremio",
 }
@@ -288,7 +291,8 @@ class LetterboxdSyncStrategy(SyncStrategy):
     ) -> None:
         if episode_item:
             return
-        if not media_item or media_item.media_type != "movie":
+        # Support movies and anime movies for Letterboxd
+        if not media_item or media_item.media_type not in ("movie", "anime"):
             return
         if not media_item.imdb_id and not media_item.tmdb_id:
             return
@@ -349,7 +353,8 @@ class LetterboxdSyncStrategy(SyncStrategy):
     ) -> None:
         if episode_item:
             return
-        if not media_item or media_item.media_type != "movie":
+        # Support movies and anime movies for Letterboxd
+        if not media_item or media_item.media_type not in ("movie", "anime"):
             return
         integration, secret_data = await load_integration_with_secrets(
             db, watched.user_id, "letterboxd"
@@ -399,7 +404,8 @@ class LetterboxdSyncStrategy(SyncStrategy):
     ) -> None:
         if episode_item:
             return
-        if not media_item or media_item.media_type != "movie":
+        # Support movies and anime movies for Letterboxd
+        if not media_item or media_item.media_type not in ("movie", "anime"):
             return
         integration, secret_data = await load_integration_with_secrets(
             db, watched.user_id, "letterboxd"
@@ -841,7 +847,8 @@ def build_history_payload(
             payload["rating"] = rating
         return payload
 
-    if media_item.media_type != "movie":
+    # For movies or anime movies (treat anime as movie for non-anime providers)
+    if media_item.media_type not in ("movie", "anime"):
         return None
     movie_ids = id_builder(media_item.imdb_id, media_item.tmdb_id, media_item.tvdb_id)
     if not movie_ids:
@@ -886,12 +893,197 @@ def build_simkl_payload(
     )
 
 
+class AniListSyncStrategy(SyncStrategy):
+    provider = "anilist"
+
+    async def enqueue_new(
+        self,
+        db: AsyncSession,
+        watched: WatchedItem,
+        media_item: MediaItem | None,
+        episode_item: EpisodeItem | None,
+        is_rewatch: bool,
+        force: bool = False,
+    ) -> None:
+        # AniList only supports anime
+        if not media_item or not is_anime(media_item):
+            return
+        
+        # AniList requires anilist_id for syncing
+        if not media_item.anilist_id:
+            return
+        
+        integration, secret_data = await load_integration_with_secrets(
+            db, watched.user_id, "anilist"
+        )
+        if not integration or not secret_data:
+            return
+        if not has_required_anilist_fields(secret_data):
+            return
+
+        watch_sync = await _get_watch_sync(db, watched.id, "anilist")
+        if watch_sync and is_synced_status(watch_sync.status) and not force:
+            return
+        if watch_sync and watch_sync.status in {"pending", "in_progress"} and not force:
+            return
+
+        if not watch_sync:
+            watch_sync = WatchSync(
+                user_id=watched.user_id,
+                watched_item_id=watched.id,
+                provider="anilist",
+                status="pending",
+                is_rewatch=is_rewatch,
+            )
+            db.add(watch_sync)
+            await db.flush()
+        else:
+            watch_sync.status = "pending"
+            watch_sync.last_error = None
+
+        # Build payload for AniList
+        payload: dict[str, object] = {
+            "watch_sync_id": watch_sync.id,
+            "watched_item_id": watched.id,
+            "media_item_id": media_item.id,
+            "anilist_id": media_item.anilist_id,
+            "watched_at": watched.watched_at.isoformat(),
+            "is_rewatch": is_rewatch,
+        }
+        
+        if watched.rating is not None:
+            payload["rating"] = watched.rating
+        
+        # For TV shows/episodes, include episode information for progress tracking
+        if episode_item:
+            payload["is_episode"] = True
+            payload["episode_number"] = episode_item.episode_number
+
+        await enqueue_outbox_job(
+            db,
+            user_id=watched.user_id,
+            target_provider="anilist",
+            job_type="push_watched",
+            payload=payload,
+            status="pending",
+        )
+
+    async def enqueue_update(
+        self,
+        db: AsyncSession,
+        watched: WatchedItem,
+        media_item: MediaItem | None,
+        episode_item: EpisodeItem | None,
+        watched_at_updated: bool,
+        rating_updated: bool,
+    ) -> None:
+        if not media_item or not is_anime(media_item):
+            return
+        if not media_item.anilist_id:
+            return
+        
+        integration, secret_data = await load_integration_with_secrets(
+            db, watched.user_id, "anilist"
+        )
+        if not integration or not secret_data:
+            return
+        if not has_required_anilist_fields(secret_data):
+            return
+
+        result = await db.execute(
+            select(WatchSync).where(
+                WatchSync.watched_item_id == watched.id,
+                WatchSync.provider == "anilist",
+            )
+        )
+        watch_sync = result.scalars().first()
+        if not watch_sync or not watch_sync.external_id:
+            return
+
+        # Only update if rating changed (AniList doesn't support updating watched date)
+        if not rating_updated or watched.rating is None:
+            return
+
+        payload: dict[str, object] = {
+            "entry_id": watch_sync.external_id,
+            "watched_item_id": watched.id,
+            "watch_sync_id": watch_sync.id,
+            "anilist_id": media_item.anilist_id,
+            "rating": watched.rating,
+        }
+
+        watch_sync.status = "pending"
+        watch_sync.last_error = None
+
+        await enqueue_outbox_job(
+            db,
+            user_id=watched.user_id,
+            target_provider="anilist",
+            job_type="push_rating",
+            payload=payload,
+            status="pending",
+        )
+
+    async def enqueue_delete(
+        self,
+        db: AsyncSession,
+        watched: WatchedItem,
+        media_item: MediaItem | None,
+        episode_item: EpisodeItem | None,
+    ) -> None:
+        if not media_item or not is_anime(media_item):
+            return
+        
+        integration, secret_data = await load_integration_with_secrets(
+            db, watched.user_id, "anilist"
+        )
+        if not integration or not secret_data:
+            return
+        if not has_required_anilist_fields(secret_data):
+            return
+
+        result = await db.execute(
+            select(WatchSync).where(
+                WatchSync.watched_item_id == watched.id,
+                WatchSync.provider == "anilist",
+            )
+        )
+        watch_sync = result.scalars().first()
+        if not watch_sync:
+            return
+        anilist_id = media_item.anilist_id
+        if not watch_sync.external_id and not anilist_id:
+            return
+
+        payload: dict[str, object] = {
+            "watched_item_id": watched.id,
+            "watch_sync_id": watch_sync.id,
+        }
+        if watch_sync.external_id:
+            payload["entry_id"] = watch_sync.external_id
+        if anilist_id:
+            payload["anilist_id"] = anilist_id
+
+        watch_sync.status = "pending"
+        watch_sync.last_error = None
+
+        await enqueue_outbox_job(
+            db,
+            user_id=watched.user_id,
+            target_provider="anilist",
+            job_type="remove_history",
+            payload=payload,
+            status="pending",
+        )
+
+
 SYNC_STRATEGY_REGISTRY = SyncStrategyRegistry(
     [
         LetterboxdSyncStrategy(),
         TraktSyncStrategy(),
         SimklSyncStrategy(),
         StremioSyncStrategy(),
+        AniListSyncStrategy(),
     ]
 )
 SYNC_COORDINATOR = SyncCoordinator(SYNC_STRATEGY_REGISTRY)

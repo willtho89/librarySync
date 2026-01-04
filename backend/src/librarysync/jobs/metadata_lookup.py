@@ -169,6 +169,7 @@ def _media_item_to_candidate(item: MediaItem) -> MediaCandidate:
         "tvmaze_id": item.tvmaze_id,
         "kitsu_id": item.kitsu_id,
         "myanimelist_id": item.myanimelist_id,
+        "anilist_id": item.anilist_id,
     }
     return MediaCandidate(
         provider=LOCAL_PROVIDER,

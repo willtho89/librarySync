@@ -17,6 +17,7 @@ from librarysync.connectors.metadata.tmdb import TmdbMetadataProvider
 from librarysync.connectors.metadata.tvdb import TvdbMetadataProvider
 from librarysync.core.metadata_providers import (
     METADATA_PROVIDER_REGISTRY,
+    AniListProviderSettings,
     ImdbProviderSettings,
     KitsuProviderSettings,
     MetadataProviderService,
@@ -65,6 +66,7 @@ class CandidateOut(BaseModel):
     tvmaze_id: str | None = None
     kitsu_id: str | None = None
     myanimelist_id: str | None = None
+    anilist_id: str | None = None
 
 
 class SeasonOut(BaseModel):
@@ -163,6 +165,8 @@ def _candidate_ids(candidate: MetadataLookupCandidate) -> dict[str, str]:
             ids["kitsu_id"] = provider_id
         elif candidate.provider == "myanimelist":
             ids["myanimelist_id"] = provider_id
+        elif candidate.provider == "anilist":
+            ids["anilist_id"] = provider_id
         elif candidate.provider == "imdb":
             ids["imdb_id"] = provider_id
     tmdb_id = _candidate_tmdb_id(candidate)
@@ -184,6 +188,11 @@ def _candidate_ids(candidate: MetadataLookupCandidate) -> dict[str, str]:
     )
     if myanimelist_id:
         ids.setdefault("myanimelist_id", myanimelist_id)
+    anilist_id = _candidate_raw_id(
+        candidate, ("anilist_id", "anilistId", "anilistID")
+    )
+    if anilist_id:
+        ids.setdefault("anilist_id", anilist_id)
     return ids
 
 
@@ -305,8 +314,65 @@ def _merge_lookup_candidates(
             _add_candidate_to_group(group, candidate, keys)
         for key in keys:
             key_to_group[key] = group
+    _merge_anime_groups(groups)
     groups.sort(key=lambda g: g["rank"])
     return groups
+
+
+def _merge_anime_groups(groups: list[dict]) -> None:
+    anime_providers = {"anilist", "kitsu", "myanimelist"}
+    title_map: dict[str, dict | None] = {}
+    for group in groups:
+        if _is_anime_group(group, anime_providers):
+            continue
+        key = _group_title_year_key(group)
+        if not key:
+            continue
+        if key in title_map:
+            title_map[key] = None
+            continue
+        title_map[key] = group
+
+    for group in list(groups):
+        if not _is_anime_group(group, anime_providers):
+            continue
+        key = _group_title_year_key(group)
+        if not key:
+            continue
+        target = title_map.get(key)
+        if not target or target is group:
+            continue
+        _merge_anime_into_group(target, group)
+        if group in groups:
+            groups.remove(group)
+
+
+def _merge_anime_into_group(target: dict, other: dict) -> None:
+    primary = target.get("primary")
+    rank = target.get("rank")
+    _merge_group_data(target, other)
+    if primary is not None:
+        target["primary"] = primary
+    if rank is not None:
+        target["rank"] = rank
+
+
+def _is_anime_group(group: dict, anime_providers: set[str]) -> bool:
+    if group.get("media_type") == "anime":
+        return True
+    providers = group.get("providers") or set()
+    return any(provider in anime_providers for provider in providers)
+
+
+def _group_title_year_key(group: dict) -> str | None:
+    title = group.get("title")
+    year = group.get("year")
+    if not title or year is None:
+        return None
+    title_key = _normalize_title_key(title)
+    if not title_key:
+        return None
+    return f"{title_key}:{year}"
 
 
 def _candidate_group_to_out(group: dict) -> CandidateOut:
@@ -327,6 +393,7 @@ def _candidate_group_to_out(group: dict) -> CandidateOut:
         tvmaze_id=ids.get("tvmaze_id"),
         kitsu_id=ids.get("kitsu_id"),
         myanimelist_id=ids.get("myanimelist_id"),
+        anilist_id=ids.get("anilist_id"),
     )
 
 
@@ -343,6 +410,8 @@ def _apply_candidate_ids(item: MediaItem, ids: dict[str, str]) -> None:
         item.kitsu_id = ids["kitsu_id"]
     if ids.get("myanimelist_id") and not item.myanimelist_id:
         item.myanimelist_id = ids["myanimelist_id"]
+    if ids.get("anilist_id") and not item.anilist_id:
+        item.anilist_id = ids["anilist_id"]
 
 
 @router.get(
@@ -639,6 +708,52 @@ async def test_myanimelist_provider(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"MyAnimeList error: {exc}",
+        ) from exc
+    return {"status": "ok"}
+
+
+@router.post(
+    "/providers/anilist",
+    summary="Save AniList provider settings",
+    description="Enable/disable AniList provider access.",
+)
+async def save_anilist_provider(
+    payload: AniListProviderSettings,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    state = await service.save_provider_settings("anilist", payload)
+    return ProviderOut(
+        provider=state.provider,
+        enabled=state.enabled,
+        config=state.config,
+        has_credentials=state.has_credentials,
+    ).model_dump()
+
+
+@router.post(
+    "/providers/anilist/test",
+    summary="Test AniList provider",
+    description="Validate the AniList provider configuration.",
+)
+async def test_anilist_provider(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    provider = await service.load_provider("anilist")
+    if not provider:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AniList provider is not enabled",
+        )
+    try:
+        await provider.validate_credentials()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"AniList error: {exc}",
         ) from exc
     return {"status": "ok"}
 

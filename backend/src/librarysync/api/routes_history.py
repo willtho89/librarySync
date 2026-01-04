@@ -34,6 +34,7 @@ class HistoryItemIds(BaseModel):
     tvmaze_id: str | None = None
     kitsu_id: str | None = None
     myanimelist_id: str | None = None
+    anilist_id: str | None = None
 
 
 class HistoryEpisodeIds(BaseModel):
@@ -70,6 +71,7 @@ class WatchedItemOut(BaseModel):
     kitsu_id: str | None
     tvmaze_id: str | None
     myanimelist_id: str | None
+    anilist_id: str | None
     poster_url: str | None
     season_number: int | None
     episode_number: int | None
@@ -91,6 +93,9 @@ class WatchedItemOut(BaseModel):
     stremio_status: str | None = None
     stremio_external_id: str | None = None
     stremio_last_error: str | None = None
+    anilist_status: str | None = None
+    anilist_external_id: str | None = None
+    anilist_last_error: str | None = None
     metadata: HistoryItemMetadata | None = None
 
 
@@ -104,6 +109,7 @@ class WatchedItemCreateIn(BaseModel):
     tvmaze_id: str | None = None
     kitsu_id: str | None = None
     myanimelist_id: str | None = None
+    anilist_id: str | None = None
     title: str | None = None
     year: int | None = None
     poster_url: str | None = None
@@ -175,6 +181,7 @@ async def add_watched_item(
             tvmaze_id=media_ids.get("tvmaze_id"),
             kitsu_id=media_ids.get("kitsu_id"),
             myanimelist_id=media_ids.get("myanimelist_id"),
+            anilist_id=media_ids.get("anilist_id"),
             raw={"source": "api", "ids": media_ids},
         )
         db.add(media_item)
@@ -186,6 +193,7 @@ async def add_watched_item(
         _apply_id_update(media_item, "tvmaze_id", media_ids.get("tvmaze_id"))
         _apply_id_update(media_item, "kitsu_id", media_ids.get("kitsu_id"))
         _apply_id_update(media_item, "myanimelist_id", media_ids.get("myanimelist_id"))
+        _apply_id_update(media_item, "anilist_id", media_ids.get("anilist_id"))
         if payload.year is not None and media_item.year is None:
             media_item.year = payload.year
         if payload.poster_url and not media_item.poster_url:
@@ -325,6 +333,7 @@ async def list_watched_items(
     trakt_sync = aliased(WatchSync)
     simkl_sync = aliased(WatchSync)
     stremio_sync = aliased(WatchSync)
+    anilist_sync = aliased(WatchSync)
     filters = [WatchedItem.user_id == current_user.id]
     if media_type:
         filters.append(
@@ -356,6 +365,7 @@ async def list_watched_items(
             MediaItem.tvmaze_id.ilike(like_value),
             MediaItem.kitsu_id.ilike(like_value),
             MediaItem.myanimelist_id.ilike(like_value),
+            MediaItem.anilist_id.ilike(like_value),
             EpisodeItem.imdb_id.ilike(like_value),
             EpisodeItem.tmdb_id.ilike(like_value),
             EpisodeItem.tvdb_id.ilike(like_value),
@@ -388,6 +398,7 @@ async def list_watched_items(
             trakt_sync,
             simkl_sync,
             stremio_sync,
+            anilist_sync,
         )
         .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
         .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
@@ -420,17 +431,34 @@ async def list_watched_items(
                 stremio_sync.provider == "stremio",
             ),
         )
+        .outerjoin(
+            anilist_sync,
+            and_(
+                anilist_sync.watched_item_id == WatchedItem.id,
+                anilist_sync.provider == "anilist",
+            ),
+        )
         .where(*filters)
         .order_by(WatchedItem.watched_at.desc())
         .offset(offset)
         .limit(limit)
     )
     items = []
-    for watched, media_item, episode_item, show, sync, trakt, simkl, stremio in result.all():
+    for (
+        watched,
+        media_item,
+        episode_item,
+        show,
+        sync,
+        trakt,
+        simkl,
+        stremio,
+        anilist,
+    ) in result.all():
         base_item = media_item or show
         if not base_item:
             continue
-        sync_entries = [entry for entry in (sync, trakt, simkl, stremio) if entry]
+        sync_entries = [entry for entry in (sync, trakt, simkl, stremio, anilist) if entry]
         first_sync_at = (
             min((entry.created_at for entry in sync_entries), default=None)
             if sync_entries
@@ -455,6 +483,7 @@ async def list_watched_items(
                 tvmaze_id=base_item.tvmaze_id,
                 kitsu_id=base_item.kitsu_id,
                 myanimelist_id=base_item.myanimelist_id,
+                anilist_id=base_item.anilist_id,
             ),
             episode_ids=HistoryEpisodeIds(
                 imdb_id=episode_item.imdb_id if episode_item else None,
@@ -486,6 +515,7 @@ async def list_watched_items(
                 kitsu_id=base_item.kitsu_id,
                 tvmaze_id=base_item.tvmaze_id,
                 myanimelist_id=base_item.myanimelist_id,
+                anilist_id=base_item.anilist_id,
                 poster_url=base_item.poster_url,
                 season_number=episode_item.season_number if episode_item else None,
                 episode_number=episode_item.episode_number if episode_item else None,
@@ -507,6 +537,9 @@ async def list_watched_items(
                 stremio_status=stremio.status if stremio else None,
                 stremio_external_id=stremio.external_id if stremio else None,
                 stremio_last_error=stremio.last_error if stremio else None,
+                anilist_status=anilist.status if anilist else None,
+                anilist_external_id=anilist.external_id if anilist else None,
+                anilist_last_error=anilist.last_error if anilist else None,
                 metadata=metadata,
             ).model_dump()
         )
@@ -885,6 +918,7 @@ async def bulk_delete_watched_items(
                 )
 
     db.add_all(events)
+    await db.flush()
     await db.execute(
         delete(WatchedItem).where(
             WatchedItem.user_id == current_user.id,
@@ -970,6 +1004,9 @@ def _extract_media_ids(payload: WatchedItemCreateIn) -> dict[str, str]:
     myanimelist_id = _normalize_id(payload.myanimelist_id)
     if myanimelist_id:
         ids["myanimelist_id"] = myanimelist_id
+    anilist_id = _normalize_id(payload.anilist_id)
+    if anilist_id:
+        ids["anilist_id"] = anilist_id
     return ids
 
 
@@ -1003,6 +1040,8 @@ def _fallback_title(ids: dict[str, str]) -> str:
         return f"Kitsu {ids['kitsu_id']}"
     if ids.get("myanimelist_id"):
         return f"MAL {ids['myanimelist_id']}"
+    if ids.get("anilist_id"):
+        return f"AniList {ids['anilist_id']}"
     return "Unknown title"
 
 
@@ -1173,6 +1212,7 @@ def _history_item_score(item: dict) -> int:
         "tvmaze_id",
         "kitsu_id",
         "myanimelist_id",
+        "anilist_id",
         "episode_imdb_id",
         "episode_tmdb_id",
         "episode_tvdb_id",
@@ -1215,6 +1255,9 @@ def _provider_fields() -> tuple[str, ...]:
         "stremio_status",
         "stremio_external_id",
         "stremio_last_error",
+        "anilist_status",
+        "anilist_external_id",
+        "anilist_last_error",
     )
 
 
@@ -1226,6 +1269,7 @@ def _metadata_fields() -> tuple[str, ...]:
         "tvmaze_id",
         "kitsu_id",
         "myanimelist_id",
+        "anilist_id",
         "poster_url",
         "season_number",
         "episode_number",
@@ -1327,6 +1371,14 @@ async def _find_media_item_by_ids(
         result = await db.execute(
             select(MediaItem).where(
                 MediaItem.myanimelist_id == ids["myanimelist_id"],
+                MediaItem.media_type == media_type,
+            )
+        )
+        _set_item(result.scalars().first())
+    if ids.get("anilist_id"):
+        result = await db.execute(
+            select(MediaItem).where(
+                MediaItem.anilist_id == ids["anilist_id"],
                 MediaItem.media_type == media_type,
             )
         )

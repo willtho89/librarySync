@@ -46,6 +46,7 @@ SOURCE_PRIORITY = {
     "trakt": 4,
     "letterboxd": 3,
     "simkl": 2,
+    "anilist": 2,
     "api": 1,
     "manual": 1,
     "stremio": 0,

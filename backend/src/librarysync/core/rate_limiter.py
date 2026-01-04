@@ -34,6 +34,7 @@ class RateLimiter:
             "simkl": settings.simkl_rate_limit_per_minute,
             "letterboxd": settings.letterboxd_rate_limit_per_minute,
             "stremio": settings.stremio_rate_limit_per_minute,
+            "anilist": settings.anilist_rate_limit_per_minute,
         }.items():
             if limit <= 0:
                 continue

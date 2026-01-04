@@ -10,6 +10,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.config import settings
+from librarysync.connectors.services.anilist import (
+    AniListClient,
+    AniListError,
+)
+from librarysync.connectors.services.anilist import (
+    build_oauth_url as build_anilist_oauth_url,
+)
+from librarysync.connectors.services.anilist import (
+    exchange_code_for_token as exchange_anilist_code,
+)
+from librarysync.connectors.services.anilist import (
+    parse_expires_at as parse_anilist_expires_at,
+)
+from librarysync.connectors.services.anilist import (
+    token_to_secret_payload as anilist_token_to_secret_payload,
+)
 from librarysync.connectors.services.letterboxd import (
     DEFAULT_LETTERBOXD_API_BASE_URL,
     LetterboxdClient,
@@ -136,6 +152,12 @@ async def _load_simkl_integration(
     return await load_integration_with_secrets(db, user_id, "simkl")
 
 
+async def _load_anilist_integration(
+    db: AsyncSession, user_id: str
+) -> tuple[Integration | None, dict[str, object] | None]:
+    return await load_integration_with_secrets(db, user_id, "anilist")
+
+
 def _require_trakt_settings() -> tuple[str, str, str]:
     if not settings.trakt_client_id or not settings.trakt_client_secret:
         raise HTTPException(
@@ -166,6 +188,22 @@ def _require_simkl_settings() -> tuple[str, str, str]:
     base_url = settings.base_url.rstrip("/")
     redirect_uri = f"{base_url}/api/integrations/simkl/callback"
     return settings.simkl_client_id, settings.simkl_client_secret, redirect_uri
+
+
+def _require_anilist_settings() -> tuple[str, str, str]:
+    if not settings.anilist_client_id or not settings.anilist_client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AniList client ID/secret are not configured",
+        )
+    if not settings.base_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="LIBRARYSYNC_BASE_URL must be set for AniList OAuth",
+        )
+    base_url = settings.base_url.rstrip("/")
+    redirect_uri = f"{base_url}/api/integrations/anilist/callback"
+    return settings.anilist_client_id, settings.anilist_client_secret, redirect_uri
 
 
 @router.get(
@@ -814,6 +852,175 @@ async def simkl_disconnect(
     integration.status = "disconnected"
     config = dict(integration.config or {})
     config.pop("simkl_username", None)
+    config.pop("oauth_state", None)
+    config.pop("oauth_state_expires_at", None)
+    integration.config = config
+    db.add(integration)
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.get(
+    "/anilist/start",
+    summary="Start AniList OAuth",
+    description="Initiate the AniList OAuth flow for the current user.",
+)
+async def anilist_start(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    client_id, client_secret, redirect_uri = _require_anilist_settings()
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == "anilist",
+        )
+    )
+    integration = result.scalars().first()
+    if not integration:
+        integration = Integration(
+            user_id=current_user.id,
+            provider="anilist",
+            status="pending",
+        )
+    state = secrets.token_urlsafe(16)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    config = dict(integration.config or {})
+    config["oauth_state"] = state
+    config["oauth_state_expires_at"] = expires_at.isoformat()
+    integration.config = config
+    integration.status = "pending"
+    db.add(integration)
+    await db.commit()
+    
+    redirect_url = build_anilist_oauth_url(client_id, redirect_uri, state)
+    return RedirectResponse(url=redirect_url)
+
+
+@router.get(
+    "/anilist/callback",
+    summary="AniList OAuth callback",
+    description="Handle the AniList OAuth callback and store tokens.",
+)
+async def anilist_callback(
+    code: str | None = None,
+    state: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not code or not state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing OAuth code or state",
+        )
+    client_id, client_secret, redirect_uri = _require_anilist_settings()
+    integration, _ = await _load_anilist_integration(db, current_user.id)
+    if not integration:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AniList integration not initialized",
+        )
+    config = dict(integration.config or {})
+    stored_state = config.get("oauth_state")
+    stored_expires_str = config.get("oauth_state_expires_at")
+    
+    if stored_state is None or stored_state != state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid OAuth state",
+        )
+    
+    # Parse expiry time using helper function
+    stored_expires = parse_anilist_expires_at(stored_expires_str)
+    
+    if stored_expires and stored_expires < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth state expired",
+        )
+    
+    try:
+        token = await exchange_anilist_code(code, client_id, client_secret, redirect_uri)
+    except AniListError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"AniList OAuth error: {exc}",
+        ) from exc
+    
+    # Get user info to verify token
+    try:
+        client = AniListClient(access_token=token.access_token)
+        viewer = await client.get_viewer()
+        anilist_username = viewer.get("name", "")
+    except AniListError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to get AniList user info: {exc}",
+        ) from exc
+    
+    # Store token
+    token_payload = anilist_token_to_secret_payload(token)
+    encrypted = encrypt_value(json.dumps(token_payload))
+    
+    result = await db.execute(
+        select(IntegrationSecret).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    secret = result.scalars().first()
+    if not secret:
+        secret = IntegrationSecret(
+            integration_id=integration.id,
+            secret_data=encrypted,
+        )
+    else:
+        secret.secret_data = encrypted
+    
+    db.add(secret)
+    
+    # Update integration status
+    integration.status = "active"
+    config = dict(integration.config or {})
+    config["anilist_username"] = anilist_username
+    config.pop("oauth_state", None)
+    config.pop("oauth_state_expires_at", None)
+    integration.config = config
+    db.add(integration)
+    
+    await db.commit()
+    
+    return RedirectResponse(url="/settings?anilist=connected")
+
+
+@router.post(
+    "/anilist/disconnect",
+    summary="Disconnect AniList",
+    description="Remove stored AniList tokens for the current user.",
+)
+async def anilist_disconnect(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == "anilist",
+        )
+    )
+    integration = result.scalars().first()
+    if not integration:
+        return {"status": "ok"}
+    result = await db.execute(
+        select(IntegrationSecret).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    secret = result.scalars().first()
+    if secret:
+        await db.delete(secret)
+    integration.status = "disconnected"
+    config = dict(integration.config or {})
+    config.pop("anilist_username", None)
     config.pop("oauth_state", None)
     config.pop("oauth_state_expires_at", None)
     integration.config = config
