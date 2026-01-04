@@ -982,7 +982,7 @@ async def anilist_callback(
     
     await db.commit()
     
-    return RedirectResponse(url="/integrations.html?anilist=connected")
+    return RedirectResponse(url="/settings?anilist=connected")
 
 
 @router.post(

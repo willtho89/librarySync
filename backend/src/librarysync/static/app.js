@@ -1034,7 +1034,16 @@ async function loadMetadataProviders() {
   const imdbForm = document.getElementById("imdb-form");
   const kitsuForm = document.getElementById("kitsu-form");
   const myanimelistForm = document.getElementById("myanimelist-form");
-  if (!tmdbForm && !tvdbForm && !kitsuForm && !tvmazeForm && !imdbForm && !myanimelistForm) {
+  const anilistProviderForm = document.getElementById("anilist-provider-form");
+  if (
+    !tmdbForm &&
+    !tvdbForm &&
+    !kitsuForm &&
+    !tvmazeForm &&
+    !imdbForm &&
+    !myanimelistForm &&
+    !anilistProviderForm
+  ) {
     return;
   }
   const data = await requestJSON("/api/metadata/providers");
@@ -1060,6 +1069,10 @@ async function loadMetadataProviders() {
     config: {},
   };
   const myanimelist = providers.find((item) => item.provider === "myanimelist") || {
+    enabled: false,
+    config: {},
+  };
+  const anilist = providers.find((item) => item.provider === "anilist") || {
     enabled: false,
     config: {},
   };
@@ -1152,6 +1165,18 @@ async function loadMetadataProviders() {
       setMessage("myanimelist-message", "No API key required.");
     } else {
       setMessage("myanimelist-message", "");
+    }
+  }
+
+  if (anilistProviderForm) {
+    const enabledInput = anilistProviderForm.querySelector("input[name='enabled']");
+    if (enabledInput) {
+      enabledInput.checked = !!anilist.enabled;
+    }
+    if (anilist.enabled) {
+      setMessage("anilist-provider-message", "No API key required.");
+    } else {
+      setMessage("anilist-provider-message", "");
     }
   }
 }
@@ -1296,6 +1321,22 @@ async function handleMyAnimeListSave(data) {
     await loadMetadataProviders();
   } catch (error) {
     setMessage("myanimelist-message", error.message, true);
+  }
+}
+
+async function handleAniListProviderSave(data) {
+  setMessage("anilist-provider-message", "");
+  const enabled = data.get("enabled") === "on";
+  const payload = { enabled };
+  try {
+    await requestJSON("/api/metadata/providers/anilist", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    setMessage("anilist-provider-message", "Saved.");
+    await loadMetadataProviders();
+  } catch (error) {
+    setMessage("anilist-provider-message", error.message, true);
   }
 }
 
@@ -1700,6 +1741,9 @@ function buildHistoryPayload(candidate) {
   if (candidate.myanimelist_id) {
     payload.myanimelist_id = candidate.myanimelist_id;
   }
+  if (candidate.anilist_id) {
+    payload.anilist_id = candidate.anilist_id;
+  }
   if (candidate.title) {
     payload.title = candidate.title;
   }
@@ -1719,7 +1763,8 @@ function hasHistoryIds(payload) {
       payload.tvdb_id ||
       payload.tvmaze_id ||
       payload.kitsu_id ||
-      payload.myanimelist_id,
+      payload.myanimelist_id ||
+      payload.anilist_id,
   );
 }
 
@@ -2488,6 +2533,7 @@ function openMetadataModal(item) {
     kitsu_id: (metadata.ids && metadata.ids.kitsu_id) || item.kitsu_id,
     myanimelist_id:
       (metadata.ids && metadata.ids.myanimelist_id) || item.myanimelist_id,
+    anilist_id: (metadata.ids && metadata.ids.anilist_id) || item.anilist_id,
   };
   const episodeIds = {
     imdb_id:
@@ -2528,6 +2574,7 @@ function openMetadataModal(item) {
     { label: "TVMaze", value: formatMetadataValue(ids.tvmaze_id) },
     { label: "Kitsu", value: formatMetadataValue(ids.kitsu_id) },
     { label: "MyAnimeList", value: formatMetadataValue(ids.myanimelist_id) },
+    { label: "AniList", value: formatMetadataValue(ids.anilist_id) },
   ];
   body.appendChild(renderMetadataSection("External IDs", externalRows));
 
@@ -4589,6 +4636,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindActivityControls();
   bindForm("kitsu-form", handleKitsuSave);
   bindForm("myanimelist-form", handleMyAnimeListSave);
+  bindForm("anilist-provider-form", handleAniListProviderSave);
   bindForm("lookup-form", handleLookupSubmit);
   bindForm("confirm-form", handleLookupConfirm);
   bindRatingClearControls();
