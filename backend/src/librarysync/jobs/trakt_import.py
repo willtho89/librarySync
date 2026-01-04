@@ -18,6 +18,7 @@ from librarysync.connectors.services.trakt import (
     parse_expires_at,
     token_to_secret_payload,
 )
+from librarysync.core.blacklist import find_blacklisted_show
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
@@ -165,6 +166,14 @@ async def _import_for_integration(
                 "trakt_imported",
                 entry_keys,
             )
+            existing_blacklist_keys: set[str] | None = None
+            if history_type == "episodes":
+                existing_blacklist_keys = await load_existing_entry_keys(
+                    db,
+                    integration.user_id,
+                    "trakt_blacklisted",
+                    entry_keys,
+                )
             for entry in batch:
                 try:
                     if history_type == "movies":
@@ -183,6 +192,7 @@ async def _import_for_integration(
                             entry,
                             rating_lookup,
                             existing_keys,
+                            existing_blacklist_keys,
                         ):
                             imported += 1
                 except Exception:
@@ -358,6 +368,7 @@ async def _import_episode_entry(
     entry: dict[str, Any],
     rating_lookup: dict[str, float],
     existing_entry_keys: set[str] | None = None,
+    existing_blacklist_keys: set[str] | None = None,
 ) -> bool:
     history_id = _coerce_str(entry.get("id"))
     watched_at = _parse_datetime(entry.get("watched_at")) or datetime.now(timezone.utc)
@@ -384,6 +395,38 @@ async def _import_episode_entry(
         return False
     show_item = await _get_or_create_show_item(db, show)
     if not show_item:
+        return False
+    blacklist_match = await find_blacklisted_show(
+        db,
+        user_id,
+        imdb_id=show_item.imdb_id or show.imdb_id,
+        tmdb_id=show_item.tmdb_id or show.tmdb_id,
+        tvdb_id=show_item.tvdb_id or show.tvdb_id,
+        tvmaze_id=show_item.tvmaze_id,
+    )
+    if blacklist_match:
+        use_prefetch = bool(history_id) and existing_blacklist_keys is not None
+        if use_prefetch:
+            if entry_key in existing_blacklist_keys:
+                return False
+        elif await _entry_already_blacklisted(db, user_id, entry_key):
+            return False
+        episode_item = await _get_or_create_episode_item(db, show_item, episode)
+        if not episode_item:
+            return False
+        raw = _build_event_raw(entry_key, history_id, watched_at, show, episode, rating)
+        raw["blacklisted"] = True
+        raw["blacklist_id"] = blacklist_match.id
+        event = WatchEvent(
+            user_id=user_id,
+            media_item_id=None,
+            episode_item_id=episode_item.id,
+            event_type="trakt_blacklisted",
+            occurred_at=watched_at,
+            raw=raw,
+        )
+        db.add(event)
+        await db.commit()
         return False
     episode_item = await _get_or_create_episode_item(db, show_item, episode)
     if not episode_item:
@@ -443,6 +486,19 @@ async def _entry_already_imported(
         select(WatchEvent.id).where(
             WatchEvent.user_id == user_id,
             WatchEvent.event_type == "trakt_imported",
+            WatchEvent.raw["entry_key"].as_string() == entry_key,
+        )
+    )
+    return result.scalars().first() is not None
+
+
+async def _entry_already_blacklisted(
+    db: AsyncSession, user_id: str, entry_key: str
+) -> bool:
+    result = await db.execute(
+        select(WatchEvent.id).where(
+            WatchEvent.user_id == user_id,
+            WatchEvent.event_type == "trakt_blacklisted",
             WatchEvent.raw["entry_key"].as_string() == entry_key,
         )
     )
