@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
 from librarysync.connectors.metadata.base import (
     EpisodeMetadataProvider,
     EpisodeSummary,
@@ -13,6 +11,7 @@ from librarysync.connectors.metadata.base import (
     ProviderContext,
     SeasonSummary,
 )
+from librarysync.core.http_client import get_http_client
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w185"
@@ -194,9 +193,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             )
         return summaries
 
-    async def list_episodes(
-        self, provider_id: str, season_number: int
-    ) -> list[EpisodeSummary]:
+    async def list_episodes(self, provider_id: str, season_number: int) -> list[EpisodeSummary]:
         payload = await self._get(
             f"/tv/{provider_id}/season/{season_number}",
             {
@@ -226,7 +223,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         filtered = {key: value for key, value in params.items() if value is not None}
         filtered["api_key"] = self._api_key
-        async with httpx.AsyncClient(base_url=TMDB_API_BASE, timeout=15.0) as client:
+        async with get_http_client(base_url=TMDB_API_BASE, timeout=15.0) as client:
             response = await client.get(path, params=filtered)
             response.raise_for_status()
             return response.json()

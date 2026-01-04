@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
 from librarysync.connectors.metadata.base import (
     MEDIA_SCOPE_ALL,
     MediaCandidate,
@@ -13,6 +11,7 @@ from librarysync.connectors.metadata.base import (
     ProviderConfig,
     ProviderContext,
 )
+from librarysync.core.http_client import get_http_client
 
 KITSU_API_BASE = "https://kitsu.io/api/edge"
 DEFAULT_SEARCH_LIMIT = 10
@@ -37,10 +36,7 @@ def _poster_url(poster: dict[str, Any] | None) -> str | None:
     if not poster:
         return None
     return (
-        poster.get("small")
-        or poster.get("medium")
-        or poster.get("tiny")
-        or poster.get("original")
+        poster.get("small") or poster.get("medium") or poster.get("tiny") or poster.get("original")
     )
 
 
@@ -132,7 +128,7 @@ class KitsuMetadataProvider(MetadataProvider[KitsuConfig, None]):
         )
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
-        async with httpx.AsyncClient(base_url=KITSU_API_BASE, timeout=15.0) as client:
+        async with get_http_client(base_url=KITSU_API_BASE, timeout=15.0) as client:
             response = await client.get(path, params=params)
             response.raise_for_status()
             return response.json()

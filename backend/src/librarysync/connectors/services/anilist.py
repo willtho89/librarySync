@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
-import httpx
+from librarysync.core.http_client import get_http_client
 
 DEFAULT_ANILIST_API_URL = "https://graphql.anilist.co"
 ANILIST_OAUTH_AUTHORIZE_URL = "https://anilist.co/api/v2/oauth/authorize"
@@ -18,10 +18,10 @@ ANILIST_REQUIRED_FIELDS = ("access_token",)
 
 def convert_rating_to_anilist_scale(rating: float | None) -> float | None:
     """Convert librarySync rating (0.5-5.0) to AniList scale (0-10).
-    
+
     Args:
         rating: Rating in 0.5-5.0 scale (or None)
-        
+
     Returns:
         Rating in 0-10 scale (or None if input is None)
     """
@@ -242,9 +242,7 @@ class AniListClient:
         result = await self._post_graphql(mutation, variables)
         return result.get("DeleteMediaListEntry", {}).get("deleted", False)
 
-    async def get_media_list_entry(
-        self, media_id: int, user_id: int
-    ) -> dict[str, Any] | None:
+    async def get_media_list_entry(self, media_id: int, user_id: int) -> dict[str, Any] | None:
         """Get a specific media list entry for a user."""
         query = """
         query ($mediaId: Int, $userId: Int) {
@@ -384,11 +382,9 @@ class AniListClient:
             "day": dt.day,
         }
 
-    async def _post_graphql(
-        self, query: str, variables: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _post_graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         """Execute GraphQL query with authentication."""
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with get_http_client(timeout=self._timeout) as client:
             response = await client.post(
                 self._api_url,
                 json={"query": query, "variables": variables},
@@ -425,14 +421,15 @@ async def exchange_code_for_token(
     redirect_uri: str,
 ) -> AniListToken:
     """Exchange OAuth authorization code for access token."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with get_http_client(
+        timeout=30.0,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    ) as client:
         response = await client.post(
             ANILIST_OAUTH_TOKEN_URL,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": "librarysync/service",
-            },
             json={
                 "grant_type": "authorization_code",
                 "client_id": client_id,

@@ -11,6 +11,7 @@ import httpx
 
 from librarysync.connectors.services.base import ServiceConnector
 from librarysync.core.canonical import ProgressEvent
+from librarysync.core.http_client import get_http_client
 
 DEFAULT_SIMKL_API_BASE_URL = "https://api.simkl.com"
 SIMKL_OAUTH_AUTHORIZE_URL = "https://simkl.com/oauth/authorize"
@@ -98,9 +99,7 @@ def normalize_token_payload(payload: Mapping[str, Any]) -> SimklToken:
     expires_in = payload.get("expires_in")
     expires_at: datetime | None = None
     if isinstance(created_at, (int, float)) and isinstance(expires_in, (int, float)):
-        expires_at = datetime.fromtimestamp(
-            float(created_at) + float(expires_in), tz=timezone.utc
-        )
+        expires_at = datetime.fromtimestamp(float(created_at) + float(expires_in), tz=timezone.utc)
     elif isinstance(expires_in, (int, float)):
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=float(expires_in))
     scope = payload.get("scope")
@@ -283,9 +282,7 @@ class SimklClient:
             params["extended"] = extended
         if episode_watched_at:
             params["episode_watched_at"] = "yes"
-        response = await self._request(
-            "GET", path, access_token=access_token, params=params
-        )
+        response = await self._request("GET", path, access_token=access_token, params=params)
         payload = self._parse_json(response)
         if isinstance(payload, dict):
             return payload
@@ -333,8 +330,8 @@ class SimklClient:
     async def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
+            async with get_http_client(timeout=15.0, headers=headers) as client:
+                response = await client.post(url, json=payload)
                 response.raise_for_status()
                 return self._parse_json(response)
         except httpx.HTTPStatusError as exc:
@@ -361,10 +358,8 @@ class SimklClient:
             "Accept": "application/json",
         }
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.request(
-                    method, url, headers=headers, params=params, json=json_body
-                )
+            async with get_http_client(timeout=15.0, headers=headers) as client:
+                response = await client.request(method, url, params=params, json=json_body)
                 response.raise_for_status()
                 return response
         except httpx.HTTPStatusError as exc:
@@ -386,9 +381,7 @@ class SimklClient:
         return payload
 
 
-def _extract_history_items(
-    payload: object, history_type: str | None
-) -> list[dict[str, Any]]:
+def _extract_history_items(payload: object, history_type: str | None) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     if not isinstance(payload, dict):
@@ -408,9 +401,7 @@ def _extract_history_items(
     return []
 
 
-def _extract_typed_history(
-    payload: dict[str, Any], history_type: str
-) -> list[dict[str, Any]]:
+def _extract_typed_history(payload: dict[str, Any], history_type: str) -> list[dict[str, Any]]:
     keys = _history_keys(history_type)
     for key in keys:
         items = payload.get(key)

@@ -11,6 +11,7 @@ import httpx
 
 from librarysync.connectors.services.base import ServiceConnector
 from librarysync.core.canonical import ProgressEvent
+from librarysync.core.http_client import get_http_client
 
 DEFAULT_TRAKT_API_BASE_URL = "https://api.trakt.tv"
 TRAKT_OAUTH_AUTHORIZE_URL = "https://api.trakt.tv/oauth/authorize"
@@ -89,9 +90,7 @@ def normalize_token_payload(payload: Mapping[str, Any]) -> TraktToken:
     expires_in = payload.get("expires_in")
     expires_at: datetime | None = None
     if isinstance(created_at, (int, float)) and isinstance(expires_in, (int, float)):
-        expires_at = datetime.fromtimestamp(
-            float(created_at) + float(expires_in), tz=timezone.utc
-        )
+        expires_at = datetime.fromtimestamp(float(created_at) + float(expires_in), tz=timezone.utc)
     elif isinstance(expires_in, (int, float)):
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=float(expires_in))
     scope = payload.get("scope")
@@ -188,9 +187,7 @@ class TraktClient:
     ) -> tuple[dict[str, Any], int]:
         payload = {"watched_at": watched_at.isoformat()}
         path = f"/sync/history/{history_id}"
-        response = await self._request(
-            "PUT", path, access_token=access_token, json_body=payload
-        )
+        response = await self._request("PUT", path, access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
@@ -229,9 +226,7 @@ class TraktClient:
             params["start_at"] = start_at.isoformat()
         if end_at:
             params["end_at"] = end_at.isoformat()
-        response = await self._request(
-            "GET", path, access_token=access_token, params=params
-        )
+        response = await self._request("GET", path, access_token=access_token, params=params)
         payload = self._parse_json(response)
         if isinstance(payload, list):
             items = payload
@@ -286,9 +281,7 @@ class TraktClient:
         if rating_type:
             path = f"{path}/{rating_type}"
         params: dict[str, str] = {"page": str(page), "limit": str(limit)}
-        response = await self._request(
-            "GET", path, access_token=access_token, params=params
-        )
+        response = await self._request("GET", path, access_token=access_token, params=params)
         payload = self._parse_json(response)
         if isinstance(payload, list):
             items = payload
@@ -328,8 +321,8 @@ class TraktClient:
     async def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
+            async with get_http_client(timeout=15.0, headers=headers) as client:
+                response = await client.post(url, json=payload)
                 response.raise_for_status()
                 return self._parse_json(response)
         except httpx.HTTPStatusError as exc:
@@ -357,10 +350,8 @@ class TraktClient:
             "Accept": "application/json",
         }
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.request(
-                    method, url, headers=headers, params=params, json=json_body
-                )
+            async with get_http_client(timeout=15.0, headers=headers) as client:
+                response = await client.request(method, url, params=params, json=json_body)
                 response.raise_for_status()
                 return response
         except httpx.HTTPStatusError as exc:
@@ -409,9 +400,7 @@ def _safe_body(value: str | None, limit: int = 500) -> str | None:
 
 
 def _parse_page_count(headers: dict[str, str]) -> int | None:
-    value = headers.get("x-pagination-page-count") or headers.get(
-        "X-Pagination-Page-Count"
-    )
+    value = headers.get("x-pagination-page-count") or headers.get("X-Pagination-Page-Count")
     if not value:
         return None
     try:

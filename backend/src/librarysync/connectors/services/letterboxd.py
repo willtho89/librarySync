@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from librarysync.core.http_client import get_http_client
+
 DEFAULT_LETTERBOXD_API_BASE_URL = "https://api.letterboxd.com/api/v0"
 LETTERBOXD_REQUIRED_FIELDS = ("client_id", "client_secret", "refresh_token")
 DEFAULT_LETTERBOXD_TOKEN_TTL_SECONDS = 300
@@ -88,9 +90,7 @@ def normalize_token_payload(payload: Mapping[str, Any]) -> LetterboxdToken:
     expires_in = payload.get("expires_in")
     expires_at: datetime | None = None
     if isinstance(created_at, (int, float)) and isinstance(expires_in, (int, float)):
-        expires_at = datetime.fromtimestamp(
-            float(created_at) + float(expires_in), tz=timezone.utc
-        )
+        expires_at = datetime.fromtimestamp(float(created_at) + float(expires_in), tz=timezone.utc)
     elif isinstance(expires_in, (int, float)):
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=float(expires_in))
     if expires_at is None:
@@ -138,8 +138,8 @@ class LetterboxdClient:
             "Accept": "application/json",
         }
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.get(me_url, headers=headers, cookies=self.cookies)
+            async with get_http_client(timeout=15.0, headers=headers) as client:
+                response = await client.get(me_url, cookies=self.cookies)
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as exc:
@@ -164,11 +164,10 @@ class LetterboxdClient:
         }
         headers = {"Accept": "application/json"}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with get_http_client(timeout=15.0, headers=headers) as client:
                 response = await client.post(
                     token_url,
                     data=payload,
-                    headers=headers,
                     cookies=self.cookies,
                 )
                 if response.status_code == 404:
@@ -176,7 +175,6 @@ class LetterboxdClient:
                     response = await client.post(
                         fallback_url,
                         data=payload,
-                        headers=headers,
                         cookies=self.cookies,
                     )
                 response.raise_for_status()
@@ -453,9 +451,7 @@ class LetterboxdClient:
                 raise
             if exc.status_code not in {400, 404}:
                 raise
-            logger.info(
-                "Letterboxd log entry filters not supported, retrying without month/year"
-            )
+            logger.info("Letterboxd log entry filters not supported, retrying without month/year")
             path, base_params, payload = await self._resolve_log_entries_strategy(
                 access_token,
                 per_page,
@@ -560,17 +556,13 @@ class LetterboxdClient:
         if month is not None:
             base_params["month"] = str(month)
         try:
-            payload = await self._get_json(
-                "/log-entries", access_token, params=base_params
-            )
+            payload = await self._get_json("/log-entries", access_token, params=base_params)
             return "/log-entries", base_params, payload
         except LetterboxdError as exc:
             if exc.status_code not in {400, 404}:
                 raise
 
-        raise LetterboxdError(
-            "Letterboxd log entry lookup failed", status_code=404
-        )
+        raise LetterboxdError("Letterboxd log entry lookup failed", status_code=404)
 
     async def _get_json(
         self, path: str, access_token: str, params: dict[str, str] | None = None
@@ -621,9 +613,7 @@ class LetterboxdClient:
                         try:
                             return response.json(), response.status_code
                         except json.JSONDecodeError as inner_exc:
-                            raise LetterboxdError(
-                                "Letterboxd response was not JSON"
-                            ) from inner_exc
+                            raise LetterboxdError("Letterboxd response was not JSON") from inner_exc
                     except LetterboxdError as inner_exc:
                         last_error = inner_exc
                 continue
@@ -678,11 +668,10 @@ class LetterboxdClient:
             "Accept": "application/json",
         }
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with get_http_client(timeout=15.0, headers=headers) as client:
                 response = await client.request(
                     method,
                     url,
-                    headers=headers,
                     params=params,
                     data=data,
                     json=json_body,
@@ -736,24 +725,17 @@ def _safe_body(value: str | None, limit: int = 500) -> str | None:
     return trimmed
 
 
-def _describe_attempt(
-    path: str, params: dict[str, str] | None, outcome: str
-) -> str:
+def _describe_attempt(path: str, params: dict[str, str] | None, outcome: str) -> str:
     if not params:
         return f"{path}:{outcome}"
     query = "&".join(f"{key}={value}" for key, value in params.items())
     return f"{path}?{query}:{outcome}"
 
 
-def _format_lookup_failure(
-    imdb_id: str | None, tmdb_id: str | None, attempts: list[str]
-) -> str:
+def _format_lookup_failure(imdb_id: str | None, tmdb_id: str | None, attempts: list[str]) -> str:
     imdb_label = imdb_id or "-"
     tmdb_label = tmdb_id or "-"
-    message = (
-        "Letterboxd film lookup failed "
-        f"(imdb_id={imdb_label}, tmdb_id={tmdb_label})"
-    )
+    message = f"Letterboxd film lookup failed (imdb_id={imdb_label}, tmdb_id={tmdb_label})"
     if attempts:
         joined = "; ".join(attempts)
         return f"{message} attempts={joined}"
@@ -828,9 +810,7 @@ def _extract_next_cursor(payload: Any) -> str | None:
         if isinstance(value, str):
             return value
         if isinstance(value, dict):
-            nested = value.get("cursor") or value.get("nextCursor") or value.get(
-                "next_cursor"
-            )
+            nested = value.get("cursor") or value.get("nextCursor") or value.get("next_cursor")
             if isinstance(nested, str):
                 return nested
     return None
@@ -930,9 +910,7 @@ def _parse_datetime_value(value: Any) -> datetime | None:
     )
 
 
-def _iter_months(
-    start: date, end: date, *, reverse: bool = False
-) -> Iterable[tuple[int, int]]:
+def _iter_months(start: date, end: date, *, reverse: bool = False) -> Iterable[tuple[int, int]]:
     if start > end:
         start, end = end, start
     if reverse:
