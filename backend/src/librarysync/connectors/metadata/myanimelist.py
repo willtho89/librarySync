@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
 from librarysync.connectors.metadata.base import (
     MEDIA_SCOPE_ALL,
     MediaCandidate,
@@ -12,6 +10,7 @@ from librarysync.connectors.metadata.base import (
     ProviderCapabilities,
     ProviderConfig,
 )
+from librarysync.core.http_client import get_http_client
 
 JIKAN_API_BASE = "https://api.jikan.moe/v4"
 DEFAULT_SEARCH_LIMIT = 10
@@ -43,10 +42,7 @@ def _poster_url(images: dict[str, Any] | None) -> str | None:
 
 def _normalize_title(raw: dict[str, Any]) -> str:
     return (
-        raw.get("title_english")
-        or raw.get("title")
-        or raw.get("title_japanese")
-        or "Unknown title"
+        raw.get("title_english") or raw.get("title") or raw.get("title_japanese") or "Unknown title"
     )
 
 
@@ -97,7 +93,7 @@ class MyAnimeListMetadataProvider(MetadataProvider[MyAnimeListConfig, None]):
         )
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
-        async with httpx.AsyncClient(base_url=JIKAN_API_BASE, timeout=15.0) as client:
+        async with get_http_client(base_url=JIKAN_API_BASE, timeout=15.0) as client:
             response = await client.get(path, params=params)
             response.raise_for_status()
             data = response.json()

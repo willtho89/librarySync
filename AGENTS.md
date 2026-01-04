@@ -265,6 +265,7 @@ librarySync/
 - Keep connectors pure: **no DB writes inside connectors**.
 - Use `watch_pipeline.py` helpers to enqueue sync jobs.
 - Store secrets in `integration_secrets` (encrypted), not `integrations.config`.
+- **Use `get_http_client()` from `core/http_client.py` for all HTTP requests**. This ensures consistent User-Agent headers (`librarySync Version/<version>`) across all outbound requests to metadata providers and service integrations.
 - Ruff is the linter; line length is 100 (see `pyproject.toml`).
 - Do not edit `backend/src/librarysync/static/styles.css` directly; update `frontend/input.css`.
 - When updating Tailwind styles in `frontend/input.css`, rebuild `backend/src/librarysync/static/styles.css`.
@@ -275,6 +276,7 @@ librarySync/
 
 - `backend/tests/test_routes_history.py`
 - `backend/tests/test_stremio_watched_bitfield.py`
+- `backend/tests/test_http_client.py`
 - Add tests around outbox transitions, import scheduling, and metadata lookups when changing those.
 
 ---

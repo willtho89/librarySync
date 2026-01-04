@@ -11,6 +11,7 @@ from librarysync.connectors.metadata.base import (
     ProviderCapabilities,
     ProviderContext,
 )
+from librarysync.core.http_client import get_http_client
 
 TVDB_API_BASE = "https://api4.thetvdb.com/v4"
 DEFAULT_SEARCH_LIMIT = 10
@@ -225,13 +226,16 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
         headers = {"Authorization": f"Bearer {token}"}
         if self._language and include_language:
             headers["Accept-Language"] = self._language
-        async with httpx.AsyncClient(base_url=TVDB_API_BASE, timeout=15.0) as client:
-            response = await client.get(path, params=params, headers=headers)
+        async with get_http_client(base_url=TVDB_API_BASE, timeout=15.0, headers=headers) as client:
+            response = await client.get(path, params=params)
             if response.status_code == 401:
                 self._token = None
                 token = await self._ensure_token()
                 headers["Authorization"] = f"Bearer {token}"
-                response = await client.get(path, params=params, headers=headers)
+                async with get_http_client(
+                    base_url=TVDB_API_BASE, timeout=15.0, headers=headers
+                ) as retry_client:
+                    response = await retry_client.get(path, params=params)
             response.raise_for_status()
             return response.json()
 
@@ -241,7 +245,7 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
         payload: dict[str, Any] = {"apikey": self._api_key}
         if self._pin:
             payload["pin"] = self._pin
-        async with httpx.AsyncClient(base_url=TVDB_API_BASE, timeout=15.0) as client:
+        async with get_http_client(base_url=TVDB_API_BASE, timeout=15.0) as client:
             response = await client.post("/login", json=payload)
             response.raise_for_status()
             data = response.json().get("data") or {}

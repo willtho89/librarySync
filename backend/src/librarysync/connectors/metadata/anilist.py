@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
 from librarysync.connectors.metadata.base import (
     MEDIA_SCOPE_ALL,
     MediaCandidate,
@@ -15,6 +13,7 @@ from librarysync.connectors.metadata.base import (
     ProviderConfig,
     ProviderContext,
 )
+from librarysync.core.http_client import get_http_client
 
 ANILIST_API_URL = "https://graphql.anilist.co"
 MEDIA_TYPE_ANIME = "anime"
@@ -23,6 +22,7 @@ MEDIA_TYPE_ANIME = "anime"
 @dataclass(frozen=True)
 class AniListConfig(ProviderConfig):
     """AniList provider configuration (no API key required for read operations)."""
+
     pass
 
 
@@ -39,11 +39,7 @@ def _poster_url(cover_image: dict[str, Any] | None) -> str | None:
     if not cover_image or not isinstance(cover_image, dict):
         return None
     # Prefer extraLarge, then large, then medium
-    return (
-        cover_image.get("extraLarge")
-        or cover_image.get("large")
-        or cover_image.get("medium")
-    )
+    return cover_image.get("extraLarge") or cover_image.get("large") or cover_image.get("medium")
 
 
 def _normalize_title(title: dict[str, Any] | None) -> str:
@@ -51,12 +47,7 @@ def _normalize_title(title: dict[str, Any] | None) -> str:
     if not title or not isinstance(title, dict):
         return "Unknown title"
     # Prefer English when available, then romaji, then native
-    return (
-        title.get("english")
-        or title.get("romaji")
-        or title.get("native")
-        or "Unknown title"
-    )
+    return title.get("english") or title.get("romaji") or title.get("native") or "Unknown title"
 
 
 class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
@@ -127,9 +118,7 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
 
         return [self._normalize_candidate(item) for item in media_list]
 
-    async def get_details(
-        self, provider_item_id: str, media_type: str
-    ) -> MediaCandidate:
+    async def get_details(self, provider_item_id: str, media_type: str) -> MediaCandidate:
         """Get anime details by AniList ID."""
         # AniList only supports anime, ignore media_type parameter
         if media_type not in (MEDIA_TYPE_ANIME, "all"):
@@ -248,19 +237,18 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
             raw=enriched_raw,
         )
 
-    async def _post_graphql(
-        self, query: str, variables: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _post_graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         """Execute GraphQL query against AniList API."""
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with get_http_client(
+            timeout=30.0,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        ) as client:
             response = await client.post(
                 ANILIST_API_URL,
                 json={"query": query, "variables": variables},
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "librarysync/metadata",
-                },
             )
             if response.status_code >= 400:
                 body = response.text.strip()

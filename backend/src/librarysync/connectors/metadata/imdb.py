@@ -4,14 +4,13 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
-import httpx
-
 from librarysync.connectors.metadata.base import (
     MediaCandidate,
     MetadataProvider,
     ProviderCapabilities,
     ProviderConfig,
 )
+from librarysync.core.http_client import get_http_client
 
 IMDB_SUGGESTION_BASE = "https://v2.sg.media-imdb.com/suggestion"
 DEFAULT_SEARCH_LIMIT = 10
@@ -143,7 +142,7 @@ class ImdbMetadataProvider(MetadataProvider[ImdbConfig, None]):
             return {"d": []}
         first = _first_alnum(normalized)
         path = f"/{first}/{quote(normalized)}.json"
-        async with httpx.AsyncClient(base_url=IMDB_SUGGESTION_BASE, timeout=15.0) as client:
+        async with get_http_client(base_url=IMDB_SUGGESTION_BASE, timeout=15.0) as client:
             response = await client.get(path)
             response.raise_for_status()
             data = response.json()

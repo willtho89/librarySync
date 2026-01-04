@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from librarysync.core.http_client import get_http_client
+
 DEFAULT_STREMIO_API_BASE_URL = "https://api.strem.io"
 DEFAULT_CINEMETA_API_BASE_URL = "https://cinemeta-live.strem.io/"
 CINEMETA_CACHE_TTL = timedelta(hours=2)
@@ -49,8 +51,7 @@ def normalize_login_payload(payload: Mapping[str, Any]) -> StremioLogin:
     if not auth_key:
         available = ", ".join(sorted(str(key) for key in payload.keys()))
         raise StremioError(
-            "Stremio login response missing authKey"
-            + (f" (keys={available})" if available else "")
+            "Stremio login response missing authKey" + (f" (keys={available})" if available else "")
         )
     user_payload = payload.get("user")
     if not isinstance(user_payload, dict):
@@ -117,8 +118,8 @@ class StremioClient:
         url = path if path.startswith("http") else f"{self.api_base_url}{path}"
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
+            async with get_http_client(timeout=15.0, headers=headers) as client:
+                response = await client.post(url, json=payload)
                 response.raise_for_status()
                 return response
         except httpx.HTTPStatusError as exc:
@@ -178,7 +179,7 @@ async def fetch_cinemeta_video_ids(series_id: str) -> list[str]:
         return cached[1]
     base_url = DEFAULT_CINEMETA_API_BASE_URL.rstrip("/")
     url = f"{base_url}/meta/series/{series_id}.json"
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+    async with get_http_client(timeout=15.0, follow_redirects=True) as client:
         response = await client.get(url)
         response.raise_for_status()
         payload = response.json()

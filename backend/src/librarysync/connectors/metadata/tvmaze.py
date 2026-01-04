@@ -11,6 +11,7 @@ from librarysync.connectors.metadata.base import (
     ProviderCapabilities,
     ProviderConfig,
 )
+from librarysync.core.http_client import get_http_client
 
 TVMAZE_API_BASE = "https://api.tvmaze.com"
 DEFAULT_SEARCH_LIMIT = 10
@@ -90,7 +91,7 @@ class TvmazeMetadataProvider(MetadataProvider[TvmazeConfig, None]):
         await self._get("/shows/1", {})
 
     async def _get(self, path: str, params: dict[str, Any]) -> Any:
-        async with httpx.AsyncClient(base_url=TVMAZE_API_BASE, timeout=15.0) as client:
+        async with get_http_client(base_url=TVMAZE_API_BASE, timeout=15.0) as client:
             response = await client.get(path, params=params)
             response.raise_for_status()
             return response.json()
