@@ -13,6 +13,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.config import settings
+from librarysync.connectors.services.anilist import (
+    AniListClient,
+    AniListError,
+    has_required_anilist_fields,
+)
 from librarysync.connectors.services.letterboxd import (
     DEFAULT_LETTERBOXD_API_BASE_URL,
     LetterboxdClient,
@@ -196,6 +201,22 @@ class StremioOutboxHandler(OutboxHandler):
         raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
 
 
+class AniListOutboxHandler(OutboxHandler):
+    provider = "anilist"
+
+    async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        if job.job_type == "push_watched":
+            response_code, external_id = await _deliver_anilist_watch(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "push_rating":
+            response_code, external_id = await _deliver_anilist_rating(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "remove_history":
+            response_code, external_id = await _deliver_anilist_remove(db, job)
+            return DeliveryResult(response_code, external_id)
+        raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
+
+
 class InternalOutboxHandler(OutboxHandler):
     provider = "internal"
 
@@ -212,10 +233,126 @@ OUTBOX_HANDLER_REGISTRY = OutboxHandlerRegistry(
         TraktOutboxHandler(),
         SimklOutboxHandler(),
         StremioOutboxHandler(),
+        AniListOutboxHandler(),
         InternalOutboxHandler(),
     ]
 )
 OUTBOX_DISPATCHER = OutboxDispatcher(OUTBOX_HANDLER_REGISTRY)
+
+
+async def _deliver_anilist_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
+    """Deliver watched item to AniList."""
+    payload = job.payload or {}
+    anilist_id = payload.get("anilist_id")
+    watched_at = _parse_datetime(payload.get("watched_at"))
+    rating = payload.get("rating")
+    
+    if not anilist_id:
+        raise AniListError("AniList ID is required")
+    
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "anilist")
+    if not integration or not secret_data:
+        raise AniListError("AniList credentials are missing", status_code=401)
+    if not has_required_anilist_fields(secret_data):
+        raise AniListError("AniList credentials are incomplete", status_code=401)
+    
+    access_token = secret_data.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise AniListError("AniList access token is missing", status_code=401)
+    
+    client = AniListClient(access_token=access_token)
+    
+    # Get viewer info to get user ID
+    viewer = await client.get_viewer()
+    user_id = viewer.get("id")
+    if not user_id:
+        raise AniListError("Failed to get AniList user ID")
+    
+    # Convert rating from 0.5-5.0 to 0-10 scale for AniList
+    anilist_score = None
+    if rating is not None and isinstance(rating, (int, float)):
+        anilist_score = min(10.0, max(0.0, float(rating) * 2.0))
+    
+    # Add/update media list entry
+    result = await client.add_media_list_entry(
+        media_id=int(anilist_id),
+        status="COMPLETED",
+        score=anilist_score,
+        completed_at=watched_at,
+    )
+    
+    entry_id = result.get("id")
+    external_id = str(entry_id) if entry_id else None
+    
+    return 200, external_id
+
+
+async def _deliver_anilist_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
+    """Update rating for an existing AniList entry."""
+    payload = job.payload or {}
+    entry_id = payload.get("entry_id")
+    rating = payload.get("rating")
+    anilist_id = payload.get("anilist_id")
+    
+    if not entry_id:
+        raise AniListError("AniList entry ID is required for rating update")
+    if not anilist_id:
+        raise AniListError("AniList media ID is required")
+    
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "anilist")
+    if not integration or not secret_data:
+        raise AniListError("AniList credentials are missing", status_code=401)
+    if not has_required_anilist_fields(secret_data):
+        raise AniListError("AniList credentials are incomplete", status_code=401)
+    
+    access_token = secret_data.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise AniListError("AniList access token is missing", status_code=401)
+    
+    client = AniListClient(access_token=access_token)
+    
+    # Convert rating from 0.5-5.0 to 0-10 scale
+    anilist_score = None
+    if rating is not None and isinstance(rating, (int, float)):
+        anilist_score = min(10.0, max(0.0, float(rating) * 2.0))
+    
+    # Update the existing entry
+    result = await client.add_media_list_entry(
+        media_id=int(anilist_id),
+        status="COMPLETED",
+        score=anilist_score,
+    )
+    
+    return 200, str(entry_id)
+
+
+async def _deliver_anilist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
+    """Remove an entry from AniList."""
+    payload = job.payload or {}
+    entry_id = payload.get("entry_id")
+    
+    if not entry_id:
+        raise AniListError("AniList entry ID is required for removal")
+    
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "anilist")
+    if not integration or not secret_data:
+        raise AniListError("AniList credentials are missing", status_code=401)
+    if not has_required_anilist_fields(secret_data):
+        raise AniListError("AniList credentials are incomplete", status_code=401)
+    
+    access_token = secret_data.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise AniListError("AniList access token is missing", status_code=401)
+    
+    client = AniListClient(access_token=access_token)
+    
+    # Delete the entry
+    success = await client.delete_media_list_entry(int(entry_id))
+    
+    if not success:
+        raise AniListError("Failed to delete AniList entry")
+    
+    return 200, None
 
 
 async def process_outbox_once(limit: int = 50) -> int:
