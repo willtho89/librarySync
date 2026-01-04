@@ -460,6 +460,35 @@ async function loadIntegrations() {
     }
   }
 
+  const anilist = integrations.find((item) => item.provider === "anilist");
+  const anilistMessage = document.getElementById("anilist-message");
+  const anilistConnect = document.getElementById("anilist-connect");
+  const anilistDisconnect = document.getElementById("anilist-disconnect");
+  const anilistConnected = isIntegrationConnected(anilist);
+  setIntegrationStatusBadge("anilist-status", anilistConnected);
+  if (anilistConnected) {
+    const username =
+      anilist.config && anilist.config.anilist_username ? anilist.config.anilist_username : null;
+    const label = username
+      ? `Connected as ${username}.`
+      : "AniList connection is active.";
+    setMessage("anilist-message", label);
+    if (anilistConnect) {
+      anilistConnect.hidden = true;
+    }
+    if (anilistDisconnect) {
+      anilistDisconnect.hidden = false;
+    }
+  } else {
+    setMessage("anilist-message", "");
+    if (anilistConnect) {
+      anilistConnect.hidden = false;
+    }
+    if (anilistDisconnect) {
+      anilistDisconnect.hidden = true;
+    }
+  }
+
   const stremio = integrations.find((item) => item.provider === "stremio");
   const stremioForm = document.getElementById("stremio-form");
   if (stremioForm) {
@@ -822,6 +851,23 @@ async function handleSimklDisconnect() {
     await loadIntegrations();
   } catch (error) {
     setMessage("simkl-message", error.message, true);
+  }
+}
+
+function handleAniListConnect() {
+  window.location.href = "/api/integrations/anilist/start";
+}
+
+async function handleAniListDisconnect() {
+  setMessage("anilist-message", "");
+  try {
+    await requestJSON("/api/integrations/anilist/disconnect", {
+      method: "POST",
+    });
+    setMessage("anilist-message", "AniList disconnected.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("anilist-message", error.message, true);
   }
 }
 
@@ -4609,6 +4655,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const simklDisconnect = document.getElementById("simkl-disconnect");
   if (simklDisconnect) {
     simklDisconnect.addEventListener("click", handleSimklDisconnect);
+  }
+  const anilistConnect = document.getElementById("anilist-connect");
+  if (anilistConnect) {
+    anilistConnect.addEventListener("click", handleAniListConnect);
+  }
+  const anilistDisconnect = document.getElementById("anilist-disconnect");
+  if (anilistDisconnect) {
+    anilistDisconnect.addEventListener("click", handleAniListDisconnect);
   }
   const stremioDisconnect = document.getElementById("stremio-disconnect");
   if (stremioDisconnect) {

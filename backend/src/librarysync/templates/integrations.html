@@ -180,6 +180,25 @@
       <div class="card">
         <div class="card-header">
           <div>
+            <h3 class="section-title">AniList</h3>
+            <p class="section-subtitle">OAuth connection for anime sync.</p>
+          </div>
+          <span id="anilist-status" class="status-pill">Not connected</span>
+        </div>
+        <p id="anilist-message" class="form-message" role="status" hidden></p>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" id="anilist-connect" class="btn btn-primary">
+            Connect AniList
+          </button>
+          <button type="button" id="anilist-disconnect" class="btn btn-ghost" hidden>
+            Disconnect
+          </button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
             <h3 class="section-title">Stremio</h3>
             <p class="section-subtitle">Sign in with your Stremio account.</p>
           </div>
