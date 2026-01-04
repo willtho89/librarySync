@@ -247,6 +247,8 @@ async def _deliver_anilist_watch(db: AsyncSession, job: OutboxJob) -> tuple[int 
     anilist_id = payload.get("anilist_id")
     watched_at = _parse_datetime(payload.get("watched_at"))
     rating = payload.get("rating")
+    is_episode = payload.get("is_episode", False)
+    episode_number = payload.get("episode_number")
     
     if not anilist_id:
         raise AniListError("AniList ID is required")
@@ -272,13 +274,25 @@ async def _deliver_anilist_watch(db: AsyncSession, job: OutboxJob) -> tuple[int 
     # Convert rating from 0.5-5.0 to 0-10 scale for AniList
     anilist_score = convert_rating_to_anilist_scale(rating)
     
-    # Add/update media list entry
-    result = await client.add_media_list_entry(
-        media_id=int(anilist_id),
-        status="COMPLETED",
-        score=anilist_score,
-        completed_at=watched_at,
-    )
+    # For episodes, use CURRENT status and set progress
+    # For movies or completed series, use COMPLETED status
+    if is_episode and episode_number is not None:
+        # For TV shows, set progress to the episode number and status to CURRENT
+        result = await client.add_media_list_entry(
+            media_id=int(anilist_id),
+            status="CURRENT",
+            score=anilist_score,
+            progress=int(episode_number),
+            started_at=watched_at,
+        )
+    else:
+        # For movies, mark as completed
+        result = await client.add_media_list_entry(
+            media_id=int(anilist_id),
+            status="COMPLETED",
+            score=anilist_score,
+            completed_at=watched_at,
+        )
     
     entry_id = result.get("id")
     external_id = str(entry_id) if entry_id else None
