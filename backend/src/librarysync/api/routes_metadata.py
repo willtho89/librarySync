@@ -314,8 +314,65 @@ def _merge_lookup_candidates(
             _add_candidate_to_group(group, candidate, keys)
         for key in keys:
             key_to_group[key] = group
+    _merge_anime_groups(groups)
     groups.sort(key=lambda g: g["rank"])
     return groups
+
+
+def _merge_anime_groups(groups: list[dict]) -> None:
+    anime_providers = {"anilist", "kitsu", "myanimelist"}
+    title_map: dict[str, dict | None] = {}
+    for group in groups:
+        if _is_anime_group(group, anime_providers):
+            continue
+        key = _group_title_year_key(group)
+        if not key:
+            continue
+        if key in title_map:
+            title_map[key] = None
+            continue
+        title_map[key] = group
+
+    for group in list(groups):
+        if not _is_anime_group(group, anime_providers):
+            continue
+        key = _group_title_year_key(group)
+        if not key:
+            continue
+        target = title_map.get(key)
+        if not target or target is group:
+            continue
+        _merge_anime_into_group(target, group)
+        if group in groups:
+            groups.remove(group)
+
+
+def _merge_anime_into_group(target: dict, other: dict) -> None:
+    primary = target.get("primary")
+    rank = target.get("rank")
+    _merge_group_data(target, other)
+    if primary is not None:
+        target["primary"] = primary
+    if rank is not None:
+        target["rank"] = rank
+
+
+def _is_anime_group(group: dict, anime_providers: set[str]) -> bool:
+    if group.get("media_type") == "anime":
+        return True
+    providers = group.get("providers") or set()
+    return any(provider in anime_providers for provider in providers)
+
+
+def _group_title_year_key(group: dict) -> str | None:
+    title = group.get("title")
+    year = group.get("year")
+    if not title or year is None:
+        return None
+    title_key = _normalize_title_key(title)
+    if not title_key:
+        return None
+    return f"{title_key}:{year}"
 
 
 def _candidate_group_to_out(group: dict) -> CandidateOut:

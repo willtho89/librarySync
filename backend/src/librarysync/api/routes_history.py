@@ -908,6 +908,7 @@ async def bulk_delete_watched_items(
                 )
 
     db.add_all(events)
+    await db.flush()
     await db.execute(
         delete(WatchedItem).where(
             WatchedItem.user_id == current_user.id,

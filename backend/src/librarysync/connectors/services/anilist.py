@@ -296,6 +296,7 @@ class AniListClient:
                     "Authorization": f"Bearer {self._access_token}",
                     "Content-Type": "application/json",
                     "Accept": "application/json",
+                    "User-Agent": "librarysync/service",
                 },
             )
 
@@ -327,7 +328,11 @@ async def exchange_code_for_token(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             ANILIST_OAUTH_TOKEN_URL,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "librarysync/service",
+            },
             json={
                 "grant_type": "authorization_code",
                 "client_id": client_id,

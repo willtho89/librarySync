@@ -13,6 +13,7 @@ from librarysync.connectors.metadata.base import (
     ProviderCapabilities,
     ProviderConfig,
     ProviderContext,
+    MEDIA_SCOPE_ALL,
 )
 
 ANILIST_API_URL = "https://graphql.anilist.co"
@@ -37,11 +38,11 @@ def _poster_url(cover_image: dict[str, Any] | None) -> str | None:
     """Extract poster URL from AniList cover image object."""
     if not cover_image or not isinstance(cover_image, dict):
         return None
-    # Prefer large, then medium, then small
+    # Prefer extraLarge, then large, then medium
     return (
-        cover_image.get("large")
+        cover_image.get("extraLarge")
+        or cover_image.get("large")
         or cover_image.get("medium")
-        or cover_image.get("small")
     )
 
 
@@ -49,10 +50,10 @@ def _normalize_title(title: dict[str, Any] | None) -> str:
     """Extract title from AniList title object."""
     if not title or not isinstance(title, dict):
         return "Unknown title"
-    # Prefer romaji, then english, then native
+    # Prefer English when available, then romaji, then native
     return (
-        title.get("romaji")
-        or title.get("english")
+        title.get("english")
+        or title.get("romaji")
         or title.get("native")
         or "Unknown title"
     )
@@ -66,7 +67,7 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
     secrets_schema = None
     capabilities = ProviderCapabilities(
         scopes={MEDIA_TYPE_ANIME},
-        supports_external_id=False,
+        supports_external_id=True,
         supports_search=True,
         supports_details=True,
         supports_episodes=False,
@@ -103,9 +104,9 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
                         day
                     }
                     coverImage {
+                        extraLarge
                         large
                         medium
-                        small
                     }
                     format
                     episodes
@@ -150,9 +151,9 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
                     day
                 }
                 coverImage {
+                    extraLarge
                     large
                     medium
-                    small
                 }
                 format
                 episodes
@@ -181,8 +182,41 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
     async def find_by_external_id(
         self, external_id: str, scope: str = "all"
     ) -> list[MediaCandidate]:
-        """AniList does not support IMDb external ID lookup."""
-        return []
+        if scope not in (MEDIA_TYPE_ANIME, MEDIA_SCOPE_ALL):
+            return []
+        mal_id = _parse_mal_id(external_id)
+        if mal_id is None:
+            return []
+        graphql_query = """
+        query ($idMal: Int) {
+            Media(idMal: $idMal, type: ANIME) {
+                id
+                idMal
+                title {
+                    romaji
+                    english
+                    native
+                }
+                startDate {
+                    year
+                    month
+                    day
+                }
+                coverImage {
+                    extraLarge
+                    large
+                    medium
+                }
+                format
+                episodes
+            }
+        }
+        """
+        data = await self._post_graphql(graphql_query, {"idMal": mal_id})
+        media = data.get("Media")
+        if not media:
+            return []
+        return [self._normalize_candidate(media)]
 
     def _normalize_candidate(self, raw: dict[str, Any]) -> MediaCandidate:
         """Convert AniList API response to MediaCandidate."""
@@ -211,8 +245,6 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
             year=year,
             poster_url=poster,
             imdb_id=None,
-            tmdb_id=None,
-            tvdb_id=None,
             raw=enriched_raw,
         )
 
@@ -227,9 +259,17 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "application/json",
+                    "User-Agent": "librarysync/metadata",
                 },
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                body = response.text.strip()
+                if len(body) > 300:
+                    body = f"{body[:300]}..."
+                raise ValueError(
+                    f"AniList API error: {response.status_code}"
+                    + (f" (body={body})" if body else "")
+                )
             result = response.json()
 
             if "errors" in result:
@@ -238,3 +278,17 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
                 raise ValueError(f"AniList API errors: {', '.join(error_messages)}")
 
             return result.get("data", {})
+
+
+def _parse_mal_id(external_id: str) -> int | None:
+    if not external_id:
+        return None
+    cleaned = external_id.strip().lower()
+    if cleaned.startswith("mal:"):
+        cleaned = cleaned[4:]
+    if not cleaned.isdigit():
+        return None
+    try:
+        return int(cleaned)
+    except ValueError:
+        return None

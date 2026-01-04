@@ -341,9 +341,10 @@ async def _deliver_anilist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int
     """Remove an entry from AniList."""
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
+    anilist_id = payload.get("anilist_id")
     
-    if not entry_id:
-        raise AniListError("AniList entry ID is required for removal")
+    if not entry_id and not anilist_id:
+        raise AniListError("AniList entry ID or media ID is required for removal")
     
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "anilist")
     if not integration or not secret_data:
@@ -356,6 +357,18 @@ async def _deliver_anilist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int
         raise AniListError("AniList access token is missing", status_code=401)
     
     client = AniListClient(access_token=access_token)
+
+    if not entry_id:
+        viewer = await client.get_viewer()
+        user_id = viewer.get("id")
+        if not user_id:
+            raise AniListError("Failed to get AniList user ID")
+        if not anilist_id:
+            raise AniListError("AniList media ID is required for lookup")
+        entry = await client.get_media_list_entry(int(anilist_id), int(user_id))
+        if not entry or not entry.get("id"):
+            return 200, None
+        entry_id = entry.get("id")
     
     # Delete the entry
     success = await client.delete_media_list_entry(int(entry_id))

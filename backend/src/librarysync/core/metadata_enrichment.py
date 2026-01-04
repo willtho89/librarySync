@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +11,7 @@ from librarysync.connectors.metadata.base import (
     MediaCandidate,
     MetadataProvider,
 )
+from librarysync.core.anime import is_anime
 from librarysync.core.metadata_providers import MetadataProviderService
 from librarysync.db.models import EpisodeItem, MediaItem
 
@@ -20,6 +22,7 @@ PREFERRED_POSTER_HOSTS = (
     "thetvdb.com",
     "artworks.thetvdb.com",
 )
+ANIME_PROVIDERS = ("myanimelist", "kitsu", "anilist")
 
 
 async def enrich_watched_metadata(
@@ -30,6 +33,8 @@ async def enrich_watched_metadata(
 ) -> None:
     if not media_item:
         return
+    if is_anime(media_item):
+        await _enrich_anime_metadata(db, user_id, media_item)
     if media_item.media_type not in {"movie", "tv"}:
         return
     if not _needs_media_enrichment(media_item, episode_item):
@@ -69,6 +74,126 @@ def _needs_media_enrichment(media_item: MediaItem, episode_item: EpisodeItem | N
         and not episode_item.tmdb_id
     )
     return missing_ids or poster_missing or missing_year or episode_needs_tmdb
+
+
+def _needs_anime_enrichment(media_item: MediaItem) -> bool:
+    return any(
+        value is None
+        for value in (
+            media_item.anilist_id,
+            media_item.kitsu_id,
+            media_item.myanimelist_id,
+        )
+    )
+
+
+async def _enrich_anime_metadata(
+    db: AsyncSession, user_id: str, media_item: MediaItem
+) -> None:
+    if not _needs_anime_enrichment(media_item):
+        return
+    if not media_item.title:
+        return
+    service = MetadataProviderService(db, user_id)
+    providers: list[MetadataProvider] = []
+    for provider_name in ANIME_PROVIDERS:
+        provider = await service.load_provider(provider_name)
+        if provider:
+            providers.append(provider)
+    if not providers:
+        return
+    for provider in providers:
+        if _anime_id_present(media_item, provider.provider):
+            continue
+        candidate = await _find_anime_candidate(provider, media_item)
+        if not candidate:
+            continue
+        await _apply_anime_candidate(db, media_item, candidate)
+
+
+def _anime_id_present(media_item: MediaItem, provider: str) -> bool:
+    if provider == "anilist":
+        return bool(media_item.anilist_id)
+    if provider == "kitsu":
+        return bool(media_item.kitsu_id)
+    if provider == "myanimelist":
+        return bool(media_item.myanimelist_id)
+    return False
+
+
+async def _find_anime_candidate(
+    provider: MetadataProvider, media_item: MediaItem
+) -> MediaCandidate | None:
+    scope = "anime"
+    if provider.provider == "anilist" and media_item.myanimelist_id:
+        try:
+            candidates = await provider.find_by_external_id(
+                f"mal:{media_item.myanimelist_id}", scope
+            )
+        except Exception as exc:
+            logger.warning(
+                "%s anime MAL lookup failed for %s: %s",
+                provider.provider,
+                media_item.id,
+                exc,
+            )
+        else:
+            if candidates:
+                return candidates[0]
+    if provider.capabilities.supports_external_id and media_item.imdb_id:
+        imdb_id = media_item.imdb_id.lower()
+        try:
+            candidates = await provider.find_by_external_id(imdb_id, scope)
+        except Exception as exc:
+            logger.warning(
+                "%s anime lookup failed for %s: %s", provider.provider, media_item.id, exc
+            )
+        else:
+            selected = _select_anime_candidate(candidates, media_item)
+            if selected:
+                return selected
+    try:
+        candidates = await provider.search(media_item.title, scope)
+    except Exception as exc:
+        logger.warning(
+            "%s anime search failed for %s: %s", provider.provider, media_item.id, exc
+        )
+        return None
+    return _select_anime_candidate(candidates, media_item)
+
+
+def _select_anime_candidate(
+    candidates: list[MediaCandidate], media_item: MediaItem
+) -> MediaCandidate | None:
+    if not candidates:
+        return None
+    target_key = _normalize_title_key(media_item.title)
+    if not target_key:
+        return None
+    matches = [
+        candidate
+        for candidate in candidates
+        if _normalize_title_key(candidate.title) == target_key
+    ]
+    if not matches:
+        return None
+    if media_item.year is not None:
+        year_matches = [candidate for candidate in matches if candidate.year == media_item.year]
+        if len(year_matches) == 1:
+            return year_matches[0]
+        if len(year_matches) > 1:
+            return None
+        unknown_year = [candidate for candidate in matches if candidate.year is None]
+        if len(unknown_year) == 1:
+            return unknown_year[0]
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _normalize_title_key(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", title.lower()).strip()
 
 
 async def _apply_local_metadata(db: AsyncSession, media_item: MediaItem) -> bool:
@@ -191,6 +316,19 @@ async def _apply_candidate_to_media_item(
         media_item.year = candidate.year
 
 
+async def _apply_anime_candidate(
+    db: AsyncSession, media_item: MediaItem, candidate: MediaCandidate
+) -> None:
+    ids = _extract_anime_candidate_ids(candidate)
+    await _set_media_id(db, media_item, "anilist_id", ids.get("anilist_id"))
+    await _set_media_id(db, media_item, "kitsu_id", ids.get("kitsu_id"))
+    await _set_media_id(db, media_item, "myanimelist_id", ids.get("myanimelist_id"))
+    if candidate.poster_url and not media_item.poster_url:
+        media_item.poster_url = candidate.poster_url
+    if media_item.year is None and candidate.year is not None:
+        media_item.year = candidate.year
+
+
 async def _apply_episode_metadata(
     provider: EpisodeMetadataProvider,
     media_item: MediaItem,
@@ -284,6 +422,25 @@ async def _can_assign_id(
                 MediaItem.tvdb_id == value, MediaItem.media_type == media_item.media_type
             )
         )
+    elif field == "kitsu_id":
+        result = await db.execute(
+            select(MediaItem.id).where(
+                MediaItem.kitsu_id == value, MediaItem.media_type == media_item.media_type
+            )
+        )
+    elif field == "myanimelist_id":
+        result = await db.execute(
+            select(MediaItem.id).where(
+                MediaItem.myanimelist_id == value,
+                MediaItem.media_type == media_item.media_type,
+            )
+        )
+    elif field == "anilist_id":
+        result = await db.execute(
+            select(MediaItem.id).where(
+                MediaItem.anilist_id == value, MediaItem.media_type == media_item.media_type
+            )
+        )
     else:
         return True
     existing = result.scalar_one_or_none()
@@ -303,6 +460,33 @@ def _is_preferred_poster(url: str | None) -> bool:
         return False
     lowered = url.lower()
     return any(host in lowered for host in PREFERRED_POSTER_HOSTS)
+
+
+def _extract_anime_candidate_ids(candidate: MediaCandidate) -> dict[str, str]:
+    ids: dict[str, str] = {}
+    if candidate.provider == "anilist" and candidate.provider_id:
+        ids["anilist_id"] = candidate.provider_id
+    if candidate.provider == "kitsu" and candidate.provider_id:
+        ids["kitsu_id"] = candidate.provider_id
+    if candidate.provider == "myanimelist" and candidate.provider_id:
+        ids["myanimelist_id"] = candidate.provider_id
+
+    raw = candidate.raw if isinstance(candidate.raw, dict) else {}
+    anilist_id = _extract_raw_id(raw, ("anilist_id", "anilistId", "anilistID"))
+    if anilist_id:
+        ids.setdefault("anilist_id", anilist_id)
+    kitsu_id = _extract_raw_id(raw, ("kitsu_id", "kitsuId", "kitsuID"))
+    if kitsu_id:
+        ids.setdefault("kitsu_id", kitsu_id)
+    myanimelist_id = _extract_raw_id(
+        raw, ("myanimelist_id", "myanimelistId", "myanimelistID")
+    )
+    if myanimelist_id:
+        ids.setdefault("myanimelist_id", myanimelist_id)
+    mal_id = _extract_raw_id(raw, ("mal_id", "malId", "malID"))
+    if mal_id:
+        ids.setdefault("myanimelist_id", mal_id)
+    return ids
 
 
 def _extract_candidate_ids(candidate: MediaCandidate) -> dict[str, str]:
@@ -370,4 +554,3 @@ def _extract_tmdb_from_remote_ids(raw: dict) -> str | None:
             if tmdb_value:
                 return str(tmdb_value)
     return None
-

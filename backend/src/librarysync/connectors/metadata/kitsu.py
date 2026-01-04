@@ -11,6 +11,7 @@ from librarysync.connectors.metadata.base import (
     ProviderCapabilities,
     ProviderConfig,
     ProviderContext,
+    MEDIA_SCOPE_ALL,
 )
 
 KITSU_API_BASE = "https://kitsu.io/api/edge"
@@ -51,9 +52,14 @@ def _normalize_title(raw: dict[str, Any], language: str | None) -> str:
         value = titles.get(key)
         if value:
             return value
+    else:
+        for key in ("en", "en_us", "en_gb"):
+            value = titles.get(key)
+            if value:
+                return value
     return (
-        attributes.get("canonicalTitle")
-        or titles.get("en")
+        titles.get("en")
+        or attributes.get("canonicalTitle")
         or titles.get("en_jp")
         or titles.get("ja_jp")
         or attributes.get("slug")
@@ -83,7 +89,7 @@ class KitsuMetadataProvider(MetadataProvider[KitsuConfig, None]):
         self._language = config.language
 
     async def search(self, query: str, scope: str = "all") -> list[MediaCandidate]:
-        if scope != MEDIA_TYPE_ANIME:
+        if scope not in (MEDIA_TYPE_ANIME, MEDIA_SCOPE_ALL):
             return []
         payload = await self._get(
             "/anime",
@@ -98,7 +104,7 @@ class KitsuMetadataProvider(MetadataProvider[KitsuConfig, None]):
     async def find_by_external_id(
         self, external_id: str, scope: str = "all"
     ) -> list[MediaCandidate]:
-        if scope != MEDIA_TYPE_ANIME:
+        if scope not in (MEDIA_TYPE_ANIME, MEDIA_SCOPE_ALL):
             return []
         if not external_id.lower().startswith("tt"):
             return []

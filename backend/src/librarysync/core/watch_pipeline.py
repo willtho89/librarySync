@@ -1049,14 +1049,20 @@ class AniListSyncStrategy(SyncStrategy):
             )
         )
         watch_sync = result.scalars().first()
-        if not watch_sync or not watch_sync.external_id:
+        if not watch_sync:
+            return
+        anilist_id = media_item.anilist_id
+        if not watch_sync.external_id and not anilist_id:
             return
 
         payload: dict[str, object] = {
-            "entry_id": watch_sync.external_id,
             "watched_item_id": watched.id,
             "watch_sync_id": watch_sync.id,
         }
+        if watch_sync.external_id:
+            payload["entry_id"] = watch_sync.external_id
+        if anilist_id:
+            payload["anilist_id"] = anilist_id
 
         watch_sync.status = "pending"
         watch_sync.last_error = None

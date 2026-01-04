@@ -378,6 +378,7 @@ async def _import_shows_payload(
     date_from: datetime | None,
     label: str,
 ) -> int:
+    raw_type = "anime" if label == "anime" else "show"
     entries = _extract_all_items_entries(payload, label, {"completed", "watching"})
     logger.info(
         "SIMKL all-items extracted %s %s entries for user %s",
@@ -408,7 +409,7 @@ async def _import_shows_payload(
                 normalized["show"] = show_payload or entry
                 try:
                     if await _import_show_entry(
-                        db, user_id, normalized, watched_at, existing_keys
+                        db, user_id, normalized, watched_at, raw_type, existing_keys
                     ):
                         imported += 1
                 except Exception:
@@ -430,7 +431,7 @@ async def _import_shows_payload(
                     continue
                 try:
                     if await _import_episode_entry(
-                        db, user_id, normalized, watched_at, existing_keys
+                        db, user_id, normalized, watched_at, raw_type, existing_keys
                     ):
                         imported += 1
                 except Exception:
@@ -776,6 +777,7 @@ async def _import_show_entry(
     user_id: str,
     entry: dict[str, Any],
     watched_at: datetime | None,
+    raw_type: str,
     existing_entry_keys: set[str] | None = None,
 ) -> bool:
     history_id = _extract_history_id(entry)
@@ -799,7 +801,7 @@ async def _import_show_entry(
             return False
     elif await _entry_already_imported(db, user_id, entry_key):
         return False
-    media_item = await _get_or_create_show_item(db, show)
+    media_item = await _get_or_create_show_item(db, show, raw_type)
     if not media_item:
         return False
     watched = WatchedItem(
@@ -846,6 +848,7 @@ async def _import_episode_entry(
     user_id: str,
     entry: dict[str, Any],
     watched_at: datetime | None,
+    raw_type: str,
     existing_entry_keys: set[str] | None = None,
 ) -> bool:
     history_id = _extract_history_id(entry)
@@ -863,7 +866,7 @@ async def _import_episode_entry(
             return False
     elif await _entry_already_imported(db, user_id, entry_key):
         return False
-    show_item = await _get_or_create_show_item(db, show)
+    show_item = await _get_or_create_show_item(db, show, raw_type)
     if not show_item:
         return False
     episode_item = await _get_or_create_episode_item(db, show_item, episode)
@@ -956,13 +959,13 @@ async def _get_or_create_movie_item(
 
 
 async def _get_or_create_show_item(
-    db: AsyncSession, show: ShowSummary
+    db: AsyncSession, show: ShowSummary, raw_type: str = "show"
 ) -> MediaItem | None:
     item = await _find_media_item(
         db, show.imdb_id, show.tmdb_id, show.simkl_id, "tv"
     )
     if item:
-        _apply_show_updates(item, show)
+        _apply_show_updates(item, show, raw_type)
         return item
     if not show.imdb_id and not show.tmdb_id and not show.simkl_id and not show.tvdb_id:
         return None
@@ -974,7 +977,7 @@ async def _get_or_create_show_item(
         tmdb_id=show.tmdb_id,
         tvdb_id=show.tvdb_id,
         poster_url=None,
-        raw=_build_media_raw(show.simkl_id, show.raw, "show"),
+        raw=_build_media_raw(show.simkl_id, show.raw, raw_type),
     )
     db.add(item)
     await db.flush()
@@ -1093,10 +1096,10 @@ def _apply_movie_updates(item: MediaItem, movie: MovieSummary) -> None:
         item.year = movie.year
     if movie.title and item.title.startswith("SIMKL movie"):
         item.title = movie.title
-    item.raw = _merge_media_raw(item.raw, movie.simkl_id, movie.raw)
+    item.raw = _merge_media_raw(item.raw, movie.simkl_id, movie.raw, "movie")
 
 
-def _apply_show_updates(item: MediaItem, show: ShowSummary) -> None:
+def _apply_show_updates(item: MediaItem, show: ShowSummary, raw_type: str) -> None:
     if show.imdb_id and not item.imdb_id:
         item.imdb_id = show.imdb_id
     if show.tmdb_id and not item.tmdb_id:
@@ -1107,7 +1110,7 @@ def _apply_show_updates(item: MediaItem, show: ShowSummary) -> None:
         item.year = show.year
     if show.title and item.title.startswith("SIMKL show"):
         item.title = show.title
-    item.raw = _merge_media_raw(item.raw, show.simkl_id, show.raw)
+    item.raw = _merge_media_raw(item.raw, show.simkl_id, show.raw, raw_type)
 
 
 def _apply_episode_updates(item: EpisodeItem, episode: EpisodeSummary) -> None:
@@ -1123,9 +1126,9 @@ def _apply_episode_updates(item: EpisodeItem, episode: EpisodeSummary) -> None:
 
 
 def _build_media_raw(
-    simkl_id: str | None, raw_payload: dict[str, Any], label: str
+    simkl_id: str | None, raw_payload: dict[str, Any], raw_type: str
 ) -> dict[str, Any]:
-    raw = {"source": "simkl", "type": label}
+    raw = {"source": "simkl", "type": raw_type}
     if simkl_id:
         raw["simkl_id"] = simkl_id
     if raw_payload:
@@ -1134,13 +1137,18 @@ def _build_media_raw(
 
 
 def _merge_media_raw(
-    existing: dict | None, simkl_id: str | None, raw_payload: dict[str, Any]
+    existing: dict | None,
+    simkl_id: str | None,
+    raw_payload: dict[str, Any],
+    raw_type: str,
 ) -> dict:
     raw = existing if isinstance(existing, dict) else {}
     if simkl_id and not raw.get("simkl_id"):
         raw["simkl_id"] = simkl_id
     if raw_payload and not raw.get("simkl"):
         raw["simkl"] = raw_payload
+    if raw_type and (raw.get("type") is None or raw_type == "anime"):
+        raw["type"] = raw_type
     return raw
 
 

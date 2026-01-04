@@ -10,6 +10,7 @@ from librarysync.connectors.metadata.base import (
     MetadataProvider,
     ProviderCapabilities,
     ProviderConfig,
+    MEDIA_SCOPE_ALL,
 )
 
 JIKAN_API_BASE = "https://api.jikan.moe/v4"
@@ -42,8 +43,8 @@ def _poster_url(images: dict[str, Any] | None) -> str | None:
 
 def _normalize_title(raw: dict[str, Any]) -> str:
     return (
-        raw.get("title")
-        or raw.get("title_english")
+        raw.get("title_english")
+        or raw.get("title")
         or raw.get("title_japanese")
         or "Unknown title"
     )
@@ -62,7 +63,7 @@ class MyAnimeListMetadataProvider(MetadataProvider[MyAnimeListConfig, None]):
     )
 
     async def search(self, query: str, scope: str = "all") -> list[MediaCandidate]:
-        if scope != MEDIA_TYPE_ANIME:
+        if scope not in (MEDIA_TYPE_ANIME, MEDIA_SCOPE_ALL):
             return []
         payload = await self._get(
             "/anime",
@@ -77,7 +78,7 @@ class MyAnimeListMetadataProvider(MetadataProvider[MyAnimeListConfig, None]):
     async def find_by_external_id(
         self, external_id: str, scope: str = "all"
     ) -> list[MediaCandidate]:
-        if scope != MEDIA_TYPE_ANIME:
+        if scope not in (MEDIA_TYPE_ANIME, MEDIA_SCOPE_ALL):
             return []
         return []
 
