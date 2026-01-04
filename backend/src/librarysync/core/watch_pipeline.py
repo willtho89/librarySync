@@ -291,7 +291,8 @@ class LetterboxdSyncStrategy(SyncStrategy):
     ) -> None:
         if episode_item:
             return
-        if not media_item or media_item.media_type != "movie":
+        # Support movies and anime movies for Letterboxd
+        if not media_item or media_item.media_type not in ("movie", "anime"):
             return
         if not media_item.imdb_id and not media_item.tmdb_id:
             return
@@ -352,7 +353,8 @@ class LetterboxdSyncStrategy(SyncStrategy):
     ) -> None:
         if episode_item:
             return
-        if not media_item or media_item.media_type != "movie":
+        # Support movies and anime movies for Letterboxd
+        if not media_item or media_item.media_type not in ("movie", "anime"):
             return
         integration, secret_data = await load_integration_with_secrets(
             db, watched.user_id, "letterboxd"
@@ -402,7 +404,8 @@ class LetterboxdSyncStrategy(SyncStrategy):
     ) -> None:
         if episode_item:
             return
-        if not media_item or media_item.media_type != "movie":
+        # Support movies and anime movies for Letterboxd
+        if not media_item or media_item.media_type not in ("movie", "anime"):
             return
         integration, secret_data = await load_integration_with_secrets(
             db, watched.user_id, "letterboxd"
@@ -844,7 +847,8 @@ def build_history_payload(
             payload["rating"] = rating
         return payload
 
-    if media_item.media_type != "movie":
+    # For movies or anime movies (treat anime as movie for non-anime providers)
+    if media_item.media_type not in ("movie", "anime"):
         return None
     movie_ids = id_builder(media_item.imdb_id, media_item.tmdb_id, media_item.tvdb_id)
     if not movie_ids:
