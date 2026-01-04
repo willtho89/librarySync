@@ -171,6 +171,43 @@ class MetadataLookupCandidate(Base):
     )
 
 
+class BlacklistItem(Base):
+    __tablename__ = "blacklist_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "provider",
+            "provider_item_id",
+            name="uq_blacklist_items_user_provider_item",
+        ),
+        Index("ix_blacklist_items_user_media_type", "user_id", "media_type"),
+        Index("ix_blacklist_items_user_imdb_id", "user_id", "imdb_id"),
+        Index("ix_blacklist_items_user_tmdb_id", "user_id", "tmdb_id"),
+        Index("ix_blacklist_items_user_tvdb_id", "user_id", "tvdb_id"),
+        Index("ix_blacklist_items_user_tvmaze_id", "user_id", "tvmaze_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    media_type: Mapped[str] = mapped_column(String(32), default="tv")
+    provider: Mapped[str] = mapped_column(String(32))
+    provider_item_id: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(255))
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    poster_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    tmdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    tvdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    tvmaze_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class MediaItem(Base):
     __tablename__ = "media_items"
     __table_args__ = (

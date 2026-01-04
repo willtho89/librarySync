@@ -6,6 +6,7 @@ const CORE_ASSETS = [
   "/history",
   "/activity",
   "/settings",
+  "/blacklist",
   "/offline",
   "/static/styles.css",
   "/static/app.js",

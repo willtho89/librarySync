@@ -19,6 +19,7 @@ from librarysync.connectors.services.simkl import (
     parse_expires_at,
     token_to_secret_payload,
 )
+from librarysync.core.blacklist import find_blacklisted_show
 from librarysync.core.import_schedule import parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
@@ -398,6 +399,12 @@ async def _import_shows_payload(
             "simkl_imported",
             entry_keys,
         )
+        existing_blacklist_keys = await load_existing_entry_keys(
+            db,
+            user_id,
+            "simkl_blacklisted",
+            entry_keys,
+        )
         for entry in batch:
             show_payload = _extract_show_payload(entry)
             episodes = _extract_episode_entries(entry)
@@ -409,7 +416,13 @@ async def _import_shows_payload(
                 normalized["show"] = show_payload or entry
                 try:
                     if await _import_show_entry(
-                        db, user_id, normalized, watched_at, raw_type, existing_keys
+                        db,
+                        user_id,
+                        normalized,
+                        watched_at,
+                        raw_type,
+                        existing_keys,
+                        existing_blacklist_keys,
                     ):
                         imported += 1
                 except Exception:
@@ -431,7 +444,13 @@ async def _import_shows_payload(
                     continue
                 try:
                     if await _import_episode_entry(
-                        db, user_id, normalized, watched_at, raw_type, existing_keys
+                        db,
+                        user_id,
+                        normalized,
+                        watched_at,
+                        raw_type,
+                        existing_keys,
+                        existing_blacklist_keys,
                     ):
                         imported += 1
                 except Exception:
@@ -779,6 +798,7 @@ async def _import_show_entry(
     watched_at: datetime | None,
     raw_type: str,
     existing_entry_keys: set[str] | None = None,
+    existing_blacklist_keys: set[str] | None = None,
 ) -> bool:
     history_id = _extract_history_id(entry)
     watched_at = watched_at or datetime.now(timezone.utc)
@@ -803,6 +823,37 @@ async def _import_show_entry(
         return False
     media_item = await _get_or_create_show_item(db, show, raw_type)
     if not media_item:
+        return False
+    blacklist_match = None
+    if raw_type != "anime":
+        blacklist_match = await find_blacklisted_show(
+            db,
+            user_id,
+            imdb_id=media_item.imdb_id or show.imdb_id,
+            tmdb_id=media_item.tmdb_id or show.tmdb_id,
+            tvdb_id=media_item.tvdb_id or show.tvdb_id,
+            tvmaze_id=media_item.tvmaze_id,
+        )
+    if blacklist_match:
+        use_prefetch = bool(history_id) and existing_blacklist_keys is not None
+        if use_prefetch:
+            if entry_key in existing_blacklist_keys:
+                return False
+        elif await _entry_already_blacklisted(db, user_id, entry_key):
+            return False
+        raw = _build_event_raw(entry_key, history_id, watched_at, show, None, rating)
+        raw["blacklisted"] = True
+        raw["blacklist_id"] = blacklist_match.id
+        event = WatchEvent(
+            user_id=user_id,
+            media_item_id=media_item.id,
+            episode_item_id=None,
+            event_type="simkl_blacklisted",
+            occurred_at=watched_at,
+            raw=raw,
+        )
+        db.add(event)
+        await db.commit()
         return False
     watched = WatchedItem(
         user_id=user_id,
@@ -850,6 +901,7 @@ async def _import_episode_entry(
     watched_at: datetime | None,
     raw_type: str,
     existing_entry_keys: set[str] | None = None,
+    existing_blacklist_keys: set[str] | None = None,
 ) -> bool:
     history_id = _extract_history_id(entry)
     watched_at = watched_at or datetime.now(timezone.utc)
@@ -868,6 +920,40 @@ async def _import_episode_entry(
         return False
     show_item = await _get_or_create_show_item(db, show, raw_type)
     if not show_item:
+        return False
+    blacklist_match = None
+    if raw_type != "anime":
+        blacklist_match = await find_blacklisted_show(
+            db,
+            user_id,
+            imdb_id=show_item.imdb_id or show.imdb_id,
+            tmdb_id=show_item.tmdb_id or show.tmdb_id,
+            tvdb_id=show_item.tvdb_id or show.tvdb_id,
+            tvmaze_id=show_item.tvmaze_id,
+        )
+    if blacklist_match:
+        use_prefetch = bool(history_id) and existing_blacklist_keys is not None
+        if use_prefetch:
+            if entry_key in existing_blacklist_keys:
+                return False
+        elif await _entry_already_blacklisted(db, user_id, entry_key):
+            return False
+        episode_item = await _get_or_create_episode_item(db, show_item, episode)
+        if not episode_item:
+            return False
+        raw = _build_event_raw(entry_key, history_id, watched_at, show, episode, rating)
+        raw["blacklisted"] = True
+        raw["blacklist_id"] = blacklist_match.id
+        event = WatchEvent(
+            user_id=user_id,
+            media_item_id=None,
+            episode_item_id=episode_item.id,
+            event_type="simkl_blacklisted",
+            occurred_at=watched_at,
+            raw=raw,
+        )
+        db.add(event)
+        await db.commit()
         return False
     episode_item = await _get_or_create_episode_item(db, show_item, episode)
     if not episode_item:
@@ -927,6 +1013,19 @@ async def _entry_already_imported(
         select(WatchEvent.id).where(
             WatchEvent.user_id == user_id,
             WatchEvent.event_type == "simkl_imported",
+            WatchEvent.raw["entry_key"].as_string() == entry_key,
+        )
+    )
+    return result.scalars().first() is not None
+
+
+async def _entry_already_blacklisted(
+    db: AsyncSession, user_id: str, entry_key: str
+) -> bool:
+    result = await db.execute(
+        select(WatchEvent.id).where(
+            WatchEvent.user_id == user_id,
+            WatchEvent.event_type == "simkl_blacklisted",
             WatchEvent.raw["entry_key"].as_string() == entry_key,
         )
     )

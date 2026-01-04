@@ -11,6 +11,7 @@ from librarysync.api import (
     routes_activity,
     routes_admin,
     routes_auth,
+    routes_blacklist,
     routes_dashboard,
     routes_history,
     routes_integrations,
@@ -40,6 +41,7 @@ OPENAPI_TAGS = [
     {"name": "activity", "description": "Progress events, outbox, and status feeds."},
     {"name": "dashboard", "description": "Dashboard statistics and analytics."},
     {"name": "settings", "description": "Per-user search settings."},
+    {"name": "blacklist", "description": "Per-user blacklist entries."},
     {"name": "admin", "description": "Administrative operations."},
     {"name": "health", "description": "Service health check."},
 ]
@@ -82,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_activity.router)
     app.include_router(routes_dashboard.router)
     app.include_router(routes_settings.router)
+    app.include_router(routes_blacklist.router)
     app.include_router(routes_admin.router)
 
     app_version = get_app_version()
@@ -274,6 +277,20 @@ def create_app() -> FastAPI:
             "settings.html",
             page_title="Settings",
             active_page="settings",
+            requires_auth=True,
+            current_user=current_user,
+        )
+
+    @app.get("/blacklist", include_in_schema=False)
+    async def blacklist_page(
+        request: Request,
+        current_user: User | None = Depends(get_optional_user),
+    ):
+        return _render_page(
+            request,
+            "blacklist.html",
+            page_title="Blacklist",
+            active_page="blacklist",
             requires_auth=True,
             current_user=current_user,
         )

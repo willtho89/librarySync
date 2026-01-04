@@ -21,6 +21,7 @@ from librarysync.connectors.services.stremio_watched_bitfield import (
     WatchedBitFieldError,
     watched_bitfield_from_string,
 )
+from librarysync.core.blacklist import find_blacklisted_show
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
@@ -32,6 +33,7 @@ from librarysync.db.models import (
     WatchSync,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
+from librarysync.jobs.import_utils import load_existing_entry_keys
 
 LOOKBACK_DAYS = settings.history_lookback_days
 COMPLETION_THRESHOLD = 0.85
@@ -368,6 +370,38 @@ async def _import_library_item(
             return False
         if await _entry_already_imported(db, user_id, entry_key):
             return False
+        blacklist_match = await find_blacklisted_show(
+            db,
+            user_id,
+            imdb_id=show_item.imdb_id or show.imdb_id,
+            tmdb_id=show_item.tmdb_id or show.tmdb_id,
+            tvdb_id=show_item.tvdb_id or show.tvdb_id,
+            tvmaze_id=show_item.tvmaze_id,
+        )
+        if blacklist_match:
+            if await _entry_already_blacklisted(db, user_id, entry_key):
+                return False
+            raw = _build_event_raw(
+                entry_key,
+                item_id,
+                watched_at,
+                show.raw,
+                episode.raw,
+                episode.stremio_video_id,
+            )
+            raw["blacklisted"] = True
+            raw["blacklist_id"] = blacklist_match.id
+            event = WatchEvent(
+                user_id=user_id,
+                media_item_id=None,
+                episode_item_id=episode_item.id,
+                event_type="stremio_blacklisted",
+                occurred_at=watched_at,
+                raw=raw,
+            )
+            db.add(event)
+            await db.commit()
+            return False
         watched = WatchedItem(
             user_id=user_id,
             media_item_id=None,
@@ -568,6 +602,14 @@ async def _import_series_bitfield(
     show_item = await _get_or_create_show_item(db, show)
     if not show_item:
         return False
+    blacklist_match = await find_blacklisted_show(
+        db,
+        user_id,
+        imdb_id=show_item.imdb_id or show.imdb_id,
+        tmdb_id=show_item.tmdb_id or show.tmdb_id,
+        tvdb_id=show_item.tvdb_id or show.tvdb_id,
+        tvmaze_id=show_item.tvmaze_id,
+    )
     existing_ids = await _load_existing_stremio_sync_ids(db, user_id, watched_video_ids)
     existing_watches = await _load_existing_episode_watches(db, user_id, show_item.id)
     existing_syncs = await _load_stremio_syncs(db, user_id, existing_watches.values())
@@ -576,6 +618,31 @@ async def _import_series_bitfield(
     imported_any = False
     touched_any = False
     now = datetime.now(timezone.utc)
+    entry_key_map: dict[str, str] = {}
+    existing_blacklist_keys: set[str] = set()
+    if blacklist_match:
+        for video_id in watched_video_ids:
+            parsed = _parse_video_id_episode(video_id)
+            if not parsed:
+                continue
+            season_number, episode_number = parsed
+            entry_key = _build_entry_key(
+                "episode",
+                show.imdb_id or show.stremio_id or item_id,
+                video_id,
+                watched_at,
+                season_number,
+                episode_number,
+            )
+            if entry_key:
+                entry_key_map[video_id] = entry_key
+        if entry_key_map:
+            existing_blacklist_keys = await load_existing_entry_keys(
+                db,
+                user_id,
+                "stremio_blacklisted",
+                entry_key_map.values(),
+            )
     for video_id in watched_video_ids:
         if video_id in existing_ids:
             continue
@@ -621,6 +688,34 @@ async def _import_series_bitfield(
             episode_number,
         )
         if not entry_key:
+            continue
+        if blacklist_match:
+            cached_entry_key = entry_key_map.get(video_id)
+            if cached_entry_key:
+                if cached_entry_key in existing_blacklist_keys:
+                    continue
+            elif await _entry_already_blacklisted(db, user_id, entry_key):
+                continue
+            raw = _build_event_raw(
+                entry_key,
+                item_id,
+                watched_at,
+                show.raw,
+                episode.raw,
+                video_id,
+            )
+            raw["blacklisted"] = True
+            raw["blacklist_id"] = blacklist_match.id
+            event = WatchEvent(
+                user_id=user_id,
+                media_item_id=None,
+                episode_item_id=episode_item.id,
+                event_type="stremio_blacklisted",
+                occurred_at=watched_at,
+                raw=raw,
+            )
+            db.add(event)
+            touched_any = True
             continue
         watched = WatchedItem(
             user_id=user_id,
@@ -841,6 +936,19 @@ async def _entry_already_imported(db: AsyncSession, user_id: str, entry_key: str
         select(WatchEvent.id).where(
             WatchEvent.user_id == user_id,
             WatchEvent.event_type == "stremio_imported",
+            WatchEvent.raw["entry_key"].as_string() == entry_key,
+        )
+    )
+    return result.scalars().first() is not None
+
+
+async def _entry_already_blacklisted(
+    db: AsyncSession, user_id: str, entry_key: str
+) -> bool:
+    result = await db.execute(
+        select(WatchEvent.id).where(
+            WatchEvent.user_id == user_id,
+            WatchEvent.event_type == "stremio_blacklisted",
             WatchEvent.raw["entry_key"].as_string() == entry_key,
         )
     )
