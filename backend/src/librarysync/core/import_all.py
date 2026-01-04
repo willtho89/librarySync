@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.config import settings
+from librarysync.connectors.services.anilist import has_required_anilist_fields
 from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
 from librarysync.connectors.services.simkl import has_required_simkl_fields
 from librarysync.connectors.services.stremio import has_required_stremio_fields
@@ -17,7 +18,7 @@ from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.db.models import Integration
 
 IMPORT_ALL_PROVIDER = "system"
-IMPORT_ALL_PRIORITY = ("trakt", "letterboxd", "simkl", "stremio")
+IMPORT_ALL_PRIORITY = ("trakt", "letterboxd", "simkl", "anilist", "stremio")
 
 IMPORT_ALL_STATUS_PENDING = "pending"
 IMPORT_ALL_STATUS_IN_PROGRESS = "in_progress"
@@ -155,6 +156,11 @@ async def build_import_all_queue(db: AsyncSession, user_id: str) -> list[str]:
                 continue
         elif provider == "stremio":
             if not has_required_stremio_fields(secret_data):
+                continue
+        elif provider == "anilist":
+            if not settings.anilist_client_id or not settings.anilist_client_secret:
+                continue
+            if not has_required_anilist_fields(secret_data):
                 continue
         else:
             continue

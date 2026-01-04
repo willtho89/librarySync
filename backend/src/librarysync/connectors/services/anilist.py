@@ -276,6 +276,110 @@ class AniListClient:
         result = await self._post_graphql(query, variables)
         return result.get("MediaList")
 
+    async def list_media_entries(
+        self,
+        *,
+        user_id: int | None = None,
+        user_name: str | None = None,
+        status: str | None = None,
+        media_type: str = "ANIME",
+        per_page: int = 50,
+        max_pages: int | None = None,
+        sort: str | None = "UPDATED_TIME_DESC",
+    ) -> list[dict[str, Any]]:
+        """Fetch AniList media list entries for a user."""
+        if not user_id and not user_name:
+            raise AniListError("AniList list fetch requires user_id or user_name")
+        if user_id:
+            user_name = None
+
+        query = """
+        query (
+            $page: Int
+            $perPage: Int
+            $userId: Int
+            $userName: String
+            $status: MediaListStatus
+            $type: MediaType
+            $sort: [MediaListSort]
+        ) {
+            Page(page: $page, perPage: $perPage) {
+                pageInfo {
+                    hasNextPage
+                }
+                mediaList(
+                    userId: $userId
+                    userName: $userName
+                    status: $status
+                    type: $type
+                    sort: $sort
+                ) {
+                    id
+                    status
+                    score(format: POINT_10)
+                    progress
+                    updatedAt
+                    startedAt {
+                        year
+                        month
+                        day
+                    }
+                    completedAt {
+                        year
+                        month
+                        day
+                    }
+                    media {
+                        id
+                        idMal
+                        title {
+                            romaji
+                            english
+                            native
+                        }
+                        startDate {
+                            year
+                            month
+                            day
+                        }
+                        coverImage {
+                            extraLarge
+                            large
+                            medium
+                        }
+                        format
+                        episodes
+                    }
+                }
+            }
+        }
+        """
+
+        entries: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            variables: dict[str, Any] = {
+                "page": page,
+                "perPage": per_page,
+                "userId": user_id,
+                "userName": user_name,
+                "status": status,
+                "type": media_type,
+                "sort": [sort] if sort else None,
+            }
+            result = await self._post_graphql(query, variables)
+            page_data = result.get("Page") or {}
+            raw_entries = page_data.get("mediaList") or []
+            if isinstance(raw_entries, list):
+                entries.extend([entry for entry in raw_entries if isinstance(entry, dict)])
+            page_info = page_data.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                break
+            page += 1
+            if max_pages is not None and page > max_pages:
+                break
+        return entries
+
     def _date_to_fuzzy(self, dt: datetime) -> dict[str, int]:
         """Convert datetime to AniList FuzzyDate format."""
         return {

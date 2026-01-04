@@ -2525,6 +2525,11 @@ function openMetadataModal(item) {
     return;
   }
   const metadata = item.metadata || {};
+  const hasEpisode =
+    item.season_number !== null &&
+    item.season_number !== undefined &&
+    item.episode_number !== null &&
+    item.episode_number !== undefined;
   const ids = {
     imdb_id: (metadata.ids && metadata.ids.imdb_id) || item.imdb_id,
     tmdb_id: (metadata.ids && metadata.ids.tmdb_id) || item.tmdb_id,
@@ -2559,7 +2564,7 @@ function openMetadataModal(item) {
       value: formatMetadataValue(metadata.media_item_id),
     },
   ];
-  if (item.media_type === "tv") {
+  if (hasEpisode || metadata.episode_item_id) {
     systemRows.push({
       label: "Episode item ID",
       value: formatMetadataValue(metadata.episode_item_id),
@@ -2578,7 +2583,7 @@ function openMetadataModal(item) {
   ];
   body.appendChild(renderMetadataSection("External IDs", externalRows));
 
-  if (item.media_type === "tv") {
+  if (hasEpisode) {
     const episodeRows = [
       { label: "Episode IMDb", value: formatMetadataValue(episodeIds.imdb_id) },
       { label: "Episode TMDB", value: formatMetadataValue(episodeIds.tmdb_id) },
@@ -2713,8 +2718,13 @@ async function loadHistory() {
       : watchedAt.toLocaleString();
     const year = item.year ? item.year : "Year unknown";
     const mediaType = formatMediaType(item.media_type);
+    const hasEpisode =
+      item.season_number !== null &&
+      item.season_number !== undefined &&
+      item.episode_number !== null &&
+      item.episode_number !== undefined;
     const detailParts = [year, mediaType];
-    if (item.media_type === "tv") {
+    if (hasEpisode) {
       const episodeLabel = formatSeasonEpisode(item.season_number, item.episode_number);
       if (episodeLabel) {
         detailParts.push(
