@@ -20,6 +20,20 @@ ANILIST_OAUTH_TOKEN_URL = "https://anilist.co/api/v2/oauth/token"
 ANILIST_REQUIRED_FIELDS = ("access_token",)
 
 
+def convert_rating_to_anilist_scale(rating: float | None) -> float | None:
+    """Convert librarySync rating (0.5-5.0) to AniList scale (0-10).
+    
+    Args:
+        rating: Rating in 0.5-5.0 scale (or None)
+        
+    Returns:
+        Rating in 0-10 scale (or None if input is None)
+    """
+    if rating is None:
+        return None
+    return min(10.0, max(0.0, float(rating) * 2.0))
+
+
 @dataclass(frozen=True)
 class AniListToken:
     access_token: str
@@ -203,9 +217,8 @@ class AniListClient:
         }
 
         if score is not None:
-            # AniList uses 0-100 scale internally, but accepts 0-10
-            # We'll convert our 0.5-5.0 to 0-10
-            variables["score"] = min(10.0, max(0.0, score * 2.0))
+            # Score should already be in 0-10 scale
+            variables["score"] = min(10.0, max(0.0, float(score)))
 
         if progress is not None:
             variables["progress"] = progress

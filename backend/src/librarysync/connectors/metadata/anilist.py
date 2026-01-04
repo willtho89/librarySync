@@ -132,7 +132,7 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
         """Get anime details by AniList ID."""
         # AniList only supports anime, ignore media_type parameter
         if media_type not in (MEDIA_TYPE_ANIME, "all"):
-            raise ValueError(f"AniList only supports anime scope, got {media_type}")
+            raise ValueError(f"AniList only supports anime scope, got {media_type!r}")
 
         graphql_query = """
         query ($id: Int) {

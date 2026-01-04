@@ -16,6 +16,7 @@ from librarysync.config import settings
 from librarysync.connectors.services.anilist import (
     AniListClient,
     AniListError,
+    convert_rating_to_anilist_scale,
     has_required_anilist_fields,
 )
 from librarysync.connectors.services.letterboxd import (
@@ -269,9 +270,7 @@ async def _deliver_anilist_watch(db: AsyncSession, job: OutboxJob) -> tuple[int 
         raise AniListError("Failed to get AniList user ID")
     
     # Convert rating from 0.5-5.0 to 0-10 scale for AniList
-    anilist_score = None
-    if rating is not None and isinstance(rating, (int, float)):
-        anilist_score = min(10.0, max(0.0, float(rating) * 2.0))
+    anilist_score = convert_rating_to_anilist_scale(rating)
     
     # Add/update media list entry
     result = await client.add_media_list_entry(
@@ -312,9 +311,7 @@ async def _deliver_anilist_rating(db: AsyncSession, job: OutboxJob) -> tuple[int
     client = AniListClient(access_token=access_token)
     
     # Convert rating from 0.5-5.0 to 0-10 scale
-    anilist_score = None
-    if rating is not None and isinstance(rating, (int, float)):
-        anilist_score = min(10.0, max(0.0, float(rating) * 2.0))
+    anilist_score = convert_rating_to_anilist_scale(rating)
     
     # Update the existing entry
     result = await client.add_media_list_entry(

@@ -953,11 +953,6 @@ class AniListSyncStrategy(SyncStrategy):
         
         if watched.rating is not None:
             payload["rating"] = watched.rating
-        
-        # For TV shows/episodes, include progress information
-        if episode_item:
-            payload["episode_number"] = episode_item.episode_number
-            payload["season_number"] = episode_item.season_number
 
         await enqueue_outbox_job(
             db,

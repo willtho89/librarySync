@@ -16,6 +16,7 @@ from librarysync.connectors.services.anilist import (
     build_oauth_url as build_anilist_oauth_url,
     exchange_code_for_token as exchange_anilist_code,
     has_required_anilist_fields,
+    parse_expires_at as parse_anilist_expires_at,
     token_to_secret_payload as anilist_token_to_secret_payload,
 )
 from librarysync.connectors.services.letterboxd import (
@@ -922,15 +923,8 @@ async def anilist_callback(
             detail="Invalid OAuth state",
         )
     
-    # Parse expiry time
-    stored_expires = None
-    if stored_expires_str:
-        try:
-            stored_expires = datetime.fromisoformat(stored_expires_str)
-            if stored_expires.tzinfo is None:
-                stored_expires = stored_expires.replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            pass
+    # Parse expiry time using helper function
+    stored_expires = parse_anilist_expires_at(stored_expires_str)
     
     if stored_expires and stored_expires < datetime.now(timezone.utc):
         raise HTTPException(
