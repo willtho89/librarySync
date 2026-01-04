@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -10,9 +9,6 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-
-from librarysync.connectors.services.base import ServiceConnector
-from librarysync.core.canonical import ProgressEvent
 
 DEFAULT_ANILIST_API_URL = "https://graphql.anilist.co"
 ANILIST_OAUTH_AUTHORIZE_URL = "https://anilist.co/api/v2/oauth/authorize"

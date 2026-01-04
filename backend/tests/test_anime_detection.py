@@ -1,6 +1,6 @@
 """Tests for anime detection and classification."""
 
-from librarysync.core.anime import is_anime, get_anime_provider_ids
+from librarysync.core.anime import get_anime_provider_ids, is_anime
 from librarysync.db.models import MediaItem
 
 

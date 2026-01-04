@@ -8,12 +8,12 @@ from typing import Any
 import httpx
 
 from librarysync.connectors.metadata.base import (
+    MEDIA_SCOPE_ALL,
     MediaCandidate,
     MetadataProvider,
     ProviderCapabilities,
     ProviderConfig,
     ProviderContext,
-    MEDIA_SCOPE_ALL,
 )
 
 ANILIST_API_URL = "https://graphql.anilist.co"

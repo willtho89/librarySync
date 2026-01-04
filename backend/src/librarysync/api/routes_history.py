@@ -444,7 +444,17 @@ async def list_watched_items(
         .limit(limit)
     )
     items = []
-    for watched, media_item, episode_item, show, sync, trakt, simkl, stremio, anilist in result.all():
+    for (
+        watched,
+        media_item,
+        episode_item,
+        show,
+        sync,
+        trakt,
+        simkl,
+        stremio,
+        anilist,
+    ) in result.all():
         base_item = media_item or show
         if not base_item:
             continue

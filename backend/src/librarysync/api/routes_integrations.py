@@ -13,10 +13,17 @@ from librarysync.config import settings
 from librarysync.connectors.services.anilist import (
     AniListClient,
     AniListError,
+)
+from librarysync.connectors.services.anilist import (
     build_oauth_url as build_anilist_oauth_url,
+)
+from librarysync.connectors.services.anilist import (
     exchange_code_for_token as exchange_anilist_code,
-    has_required_anilist_fields,
+)
+from librarysync.connectors.services.anilist import (
     parse_expires_at as parse_anilist_expires_at,
+)
+from librarysync.connectors.services.anilist import (
     token_to_secret_payload as anilist_token_to_secret_payload,
 )
 from librarysync.connectors.services.letterboxd import (

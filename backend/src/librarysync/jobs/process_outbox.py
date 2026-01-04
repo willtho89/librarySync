@@ -300,7 +300,9 @@ async def _deliver_anilist_watch(db: AsyncSession, job: OutboxJob) -> tuple[int 
     return 200, external_id
 
 
-async def _deliver_anilist_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
+async def _deliver_anilist_rating(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
     """Update rating for an existing AniList entry."""
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
@@ -328,7 +330,7 @@ async def _deliver_anilist_rating(db: AsyncSession, job: OutboxJob) -> tuple[int
     anilist_score = convert_rating_to_anilist_scale(rating)
     
     # Update the existing entry
-    result = await client.add_media_list_entry(
+    await client.add_media_list_entry(
         media_id=int(anilist_id),
         status="COMPLETED",
         score=anilist_score,
@@ -337,7 +339,9 @@ async def _deliver_anilist_rating(db: AsyncSession, job: OutboxJob) -> tuple[int
     return 200, str(entry_id)
 
 
-async def _deliver_anilist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
+async def _deliver_anilist_remove(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
     """Remove an entry from AniList."""
     payload = job.payload or {}
     entry_id = payload.get("entry_id")

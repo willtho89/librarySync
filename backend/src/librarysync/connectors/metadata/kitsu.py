@@ -6,12 +6,12 @@ from typing import Any
 import httpx
 
 from librarysync.connectors.metadata.base import (
+    MEDIA_SCOPE_ALL,
     MediaCandidate,
     MetadataProvider,
     ProviderCapabilities,
     ProviderConfig,
     ProviderContext,
-    MEDIA_SCOPE_ALL,
 )
 
 KITSU_API_BASE = "https://kitsu.io/api/edge"

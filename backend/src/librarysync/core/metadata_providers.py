@@ -8,8 +8,8 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.connectors.metadata.base import MetadataProvider, ProviderContext
 from librarysync.connectors.metadata.anilist import AniListMetadataProvider
+from librarysync.connectors.metadata.base import MetadataProvider, ProviderContext
 from librarysync.connectors.metadata.imdb import ImdbMetadataProvider
 from librarysync.connectors.metadata.kitsu import KitsuMetadataProvider
 from librarysync.connectors.metadata.myanimelist import MyAnimeListMetadataProvider

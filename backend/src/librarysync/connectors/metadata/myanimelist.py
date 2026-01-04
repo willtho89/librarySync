@@ -6,11 +6,11 @@ from typing import Any
 import httpx
 
 from librarysync.connectors.metadata.base import (
+    MEDIA_SCOPE_ALL,
     MediaCandidate,
     MetadataProvider,
     ProviderCapabilities,
     ProviderConfig,
-    MEDIA_SCOPE_ALL,
 )
 
 JIKAN_API_BASE = "https://api.jikan.moe/v4"
