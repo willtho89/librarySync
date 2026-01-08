@@ -142,6 +142,8 @@ def _row_score(row: WatchedRow) -> int:
         score += 4
     elif row.watched.source == "manual":
         score += 2
+    elif row.watched.source == "aiostreams":
+        score += 1
     if media.poster_url:
         score += 1
     if media.title:
@@ -248,6 +250,7 @@ def _sync_score(sync: WatchSync) -> int:
         "synced_from_simkl": 5,
         "synced_from_anilist": 5,
         "synced_from_stremio": 5,
+        "synced_from_aiostreams": 5,
         "assumed_tracked": 4,
         "pending": 3,
         "in_progress": 2,

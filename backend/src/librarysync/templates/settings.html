@@ -234,6 +234,45 @@
             <p id="stremio-message" class="form-message" role="status" hidden></p>
           </form>
         </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="section-title">AIOStreams Proxy</h3>
+              <p class="section-subtitle">Import watch activity from proxy stats.</p>
+            </div>
+            <span id="aiostreams-status" class="status-pill">Not connected</span>
+          </div>
+          <form id="aiostreams-form" class="space-y-4">
+            <label class="field">
+              <span>API Base URL</span>
+              <input
+                class="input"
+                type="url"
+                name="api_base_url"
+                placeholder="https://aiostreams.example"
+              />
+            </label>
+            <label class="field">
+              <span>Auth (user:token)</span>
+              <input class="input" type="password" name="auth" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Username (optional)</span>
+              <input class="input" type="text" name="username" autocomplete="off" />
+            </label>
+            <div class="flex flex-wrap gap-2">
+              <button class="btn btn-primary" type="submit">Save</button>
+              <button type="button" id="aiostreams-test" class="btn btn-secondary">
+                Test
+              </button>
+              <button type="button" id="aiostreams-disconnect" class="btn btn-ghost" hidden>
+                Disconnect
+              </button>
+            </div>
+            <p id="aiostreams-message" class="form-message" role="status" hidden></p>
+          </form>
+        </div>
       </div>
       <p class="mt-4 text-xs text-muted">
         Secrets are encrypted at rest and stored in the integration secrets table. Config fields
@@ -248,7 +287,7 @@
         <h2 class="section-title">History imports</h2>
         <p class="section-subtitle">
           Pull recent history or full backfills in priority order (Trakt → Letterboxd → SIMKL →
-          Stremio).
+          AniList → Stremio → AIOStreams).
         </p>
       </div>
     </summary>
