@@ -25,12 +25,8 @@ LOOKUP_ENGINE = MetadataLookupEngine(detail_limit=DETAILS_ENRICH_LIMIT)
 
 async def _iter_completed(tasks: list[asyncio.Task]) -> AsyncIterator[asyncio.Task]:
     iterator = asyncio.as_completed(tasks)
-    if hasattr(iterator, "__aiter__"):
-        async for task in iterator:
-            yield task
-    else:
-        for task in iterator:
-            yield task
+    async for task in iterator:
+        yield task
 
 
 async def process_metadata_lookups_once(limit: int = 5) -> int:
