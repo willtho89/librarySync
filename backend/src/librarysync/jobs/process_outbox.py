@@ -1078,9 +1078,12 @@ async def _deliver_trakt_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
 async def _deliver_trakt_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     watched_at = _parse_datetime(payload.get("watched_at"))
-    history_id = _coerce_str(payload.get("history_id")) or _coerce_str(payload.get("external_id"))
-    if not history_id:
-        return await _deliver_trakt_watch(db, job)
+    if not watched_at:
+        raise ValueError("Trakt update requires watched_at")
+    previous_watched_at = _parse_optional_datetime(payload.get("previous_watched_at"))
+    history_id = _coerce_str(payload.get("history_id")) or _coerce_str(
+        payload.get("external_id")
+    )
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
     if not integration or not secret_data:
         raise TraktError("Trakt credentials are missing", status_code=401)
@@ -1093,19 +1096,71 @@ async def _deliver_trakt_update(db: AsyncSession, job: OutboxJob) -> tuple[int |
         client_id=settings.trakt_client_id,
         client_secret=settings.trakt_client_secret,
     )
-    access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
-    try:
-        _, response_code = await client.update_history(history_id, watched_at, access_token)
-        return response_code, history_id
-    except TraktError as exc:
-        if exc.status_code in {404, 405}:
-            history_payload = _build_trakt_history_payload(payload, watched_at)
-            response, response_code = await client.add_history(history_payload, access_token)
-            external_id = _extract_trakt_history_id(
-                response, _coerce_str(payload.get("media_type"))
+    access_token = await _ensure_trakt_access_token(
+        db,
+        integration.id,
+        secret_data,
+        client,
+    )
+    if previous_watched_at:
+        if not history_id:
+            match = await _resolve_trakt_history_match(
+                client,
+                access_token,
+                payload,
+                watched_at,
+                previous_watched_at,
             )
-            return response_code, external_id
-        raise
+            if match:
+                history_id, _ = match
+        if not history_id:
+            raise ValueError("Trakt update could not locate prior history entry")
+        remove_payload = _build_trakt_remove_payload_for_id(history_id)
+        _, response_code = await client.remove_history(remove_payload, access_token)
+        if response_code and response_code >= 400:
+            raise TraktError(
+                f"Trakt history remove returned {response_code}",
+                status_code=response_code,
+            )
+        history_payload = _build_trakt_history_payload(payload, watched_at)
+        response, response_code = await client.add_history(history_payload, access_token)
+        external_id = _extract_trakt_history_id(
+            response,
+            _coerce_str(payload.get("media_type")),
+        )
+        return response_code, external_id
+    try:
+        if history_id:
+            _, response_code = await client.update_history(
+                history_id,
+                watched_at,
+                access_token,
+            )
+            return response_code, history_id
+    except TraktError as exc:
+        # Treat 400 (Bad Request) as recoverable here because Trakt can return 400
+        # for invalid/obsolete history IDs or payload shape; in these cases we fall
+        # back to clearing history_id and re-creating the history entry instead of
+        # failing the job outright, similar to 404/405.
+        if exc.status_code in {400, 404, 405}:
+            history_id = None
+        else:
+            raise
+    if history_id:
+        remove_payload = _build_trakt_remove_payload_for_id(history_id)
+        _, response_code = await client.remove_history(remove_payload, access_token)
+        if response_code and response_code >= 400:
+            raise TraktError(
+                f"Trakt history remove returned {response_code}",
+                status_code=response_code,
+            )
+    history_payload = _build_trakt_history_payload(payload, watched_at)
+    response, response_code = await client.add_history(history_payload, access_token)
+    external_id = _extract_trakt_history_id(
+        response,
+        _coerce_str(payload.get("media_type")),
+    )
+    return response_code, external_id
 
 
 async def _deliver_trakt_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
@@ -1695,6 +1750,15 @@ def _build_trakt_remove_payload(payload: dict[str, object]) -> dict[str, Any]:
     raise ValueError("Trakt remove requires show or episode ids")
 
 
+def _build_trakt_remove_payload_for_id(history_id: str) -> dict[str, Any]:
+    cleaned = history_id.strip()
+    if not cleaned:
+        raise ValueError("Trakt remove requires history id")
+    if cleaned.isdigit():
+        return {"ids": [int(cleaned)]}
+    return {"ids": [cleaned]}
+
+
 def _build_simkl_history_payload(
     payload: dict[str, object], watched_at: datetime
 ) -> dict[str, Any]:
@@ -1906,7 +1970,6 @@ async def _find_trakt_history_for_day(
     start_at, end_at = _day_bounds(watched_at)
     page = 1
     limit = 50
-    target_date = watched_at.date()
     while True:
         items, headers = await client.fetch_history(
             access_token,
@@ -1920,7 +1983,7 @@ async def _find_trakt_history_for_day(
             return None
         for entry in items:
             matched_watched_at = _match_trakt_entry_for_payload(
-                entry, payload, media_type, target_date
+                entry, payload, media_type, start_at, end_at
             )
             if matched_watched_at:
                 history_id = _coerce_str(entry.get("id"))
@@ -1932,6 +1995,32 @@ async def _find_trakt_history_for_day(
         if len(items) < limit:
             break
         page += 1
+    return None
+
+
+async def _resolve_trakt_history_match(
+    client: TraktClient,
+    access_token: str,
+    payload: dict[str, object],
+    watched_at: datetime,
+    previous_watched_at: datetime | None,
+) -> tuple[str, datetime] | None:
+    seen_dates: set[date] = set()
+    for candidate in (previous_watched_at, watched_at):
+        if not candidate:
+            continue
+        candidate_date = candidate.date()
+        if candidate_date in seen_dates:
+            continue
+        seen_dates.add(candidate_date)
+        match = await _find_trakt_history_for_day(
+            client,
+            access_token,
+            payload,
+            candidate,
+        )
+        if match:
+            return match
     return None
 
 
@@ -1947,12 +2036,13 @@ def _match_trakt_entry_for_payload(
     entry: object,
     payload: dict[str, object],
     media_type: str,
-    target_date: date,
+    start_at: datetime,
+    end_at: datetime,
 ) -> datetime | None:
     if not isinstance(entry, dict):
         return None
     entry_watched_at = _parse_trakt_datetime(entry.get("watched_at"))
-    if not entry_watched_at or entry_watched_at.date() != target_date:
+    if not entry_watched_at or not (start_at <= entry_watched_at < end_at):
         return None
     if media_type == "movie":
         movie_ids = _normalize_trakt_ids(payload.get("movie_ids"))
@@ -2212,6 +2302,23 @@ def _parse_datetime(value: object) -> datetime:
                 return parsed.replace(tzinfo=timezone.utc)
             return parsed
     return datetime.now(timezone.utc)
+
+
+def _parse_optional_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            parsed = datetime.fromisoformat(cleaned)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
 
 
 def _format_stremio_datetime(value: datetime) -> str:

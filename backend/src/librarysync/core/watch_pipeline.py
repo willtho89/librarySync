@@ -122,6 +122,7 @@ class SyncStrategy(ABC):
         episode_item: EpisodeItem | None,
         watched_at_updated: bool,
         rating_updated: bool,
+        previous_watched_at: datetime | None = None,
     ) -> None:
         return None
 
@@ -173,12 +174,19 @@ class SyncCoordinator:
         episode_item: EpisodeItem | None,
         watched_at_updated: bool,
         rating_updated: bool,
+        previous_watched_at: datetime | None = None,
     ) -> None:
         strategy = self._registry.get(provider)
         if not strategy:
             return
         await strategy.enqueue_update(
-            db, watched, media_item, episode_item, watched_at_updated, rating_updated
+            db,
+            watched,
+            media_item,
+            episode_item,
+            watched_at_updated,
+            rating_updated,
+            previous_watched_at,
         )
 
     async def enqueue_update_all(
@@ -189,10 +197,17 @@ class SyncCoordinator:
         episode_item: EpisodeItem | None,
         watched_at_updated: bool,
         rating_updated: bool,
+        previous_watched_at: datetime | None = None,
     ) -> None:
         for strategy in self._registry.list():
             await strategy.enqueue_update(
-                db, watched, media_item, episode_item, watched_at_updated, rating_updated
+                db,
+                watched,
+                media_item,
+                episode_item,
+                watched_at_updated,
+                rating_updated,
+                previous_watched_at,
             )
 
     async def enqueue_delete(
@@ -350,6 +365,7 @@ class LetterboxdSyncStrategy(SyncStrategy):
         episode_item: EpisodeItem | None,
         watched_at_updated: bool,
         rating_updated: bool,
+        previous_watched_at: datetime | None = None,
     ) -> None:
         if episode_item:
             return
@@ -559,6 +575,7 @@ class HistorySyncStrategy(SyncStrategy):
         episode_item: EpisodeItem | None,
         watched_at_updated: bool,
         rating_updated: bool,
+        previous_watched_at: datetime | None = None,
     ) -> None:
         if not media_item:
             return
@@ -588,6 +605,8 @@ class HistorySyncStrategy(SyncStrategy):
             payload["history_id"] = watch_sync.external_id
         if watched_at_updated:
             payload["watched_at"] = watched.watched_at.isoformat()
+            if previous_watched_at:
+                payload["previous_watched_at"] = previous_watched_at.isoformat()
         if rating_updated and watched.rating is not None:
             payload["rating"] = watched.rating
 
@@ -976,6 +995,7 @@ class AniListSyncStrategy(SyncStrategy):
         episode_item: EpisodeItem | None,
         watched_at_updated: bool,
         rating_updated: bool,
+        previous_watched_at: datetime | None = None,
     ) -> None:
         if not media_item or not is_anime(media_item):
             return
