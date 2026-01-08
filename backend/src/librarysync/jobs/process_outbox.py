@@ -1138,6 +1138,10 @@ async def _deliver_trakt_update(db: AsyncSession, job: OutboxJob) -> tuple[int |
             )
             return response_code, history_id
     except TraktError as exc:
+        # Treat 400 (Bad Request) as recoverable here because Trakt can return 400
+        # for invalid/obsolete history IDs or payload shape; in these cases we fall
+        # back to clearing history_id and re-creating the history entry instead of
+        # failing the job outright, similar to 404/405.
         if exc.status_code in {400, 404, 405}:
             history_id = None
         else:
