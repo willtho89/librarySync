@@ -1,7 +1,10 @@
 module.exports = {
   content: [
     "../backend/src/librarysync/templates/**/*.html",
-    "../backend/src/librarysync/static/app.js",
+    "../backend/src/librarysync/static/core.js",
+    "../backend/src/librarysync/static/*-utils.js",
+    "../backend/src/librarysync/static/page-*.js",
+    "../backend/src/librarysync/static/service-worker.js",
   ],
   theme: {
     extend: {

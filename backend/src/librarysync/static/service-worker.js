@@ -1,4 +1,5 @@
-const CACHE_NAME = "librarysync-v1";
+// Bump the cache to ensure updated assets are served after UI changes.
+const CACHE_NAME = "librarysync";
 const CORE_ASSETS = [
   "/",
   "/login",
@@ -9,7 +10,18 @@ const CORE_ASSETS = [
   "/blacklist",
   "/offline",
   "/static/styles.css",
-  "/static/app.js",
+  "/static/core.js",
+  "/static/status-utils.js",
+  "/static/watch-utils.js",
+  "/static/integrations-utils.js",
+  "/static/page-home.js",
+  "/static/page-login.js",
+  "/static/page-settings.js",
+  "/static/page-add-watched.js",
+  "/static/page-history.js",
+  "/static/page-activity.js",
+  "/static/page-blacklist.js",
+  "/static/chart.min.js",
   "/static/fonts/SpaceGrotesk-SemiBold.woff2",
   "/static/fonts/SpaceGrotesk-Regular.woff2",
   "/static/fonts/IBMPlexSans-Regular.woff2",
@@ -52,6 +64,21 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   if (url.pathname.startsWith("/api/")) {
+    return;
+  }
+  if (
+    url.pathname.startsWith("/static/") &&
+    (url.pathname.endsWith(".js") || url.pathname.endsWith(".css"))
+  ) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return response;
+        })
+        .catch(() => caches.match(event.request)),
+    );
     return;
   }
 

@@ -220,3 +220,9 @@
   </div>
 </section>
 {% endblock %}
+
+{% block scripts %}
+  <script src="{{ static_url('/static/chart.min.js') }}" defer></script>
+  <script src="{{ static_url('/static/status-utils.js') }}" defer></script>
+  <script src="{{ static_url('/static/page-home.js') }}" defer></script>
+{% endblock %}

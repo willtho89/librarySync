@@ -51,3 +51,8 @@
   </div>
 </section>
 {% endblock %}
+
+{% block scripts %}
+  <script src="{{ static_url('/static/watch-utils.js') }}" defer></script>
+  <script src="{{ static_url('/static/page-blacklist.js') }}" defer></script>
+{% endblock %}
