@@ -112,3 +112,9 @@
   </div>
 </div>
 {% endblock %}
+
+{% block scripts %}
+  <script src="{{ static_url('/static/watch-utils.js') }}" defer></script>
+  <script src="{{ static_url('/static/integrations-utils.js') }}" defer></script>
+  <script src="{{ static_url('/static/page-history.js') }}" defer></script>
+{% endblock %}

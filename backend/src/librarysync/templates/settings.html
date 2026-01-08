@@ -705,3 +705,8 @@
   </div>
 </div>
 {% endblock %}
+
+{% block scripts %}
+  <script src="{{ static_url('/static/integrations-utils.js') }}" defer></script>
+  <script src="{{ static_url('/static/page-settings.js') }}" defer></script>
+{% endblock %}

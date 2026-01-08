@@ -7,7 +7,7 @@ RUN npm ci
 
 COPY frontend/tailwind.config.js frontend/input.css ./
 COPY backend/src/librarysync/templates /app/backend/src/librarysync/templates
-COPY backend/src/librarysync/static/app.js /app/backend/src/librarysync/static/app.js
+COPY backend/src/librarysync/static/*.js /app/backend/src/librarysync/static/
 
 RUN npm run build
 
@@ -24,6 +24,8 @@ RUN groupadd --system --gid 10001 app && \
 COPY --chown=app:app backend/pyproject.toml /app/pyproject.toml
 COPY --chown=app:app backend/src /app/src
 COPY --from=frontend-build /app/backend/src/librarysync/static/styles.css /app/src/librarysync/static/styles.css
+COPY --from=frontend-build /app/backend/src/librarysync/static/chart.min.js /app/src/librarysync/static/chart.min.js
+COPY --from=frontend-build /app/backend/src/librarysync/static/chart.umd.min.js.map /app/src/librarysync/static/chart.umd.min.js.map
 
 RUN uv pip install --system .
 
