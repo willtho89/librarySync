@@ -27,7 +27,7 @@ from librarysync.db.session import init_session_factory
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_CACHE_LONG = 60 * 60 * 24 * 30
-STATIC_CACHE_MEDIUM = 60 * 60 * 24 * 7
+STATIC_CACHE_MEDIUM = 60 * 60 * 24 * 14
 STATIC_CACHE_DEFAULT = 60 * 60
 
 OPENAPI_TAGS = [
