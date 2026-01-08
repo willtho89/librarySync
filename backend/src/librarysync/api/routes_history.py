@@ -657,6 +657,8 @@ async def clear_watched_items(
             WatchEvent.user_id == current_user.id,
             WatchEvent.event_type.in_(
                 (
+                    "aiostreams_imported",
+                    "anilist_imported",
                     "trakt_imported",
                     "letterboxd_imported",
                     "simkl_imported",

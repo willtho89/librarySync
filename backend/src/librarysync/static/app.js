@@ -523,6 +523,41 @@ async function loadIntegrations() {
       stremioDisconnect.hidden = true;
     }
   }
+
+  const aiostreams = integrations.find((item) => item.provider === "aiostreams");
+  const aiostreamsForm = document.getElementById("aiostreams-form");
+  if (aiostreamsForm) {
+    const apiBaseInput = aiostreamsForm.querySelector("input[name='api_base_url']");
+    const usernameInput = aiostreamsForm.querySelector("input[name='username']");
+    if (aiostreams && aiostreams.config && aiostreams.config.api_base_url && apiBaseInput) {
+      apiBaseInput.value = aiostreams.config.api_base_url;
+    }
+    if (aiostreams && aiostreams.config && aiostreams.config.username && usernameInput) {
+      usernameInput.value = aiostreams.config.username;
+    }
+  }
+  const aiostreamsMessage = document.getElementById("aiostreams-message");
+  const aiostreamsDisconnect = document.getElementById("aiostreams-disconnect");
+  const aiostreamsConnected = isIntegrationConnected(aiostreams);
+  setIntegrationStatusBadge("aiostreams-status", aiostreamsConnected);
+  if (aiostreamsConnected) {
+    const username =
+      aiostreams && aiostreams.config && aiostreams.config.username
+        ? aiostreams.config.username
+        : null;
+    const label = username
+      ? `Connected as ${username}.`
+      : "AIOStreams Proxy is connected.";
+    setMessage("aiostreams-message", label);
+    if (aiostreamsDisconnect) {
+      aiostreamsDisconnect.hidden = false;
+    }
+  } else {
+    setMessage("aiostreams-message", "");
+    if (aiostreamsDisconnect) {
+      aiostreamsDisconnect.hidden = true;
+    }
+  }
   integrationState.hasAnyImports = integrations.some((item) => item.has_secrets);
   const importAllButton = document.getElementById("import-all-button");
   if (importAllButton) {
@@ -920,6 +955,63 @@ async function handleStremioDisconnect() {
     await loadIntegrations();
   } catch (error) {
     setMessage("stremio-message", error.message, true);
+  }
+}
+
+async function handleAIOStreamsSave(data) {
+  setMessage("aiostreams-message", "");
+  const auth = (data.get("auth") || "").trim();
+  const apiBaseUrl = (data.get("api_base_url") || "").trim();
+  const username = (data.get("username") || "").trim();
+  if (!auth) {
+    setMessage("aiostreams-message", "Auth token is required.", true);
+    return;
+  }
+  const payload = { auth };
+  if (apiBaseUrl) {
+    payload.api_base_url = apiBaseUrl;
+  }
+  if (username) {
+    payload.username = username;
+  }
+  try {
+    await requestJSON("/api/integrations/aiostreams", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const authInput = document.querySelector("#aiostreams-form input[name='auth']");
+    if (authInput) {
+      authInput.value = "";
+    }
+    setMessage("aiostreams-message", "Saved.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("aiostreams-message", error.message, true);
+  }
+}
+
+async function handleAIOStreamsTest() {
+  setMessage("aiostreams-message", "");
+  try {
+    await requestJSON("/api/integrations/aiostreams/test", {
+      method: "POST",
+    });
+    setMessage("aiostreams-message", "Connection verified.");
+  } catch (error) {
+    setMessage("aiostreams-message", error.message, true);
+  }
+}
+
+async function handleAIOStreamsDisconnect() {
+  setMessage("aiostreams-message", "");
+  try {
+    await requestJSON("/api/integrations/aiostreams/disconnect", {
+      method: "POST",
+    });
+    setMessage("aiostreams-message", "AIOStreams disconnected.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("aiostreams-message", error.message, true);
   }
 }
 
@@ -2219,6 +2311,9 @@ function formatIntegrationName(value) {
   if (normalized === "stremio") {
     return "Stremio";
   }
+  if (normalized === "aiostreams") {
+    return "AIOStreams Proxy";
+  }
   return normalized.toUpperCase();
 }
 
@@ -2653,6 +2748,7 @@ function formatProvider(value) {
     trakt: "Trakt",
     stremio: "Stremio",
     letterboxd: "Letterboxd",
+    aiostreams: "AIOStreams",
     manual: "Manual",
     internal: "Internal",
   };
@@ -4950,6 +5046,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindForm("letterboxd-form", handleLetterboxdSave);
   bindForm("quick-import-form", handleQuickImportScheduleSave);
   bindForm("stremio-form", handleStremioConnect);
+  bindForm("aiostreams-form", handleAIOStreamsSave);
   bindForm("settings-form", handleSettingsSave);
   bindForm("tmdb-form", handleTmdbSave);
   bindForm("tvdb-form", handleTvdbSave);
@@ -5065,6 +5162,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const stremioDisconnect = document.getElementById("stremio-disconnect");
   if (stremioDisconnect) {
     stremioDisconnect.addEventListener("click", handleStremioDisconnect);
+  }
+  const aiostreamsTest = document.getElementById("aiostreams-test");
+  if (aiostreamsTest) {
+    aiostreamsTest.addEventListener("click", handleAIOStreamsTest);
+  }
+  const aiostreamsDisconnect = document.getElementById("aiostreams-disconnect");
+  if (aiostreamsDisconnect) {
+    aiostreamsDisconnect.addEventListener("click", handleAIOStreamsDisconnect);
   }
 
   if (user) {
