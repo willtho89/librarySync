@@ -101,6 +101,7 @@ class SimklImportStrategy(ImportStrategy):
             context.db,
             integration,
             self._lookback_days,
+            context.now,
         )
 
 
@@ -108,6 +109,7 @@ async def _import_for_integration(
     db: AsyncSession,
     integration: Integration,
     lookback_days: int,
+    now: datetime,
 ) -> ImportResult:
     if not settings.simkl_client_id or not settings.simkl_client_secret:
         return ImportResult(imported=0, attempted=False)
@@ -134,7 +136,6 @@ async def _import_for_integration(
         )
         return ImportResult(imported=0, attempted=True)
 
-    now = datetime.now(timezone.utc)
     activities = await _fetch_simkl_activities(
         client, access_token, integration.user_id
     )
@@ -158,7 +159,7 @@ async def _import_for_integration(
 
     categories = _select_simkl_categories(integration.config, activities, has_history)
     if not categories:
-        _update_simkl_activity_config(integration, activities)
+        _update_simkl_activity_config(integration, activities, now)
         await db.commit()
         return ImportResult(imported=0, attempted=True)
 
@@ -170,7 +171,7 @@ async def _import_for_integration(
             date_from=date_from,
         )
         imported += await _import_movies_payload(
-            db, integration.user_id, history_payload.get("movies", {}), date_from
+            db, integration.user_id, history_payload.get("movies", {}), date_from, now
         )
 
     if "shows" in categories:
@@ -187,6 +188,7 @@ async def _import_for_integration(
             history_payload.get("shows", {}),
             date_from,
             label="shows",
+            now=now,
         )
 
     if "anime" in categories:
@@ -203,9 +205,10 @@ async def _import_for_integration(
             history_payload.get("anime", {}),
             date_from,
             label="anime",
+            now=now,
         )
 
-    _update_simkl_activity_config(integration, activities)
+    _update_simkl_activity_config(integration, activities, now)
     await db.commit()
 
     if imported:
@@ -310,7 +313,9 @@ def _select_simkl_categories(
 
 
 def _update_simkl_activity_config(
-    integration: Integration, activities: dict[str, Any] | None
+    integration: Integration,
+    activities: dict[str, Any] | None,
+    now: datetime,
 ) -> None:
     if not isinstance(activities, dict):
         return
@@ -323,7 +328,7 @@ def _update_simkl_activity_config(
         if activity_time:
             config[f"simkl_activity_{category}"] = activity_time.isoformat()
     integration.config = config
-    integration.updated_at = datetime.now(timezone.utc)
+    integration.updated_at = now
     # Caller is responsible for committing.
 
 
@@ -342,6 +347,7 @@ async def _import_movies_payload(
     user_id: str,
     payload: dict[str, Any],
     date_from: datetime | None,
+    now: datetime,
 ) -> int:
     entries = _extract_all_items_entries(payload, "movies", {"completed"})
     logger.info(
@@ -356,13 +362,19 @@ async def _import_movies_payload(
     for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
         candidates: list[ImportCandidate] = []
         for entry in batch:
-            watched_at = _extract_item_watched_at(entry) or datetime.now(timezone.utc)
+            watched_at = _extract_item_watched_at(entry) or now
             if date_from and watched_at < date_from:
                 continue
-            candidate = _build_movie_candidate(entry, watched_at)
+            candidate = _build_movie_candidate(entry, watched_at, now)
             if candidate:
                 candidates.append(candidate)
-        imported += await process_import_candidates(db, user_id, "simkl", candidates)
+        imported += await process_import_candidates(
+            db,
+            user_id,
+            "simkl",
+            candidates,
+            now=now,
+        )
     return imported
 
 
@@ -372,6 +384,7 @@ async def _import_shows_payload(
     payload: dict[str, Any],
     date_from: datetime | None,
     label: str,
+    now: datetime,
 ) -> int:
     raw_type = "anime" if label == "anime" else "show"
     entries = _extract_all_items_entries(payload, label, {"completed", "watching"})
@@ -396,7 +409,7 @@ async def _import_shows_payload(
                     continue
                 normalized = dict(entry)
                 normalized["show"] = show_payload or entry
-                candidate = _build_show_candidate(normalized, watched_at, raw_type)
+                candidate = _build_show_candidate(normalized, watched_at, raw_type, now)
                 if candidate:
                     candidates.append(candidate)
                 continue
@@ -408,13 +421,19 @@ async def _import_shows_payload(
                 if not watched_at:
                     watched_at = _extract_item_watched_at(entry)
                 if not watched_at:
-                    watched_at = datetime.now(timezone.utc)
+                    watched_at = now
                 if date_from and watched_at < date_from:
                     continue
-                candidate = _build_episode_candidate(normalized, watched_at, raw_type)
+                candidate = _build_episode_candidate(normalized, watched_at, raw_type, now)
                 if candidate:
                     candidates.append(candidate)
-        imported += await process_import_candidates(db, user_id, "simkl", candidates)
+        imported += await process_import_candidates(
+            db,
+            user_id,
+            "simkl",
+            candidates,
+            now=now,
+        )
     return imported
 
 
@@ -681,9 +700,10 @@ def _log_empty_all_items_payload(label: str, payload: dict[str, Any]) -> None:
 def _build_movie_candidate(
     entry: dict[str, Any],
     watched_at: datetime | None,
+    default_watched_at: datetime,
 ) -> ImportCandidate | None:
     history_id = _extract_history_id(entry)
-    watched_at = watched_at or datetime.now(timezone.utc)
+    watched_at = watched_at or default_watched_at
     movie = _extract_movie_summary(entry)
     if not movie:
         return None
@@ -721,9 +741,10 @@ def _build_show_candidate(
     entry: dict[str, Any],
     watched_at: datetime | None,
     raw_type: str,
+    default_watched_at: datetime,
 ) -> ImportCandidate | None:
     history_id = _extract_history_id(entry)
-    watched_at = watched_at or datetime.now(timezone.utc)
+    watched_at = watched_at or default_watched_at
     show = _extract_show_summary(entry)
     if not show:
         return None
@@ -767,9 +788,10 @@ def _build_episode_candidate(
     entry: dict[str, Any],
     watched_at: datetime | None,
     raw_type: str,
+    default_watched_at: datetime,
 ) -> ImportCandidate | None:
     history_id = _extract_history_id(entry)
-    watched_at = watched_at or datetime.now(timezone.utc)
+    watched_at = watched_at or default_watched_at
     show = _extract_show_summary(entry)
     episode = _extract_episode_summary(entry)
     if not show or not episode:

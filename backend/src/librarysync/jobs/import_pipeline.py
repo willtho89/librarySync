@@ -65,12 +65,16 @@ async def process_import_candidates(
     provider: str,
     candidates: Iterable[ImportCandidate],
     *,
+    now: datetime | None = None,
+    commit: bool = True,
     existing_entry_keys: set[str] | None = None,
     existing_blacklist_keys: set[str] | None = None,
 ) -> int:
     candidate_list = [candidate for candidate in candidates if candidate.entry_key]
     if not candidate_list:
         return 0
+    if now is None:
+        now = datetime.now(timezone.utc)
     entry_keys = [candidate.entry_key for candidate in candidate_list]
     if existing_entry_keys is None:
         existing_entry_keys = await load_existing_entry_keys(
@@ -88,6 +92,44 @@ async def process_import_candidates(
             f"{provider}_blacklisted",
             entry_keys,
         )
+    if not commit:
+        return await _process_candidates_in_transaction(
+            db,
+            user_id,
+            provider,
+            candidate_list,
+            existing_entry_keys,
+            existing_blacklist_keys,
+            now,
+        )
+    if not db.in_transaction():
+        await db.begin()
+    try:
+        imported = await _process_candidates_in_transaction(
+            db,
+            user_id,
+            provider,
+            candidate_list,
+            existing_entry_keys,
+            existing_blacklist_keys,
+            now,
+        )
+    except Exception:
+        await db.rollback()
+        raise
+    await db.commit()
+    return imported
+
+
+async def _process_candidates_in_transaction(
+    db: AsyncSession,
+    user_id: str,
+    provider: str,
+    candidate_list: list[ImportCandidate],
+    existing_entry_keys: set[str],
+    existing_blacklist_keys: set[str] | None,
+    now: datetime,
+) -> int:
     seen: set[str] = set()
     imported = 0
     blacklist_cache: dict[
@@ -102,17 +144,18 @@ async def process_import_candidates(
             continue
         seen.add(entry_key)
         try:
-            imported += await _process_candidate(
-                db,
-                user_id,
-                provider,
-                candidate,
-                existing_blacklist_keys,
-                blacklist_cache,
-            )
+            async with db.begin_nested():
+                imported += await _process_candidate(
+                    db,
+                    user_id,
+                    provider,
+                    candidate,
+                    existing_blacklist_keys,
+                    blacklist_cache,
+                    now,
+                )
         except Exception:
             logger.exception("%s entry import failed for user %s", provider, user_id)
-            await db.rollback()
     return imported
 
 
@@ -126,6 +169,7 @@ async def _process_candidate(
         tuple[str | None, str | None, str | None, str | None],
         Any,
     ],
+    now: datetime,
 ) -> int:
     items = await candidate.build_items(db)
     media_item_id, episode_item_id, _ = _select_event_items(candidate, items)
@@ -156,11 +200,12 @@ async def _process_candidate(
                 media_item_id=media_item_id,
                 episode_item_id=episode_item_id,
                 event_type=f"{provider}_blacklisted",
+                entry_key=candidate.entry_key,
                 occurred_at=candidate.watched_at,
                 raw=raw,
             )
             db.add(event)
-            await db.commit()
+            await db.flush()
             return 0
 
     watched = WatchedItem(
@@ -176,6 +221,7 @@ async def _process_candidate(
         media_item_id=media_item_id,
         episode_item_id=episode_item_id,
         event_type=f"{provider}_imported",
+        entry_key=candidate.entry_key,
         occurred_at=candidate.watched_at,
         raw=candidate.raw,
     )
@@ -188,7 +234,7 @@ async def _process_candidate(
         status=f"synced_from_{provider}",
         is_rewatch=candidate.is_rewatch,
         external_id=candidate.external_id,
-        last_synced_at=datetime.now(timezone.utc),
+        last_synced_at=now,
     )
     db.add(watch_sync)
     await enqueue_new_item_job(
@@ -198,7 +244,6 @@ async def _process_candidate(
         is_rewatch=candidate.is_rewatch,
         source=f"{provider}_import",
     )
-    await db.commit()
     return 1
 
 

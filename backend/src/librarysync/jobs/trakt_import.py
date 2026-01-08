@@ -101,6 +101,7 @@ class TraktImportStrategy(ImportStrategy):
             self._lookback_days,
             self._per_page,
             self._max_pages,
+            context.now,
         )
 
 
@@ -110,6 +111,7 @@ async def _import_for_integration(
     lookback_days: int,
     per_page: int,
     max_pages: int,
+    now: datetime,
 ) -> ImportResult:
     if not settings.trakt_client_id or not settings.trakt_client_secret:
         return ImportResult(imported=0, attempted=False)
@@ -137,7 +139,6 @@ async def _import_for_integration(
         return ImportResult(imported=0, attempted=True)
 
     imported = 0
-    now = datetime.now(timezone.utc)
     full_history = lookback_days < 0
     start_at = _select_trakt_start_at(now, lookback_days)
     max_pages = None if full_history else max_pages
@@ -163,9 +164,9 @@ async def _import_for_integration(
             candidates: list[ImportCandidate] = []
             for entry in batch:
                 if history_type == "movies":
-                    candidate = _build_movie_candidate(entry, rating_lookup)
+                    candidate = _build_movie_candidate(entry, rating_lookup, now)
                 else:
-                    candidate = _build_episode_candidate(entry, rating_lookup)
+                    candidate = _build_episode_candidate(entry, rating_lookup, now)
                 if candidate:
                     candidates.append(candidate)
             imported += await process_import_candidates(
@@ -173,6 +174,7 @@ async def _import_for_integration(
                 integration.user_id,
                 "trakt",
                 candidates,
+                now=now,
             )
     if imported:
         logger.info(
@@ -271,9 +273,10 @@ def _extract_entry_rating(
 def _build_movie_candidate(
     entry: dict[str, Any],
     rating_lookup: dict[str, float],
+    default_watched_at: datetime,
 ) -> ImportCandidate | None:
     history_id = _coerce_str(entry.get("id"))
-    watched_at = _parse_datetime(entry.get("watched_at")) or datetime.now(timezone.utc)
+    watched_at = _parse_datetime(entry.get("watched_at")) or default_watched_at
     movie = _extract_movie_summary(entry)
     if not movie:
         return None
@@ -307,9 +310,10 @@ def _build_movie_candidate(
 def _build_episode_candidate(
     entry: dict[str, Any],
     rating_lookup: dict[str, float],
+    default_watched_at: datetime,
 ) -> ImportCandidate | None:
     history_id = _coerce_str(entry.get("id"))
-    watched_at = _parse_datetime(entry.get("watched_at")) or datetime.now(timezone.utc)
+    watched_at = _parse_datetime(entry.get("watched_at")) or default_watched_at
     show = _extract_show_summary(entry)
     episode = _extract_episode_summary(entry)
     if not show or not episode:

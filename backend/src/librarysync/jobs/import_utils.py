@@ -34,10 +34,10 @@ async def load_existing_entry_keys(
     existing: set[str] = set()
     for batch in chunked(keys, chunk_size):
         result = await db.execute(
-            select(WatchEvent.raw["entry_key"].as_string()).where(
+            select(WatchEvent.entry_key).where(
                 WatchEvent.user_id == user_id,
                 WatchEvent.event_type == event_type,
-                WatchEvent.raw["entry_key"].as_string().in_(batch),
+                WatchEvent.entry_key.in_(batch),
             )
         )
         for entry_key in result.scalars().all():

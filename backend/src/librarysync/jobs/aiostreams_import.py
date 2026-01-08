@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from PTT import parse_title
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,10 +44,6 @@ TVDB_ID_RE = re.compile(r"tvdb[:/](\d+)", re.IGNORECASE)
 YEAR_RE = re.compile(r"(19\d{2}|20\d{2})")
 LOOKUP_ENGINE = MetadataLookupEngine(detail_limit=5)
 logger = logging.getLogger(__name__)
-try:
-    from PTT import parse_title as _parse_title
-except ModuleNotFoundError:
-    _parse_title = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +82,7 @@ class AIOStreamsImportStrategy(ImportStrategy):
             context.db,
             integration,
             self._lookback_days,
+            context.now,
         )
 
 
@@ -92,6 +90,7 @@ async def _import_for_integration(
     db: AsyncSession,
     integration: Integration,
     lookback_days: int,
+    now: datetime,
 ) -> ImportResult:
     integration, secret_data = await load_integration_with_secrets(
         db, integration.user_id, "aiostreams"
@@ -126,7 +125,6 @@ async def _import_for_integration(
     if not entries:
         return ImportResult(imported=0, attempted=True)
 
-    now = datetime.now(timezone.utc)
     since = None if lookback_days < 0 else now - timedelta(days=lookback_days)
 
     parsed_entries: list[ParsedEntry] = []
@@ -178,6 +176,7 @@ async def _import_for_integration(
         integration.user_id,
         "aiostreams",
         candidates,
+        now=now,
         existing_entry_keys=existing_keys,
         existing_blacklist_keys=existing_blacklist_keys,
     )
@@ -611,65 +610,14 @@ def _first_int(value: object) -> int | None:
 
 
 def _parse_parsett_title(value: str) -> dict[str, Any] | None:
-    if _parse_title is None:
-        return _fallback_parse_title(value)
     try:
-        parsed = _parse_title(value)
+        parsed = parse_title(value)
     except Exception:
         logger.debug("Parsett parse failed for %s", value, exc_info=True)
-        return _fallback_parse_title(value)
+        return None
     if not isinstance(parsed, dict):
-        return _fallback_parse_title(value)
-    return parsed
-
-
-def _fallback_parse_title(value: str) -> dict[str, Any] | None:
-    cleaned = value.strip()
-    if not cleaned:
-        return None
-    season, episode, season_start = _extract_season_episode_hint(cleaned)
-    year, year_start = _extract_year_hint(cleaned)
-    cut_at = None
-    if season_start is not None:
-        cut_at = season_start
-    if year_start is not None and (cut_at is None or year_start < cut_at):
-        cut_at = year_start
-    title_part = cleaned[:cut_at] if cut_at is not None else cleaned
-    title = _clean_title(title_part)
-    parsed: dict[str, Any] = {}
-    if title:
-        parsed["title"] = title
-    if year is not None:
-        parsed["year"] = year
-    if season is not None:
-        parsed["seasons"] = [season]
-    if episode is not None:
-        parsed["episodes"] = [episode]
-    if not parsed:
         return None
     return parsed
-
-
-def _extract_season_episode_hint(value: str) -> tuple[int | None, int | None, int | None]:
-    patterns = (
-        r"[sS](\d{1,2})[ ._-]*[eE](\d{1,2})",
-        r"(\d{1,2})x(\d{1,2})",
-        r"[Ss]eason[ ._-]*(\d{1,2})[^0-9]{0,6}[Ee]pisode[ ._-]*(\d{1,2})",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, value)
-        if match:
-            season = _coerce_int(match.group(1))
-            episode = _coerce_int(match.group(2))
-            return season, episode, match.start()
-    return None, None, None
-
-
-def _extract_year_hint(value: str) -> tuple[int | None, int | None]:
-    match = YEAR_RE.search(value)
-    if not match:
-        return None, None
-    return _coerce_int(match.group(1)), match.start()
 
 
 def _clean_title(value: str) -> str | None:
