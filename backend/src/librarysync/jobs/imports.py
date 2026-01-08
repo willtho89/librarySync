@@ -46,8 +46,8 @@ from librarysync.core.import_history import (
 from librarysync.core.import_schedule import parse_datetime
 from librarysync.db.models import Integration
 from librarysync.db.session import SessionLocal, init_session_factory
-from librarysync.jobs.anilist_import import AniListImportStrategy
 from librarysync.jobs.aiostreams_import import AIOStreamsImportStrategy
+from librarysync.jobs.anilist_import import AniListImportStrategy
 from librarysync.jobs.import_base import ImportContext, ImportStrategyRegistry
 from librarysync.jobs.letterboxd_import import LetterboxdImportStrategy
 from librarysync.jobs.merge_history import merge_history_for_user

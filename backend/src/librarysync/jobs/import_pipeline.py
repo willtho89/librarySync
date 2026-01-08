@@ -36,6 +36,14 @@ class BlacklistIds:
 
 
 @dataclass(frozen=True)
+class BlacklistCacheKey:
+    imdb_id: str | None
+    tmdb_id: str | None
+    tvdb_id: str | None
+    tvmaze_id: str | None
+
+
+@dataclass(frozen=True)
 class ImportItems:
     media_item: MediaItem | None
     episode_item: EpisodeItem | None
@@ -132,10 +140,7 @@ async def _process_candidates_in_transaction(
 ) -> int:
     seen: set[str] = set()
     imported = 0
-    blacklist_cache: dict[
-        tuple[str | None, str | None, str | None, str | None],
-        Any,
-    ] = {}
+    blacklist_cache: dict[BlacklistCacheKey, Any] = {}
     for candidate in candidate_list:
         entry_key = candidate.entry_key
         if not entry_key:
@@ -165,10 +170,7 @@ async def _process_candidate(
     provider: str,
     candidate: ImportCandidate,
     existing_blacklist_keys: set[str] | None,
-    blacklist_cache: dict[
-        tuple[str | None, str | None, str | None, str | None],
-        Any,
-    ],
+    blacklist_cache: dict[BlacklistCacheKey, Any],
     now: datetime,
 ) -> int:
     items = await candidate.build_items(db)
@@ -262,10 +264,7 @@ async def _resolve_blacklist_match(
     user_id: str,
     candidate: ImportCandidate,
     items: ImportItems,
-    cache: dict[
-        tuple[str | None, str | None, str | None, str | None],
-        Any,
-    ],
+    cache: dict[BlacklistCacheKey, Any],
 ) -> Any:
     ids = _resolve_blacklist_ids(candidate, items)
     if not ids:
@@ -278,11 +277,11 @@ async def _resolve_blacklist_match(
         or normalized.tvmaze_id
     ):
         return None
-    cache_key = (
-        normalized.imdb_id,
-        normalized.tmdb_id,
-        normalized.tvdb_id,
-        normalized.tvmaze_id,
+    cache_key = BlacklistCacheKey(
+        imdb_id=normalized.imdb_id,
+        tmdb_id=normalized.tmdb_id,
+        tvdb_id=normalized.tvdb_id,
+        tvmaze_id=normalized.tvmaze_id,
     )
     if cache_key in cache:
         return cache[cache_key]

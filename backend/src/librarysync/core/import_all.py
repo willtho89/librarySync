@@ -8,8 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.config import settings
-from librarysync.connectors.services.anilist import has_required_anilist_fields
 from librarysync.connectors.services.aiostreams_proxy import has_required_aiostreams_fields
+from librarysync.connectors.services.anilist import has_required_anilist_fields
 from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
 from librarysync.connectors.services.simkl import has_required_simkl_fields
 from librarysync.connectors.services.stremio import has_required_stremio_fields
