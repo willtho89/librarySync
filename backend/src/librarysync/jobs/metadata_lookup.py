@@ -92,13 +92,12 @@ async def _process_request(db: AsyncSession, request: MetadataLookupRequest) -> 
             )
         )
 
-        rank = 1
         if local_candidates:
-            for candidate in local_candidates:
-                db.add(_candidate_to_model(request.id, candidate, rank))
-                rank += 1
+            for local_rank, candidate in enumerate(local_candidates, start=1):
+                db.add(_candidate_to_model(request.id, candidate, local_rank))
             await db.commit()
 
+        rank = len(local_candidates) + 1 if local_candidates else 1
         tasks: dict[asyncio.Task, str] = {}
         for provider in providers:
             task = asyncio.create_task(LOOKUP_ENGINE.lookup(provider, lookup_request))
