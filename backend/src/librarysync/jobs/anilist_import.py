@@ -72,6 +72,7 @@ class AniListImportStrategy(ImportStrategy):
             self._lookback_days,
             self._per_page,
             self._max_pages,
+            context.now,
         )
 
 
@@ -81,6 +82,7 @@ async def _import_for_integration(
     lookback_days: int,
     per_page: int,
     max_pages: int,
+    now: datetime,
 ) -> ImportResult:
     if not settings.anilist_client_id or not settings.anilist_client_secret:
         return ImportResult(imported=0, attempted=False)
@@ -114,6 +116,7 @@ async def _import_for_integration(
             lookback_days,
             per_page,
             max_pages,
+            now,
         )
     except AniListError as exc:
         logger.warning(
@@ -125,7 +128,7 @@ async def _import_for_integration(
 
     imported = 0
     for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
-        entry_keys = _prefetch_entry_keys(batch)
+        entry_keys = _prefetch_entry_keys(batch, now)
         existing_keys = await load_existing_entry_keys(
             db,
             integration.user_id,
@@ -134,7 +137,13 @@ async def _import_for_integration(
         )
         for entry in batch:
             try:
-                if await _import_entry(db, integration.user_id, entry, existing_keys):
+                if await _import_entry(
+                    db,
+                    integration.user_id,
+                    entry,
+                    existing_keys,
+                    now,
+                ):
                     imported += 1
             except Exception:
                 logger.exception(
@@ -182,8 +191,8 @@ async def _fetch_entries(
     lookback_days: int,
     per_page: int,
     max_pages: int,
+    now: datetime,
 ) -> list[dict[str, Any]]:
-    now = datetime.now(timezone.utc)
     since = None if lookback_days < 0 else now - timedelta(days=lookback_days)
     limit_pages = None if lookback_days < 0 else max_pages
     statuses = ["COMPLETED", "CURRENT", "REPEATING"]
@@ -252,12 +261,14 @@ async def _import_entry(
     user_id: str,
     entry: dict[str, Any],
     existing_entry_keys: set[str] | None = None,
+    now: datetime | None = None,
 ) -> bool:
     entry_id = _coerce_str(entry.get("id"))
     summary = _extract_anime_summary(entry)
     if not summary:
         return False
-    watched_at = _select_watched_at(entry) or datetime.now(timezone.utc)
+    fallback = now or datetime.now(timezone.utc)
+    watched_at = _select_watched_at(entry) or fallback
     progress = _select_episode_progress(entry)
     if _should_import_episodes(summary.format, progress):
         return await _import_episode_entries(
@@ -268,6 +279,7 @@ async def _import_entry(
             watched_at,
             progress,
             existing_entry_keys,
+            fallback,
         )
 
     entry_key = _build_media_entry_key(entry_id, summary.anilist_id, watched_at)
@@ -297,6 +309,7 @@ async def _import_entry(
         media_item_id=media_item.id,
         episode_item_id=None,
         event_type="anilist_imported",
+        entry_key=entry_key,
         occurred_at=watched_at,
         raw=_build_event_raw(entry_key, entry_id, watched_at, summary, entry, rating),
     )
@@ -309,7 +322,7 @@ async def _import_entry(
         status="synced_from_anilist",
         is_rewatch=False,
         external_id=entry_id,
-        last_synced_at=datetime.now(timezone.utc),
+        last_synced_at=fallback,
     )
     db.add(watch_sync)
     await enqueue_new_item_job(
@@ -323,7 +336,7 @@ async def _import_entry(
     return True
 
 
-def _prefetch_entry_keys(entries: list[dict[str, Any]]) -> list[str]:
+def _prefetch_entry_keys(entries: list[dict[str, Any]], now: datetime) -> list[str]:
     keys: list[str] = []
     for entry in entries:
         entry_id = _coerce_str(entry.get("id"))
@@ -339,7 +352,7 @@ def _prefetch_entry_keys(entries: list[dict[str, Any]]) -> list[str]:
                 if key:
                     keys.append(key)
             continue
-        watched_at = _select_watched_at(entry) or datetime.now(timezone.utc)
+        watched_at = _select_watched_at(entry) or now
         key = _build_media_entry_key(entry_id, anilist_id, watched_at)
         if key:
             keys.append(key)
@@ -354,7 +367,9 @@ async def _import_episode_entries(
     watched_at: datetime,
     progress: int,
     existing_entry_keys: set[str] | None = None,
+    now: datetime | None = None,
 ) -> bool:
+    fallback = now or datetime.now(timezone.utc)
     if progress <= 0:
         return False
     media_item = await _get_or_create_media_item(db, summary)
@@ -392,6 +407,7 @@ async def _import_episode_entries(
             media_item_id=None,
             episode_item_id=episode_item.id,
             event_type="anilist_imported",
+            entry_key=entry_key,
             occurred_at=watched_at,
             raw=_build_episode_event_raw(
                 entry_key,
@@ -411,7 +427,7 @@ async def _import_episode_entries(
             status="synced_from_anilist",
             is_rewatch=False,
             external_id=entry_id,
-            last_synced_at=datetime.now(timezone.utc),
+            last_synced_at=fallback,
         )
         db.add(watch_sync)
         await enqueue_new_item_job(
@@ -466,7 +482,7 @@ async def _entry_already_imported(
         select(WatchEvent.id).where(
             WatchEvent.user_id == user_id,
             WatchEvent.event_type == "anilist_imported",
-            WatchEvent.raw["entry_key"].as_string() == entry_key,
+            WatchEvent.entry_key == entry_key,
         )
     )
     return result.scalars().first() is not None

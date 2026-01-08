@@ -31,17 +31,18 @@ from librarysync.connectors.services.letterboxd import (
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.security import encrypt_value
-from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
     Integration,
     IntegrationSecret,
     MediaItem,
-    WatchedItem,
-    WatchEvent,
-    WatchSync,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
-from librarysync.jobs.import_utils import chunked, load_existing_entry_keys
+from librarysync.jobs.import_pipeline import (
+    ImportCandidate,
+    ImportItems,
+    process_import_candidates,
+)
+from librarysync.jobs.import_utils import chunked
 
 LOOKBACK_DAYS = settings.history_lookback_days
 MAX_PAGES = 6
@@ -90,6 +91,7 @@ class LetterboxdImportStrategy(ImportStrategy):
             self._lookback_days,
             self._per_page,
             self._max_pages,
+            context.now,
         )
 
 
@@ -99,6 +101,7 @@ async def _import_for_integration(
     lookback_days: int,
     per_page: int,
     max_pages: int,
+    now: datetime,
 ) -> ImportResult:
     integration, secret_data = await load_integration_with_secrets(
         db, integration.user_id, "letterboxd"
@@ -147,7 +150,6 @@ async def _import_for_integration(
                     integration.config = config
                     db.add(integration)
                     await db.commit()
-        now = datetime.now(timezone.utc)
         full_history = lookback_days < 0
         since = _select_letterboxd_since(now, lookback_days)
         entries = await client.get_history(
@@ -167,22 +169,25 @@ async def _import_for_integration(
 
     imported = 0
     for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
-        entry_keys = _prefetch_entry_keys(batch)
-        existing_keys = await load_existing_entry_keys(
-            db,
-            integration.user_id,
-            "letterboxd_imported",
-            entry_keys,
-        )
+        candidates: list[ImportCandidate] = []
         for entry in batch:
             try:
-                if await _import_entry(db, integration.user_id, entry, existing_keys):
-                    imported += 1
+                candidate = _build_candidate(entry, now)
+                if candidate:
+                    candidates.append(candidate)
             except Exception:
                 logger.exception(
                     "Letterboxd entry import failed for user %s", integration.user_id
                 )
-                await db.rollback()
+        if not candidates:
+            continue
+        imported += await process_import_candidates(
+            db,
+            integration.user_id,
+            "letterboxd",
+            candidates,
+            now=now,
+        )
     if imported:
         logger.info(
             "Imported %s Letterboxd entries for user %s",
@@ -238,92 +243,34 @@ def _select_letterboxd_since(now: datetime, lookback_days: int) -> datetime:
     return now - timedelta(days=lookback_days)
 
 
-async def _import_entry(
-    db: AsyncSession,
-    user_id: str,
-    entry: dict[str, Any],
-    existing_entry_keys: set[str] | None = None,
-) -> bool:
+def _build_candidate(entry: dict[str, Any], now: datetime) -> ImportCandidate | None:
     entry_id = _extract_entry_id(entry)
-    watched_at = _extract_entry_watched_at(entry)
-    if watched_at is None:
-        watched_at = datetime.now(timezone.utc)
+    watched_at = _extract_entry_watched_at(entry) or now
     film = _extract_film_summary(entry)
     if not film:
-        return False
+        return None
     entry_key = _build_entry_key(entry_id, film.film_id, watched_at)
     if not entry_key:
-        return False
-    if entry_id and existing_entry_keys is not None:
-        if entry_key in existing_entry_keys:
-            return False
-    elif await _entry_already_imported(db, user_id, entry_key):
-        return False
-
-    media_item = await _get_or_create_media_item(db, film)
-    if not media_item:
-        return False
+        return None
     rating = coerce_star_rating(_extract_rating(entry))
-    watched = WatchedItem(
-        user_id=user_id,
-        media_item_id=media_item.id,
-        episode_item_id=None,
-        watched_at=watched_at,
-        rating=rating,
-        source="letterboxd",
-    )
     is_rewatch = bool(_extract_rewatch(entry))
-    event = WatchEvent(
-        user_id=user_id,
-        media_item_id=media_item.id,
-        episode_item_id=None,
-        event_type="letterboxd_imported",
-        occurred_at=watched_at,
+
+    async def _build_items(db: AsyncSession) -> ImportItems:
+        media_item = await _get_or_create_media_item(db, film)
+        return ImportItems(media_item=media_item, episode_item=None, show_item=None)
+
+    return ImportCandidate(
+        entry_key=entry_key,
+        watched_at=watched_at,
+        media_type="movie",
         raw=_build_event_raw(entry, entry_key, entry_id, film, watched_at, rating),
-    )
-    db.add_all([watched, event])
-    await db.flush()
-    watch_sync = WatchSync(
-        user_id=user_id,
-        watched_item_id=watched.id,
-        provider="letterboxd",
-        status="synced_from_letterboxd",
-        is_rewatch=is_rewatch,
+        rating=rating,
         external_id=entry_id,
-        last_synced_at=datetime.now(timezone.utc),
-    )
-    db.add(watch_sync)
-    await enqueue_new_item_job(
-        db,
-        user_id,
-        watched.id,
+        blacklist_ids=None,
+        blacklist_enabled=False,
         is_rewatch=is_rewatch,
-        source="letterboxd_import",
+        build_items=_build_items,
     )
-    await db.commit()
-    return True
-
-
-def _prefetch_entry_keys(entries: list[dict[str, Any]]) -> list[str]:
-    keys: list[str] = []
-    for entry in entries:
-        entry_id = _extract_entry_id(entry)
-        if entry_id:
-            keys.append(f"entry:{entry_id}")
-    return keys
-
-
-async def _entry_already_imported(
-    db: AsyncSession, user_id: str, entry_key: str
-) -> bool:
-    result = await db.execute(
-        select(WatchEvent.id).where(
-            WatchEvent.user_id == user_id,
-            WatchEvent.event_type == "letterboxd_imported",
-            WatchEvent.raw["entry_key"].as_string() == entry_key,
-        )
-    )
-    return result.scalars().first() is not None
 
 
 async def _get_or_create_media_item(

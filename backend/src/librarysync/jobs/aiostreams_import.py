@@ -18,20 +18,21 @@ from librarysync.connectors.services.aiostreams_proxy import (
     AIOStreamsError,
     has_required_aiostreams_fields,
 )
-from librarysync.core.blacklist import find_blacklisted_show
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_lookup_engine import LookupRequest, MetadataLookupEngine
 from librarysync.core.metadata_providers import MetadataProviderService
-from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
     MediaItem,
-    WatchedItem,
-    WatchEvent,
-    WatchSync,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
+from librarysync.jobs.import_pipeline import (
+    BlacklistIds,
+    ImportCandidate,
+    ImportItems,
+    process_import_candidates,
+)
 from librarysync.jobs.import_utils import load_existing_entry_keys
 
 LOOKBACK_DAYS = settings.history_lookback_days
@@ -81,6 +82,7 @@ class AIOStreamsImportStrategy(ImportStrategy):
             context.db,
             integration,
             self._lookback_days,
+            context.now,
         )
 
 
@@ -88,6 +90,7 @@ async def _import_for_integration(
     db: AsyncSession,
     integration: Integration,
     lookback_days: int,
+    now: datetime,
 ) -> ImportResult:
     integration, secret_data = await load_integration_with_secrets(
         db, integration.user_id, "aiostreams"
@@ -122,7 +125,6 @@ async def _import_for_integration(
     if not entries:
         return ImportResult(imported=0, attempted=True)
 
-    now = datetime.now(timezone.utc)
     since = None if lookback_days < 0 else now - timedelta(days=lookback_days)
 
     parsed_entries: list[ParsedEntry] = []
@@ -156,25 +158,28 @@ async def _import_for_integration(
     seen_keys: set[str] = set()
     imported = 0
     providers = await _load_lookup_providers(db, integration.user_id, parsed_entries)
+    candidates: list[ImportCandidate] = []
     for parsed in parsed_entries:
         if parsed.entry_key in existing_keys or parsed.entry_key in seen_keys:
             continue
         seen_keys.add(parsed.entry_key)
-        try:
-            if await _import_entry(
-                db,
-                integration.user_id,
-                parsed,
-                providers,
-                existing_blacklist_keys,
-            ):
-                imported += 1
-        except Exception:
-            logger.exception(
-                "AIOStreams entry import failed for user %s",
-                integration.user_id,
-            )
-            await db.rollback()
+        candidate = await _build_candidate(
+            db,
+            integration.user_id,
+            parsed,
+            providers,
+        )
+        if candidate:
+            candidates.append(candidate)
+    imported += await process_import_candidates(
+        db,
+        integration.user_id,
+        "aiostreams",
+        candidates,
+        now=now,
+        existing_entry_keys=existing_keys,
+        existing_blacklist_keys=existing_blacklist_keys,
+    )
     if imported:
         logger.info(
             "Imported %s AIOStreams entries for user %s",
@@ -184,98 +189,62 @@ async def _import_for_integration(
     return ImportResult(imported=imported, attempted=True)
 
 
-async def _import_entry(
+async def _build_candidate(
     db: AsyncSession,
     user_id: str,
     entry: ParsedEntry,
     providers: list[MetadataProvider] | None = None,
-    existing_blacklist_keys: set[str] | None = None,
-) -> bool:
+) -> ImportCandidate | None:
     entry = await _resolve_entry_metadata(db, user_id, entry, providers)
-    media_item: MediaItem | None = None
-    episode_item: EpisodeItem | None = None
-    show_item: MediaItem | None = None
     if entry.media_type == "movie":
-        media_item = await _get_or_create_movie_item(db, entry)
-    else:
-        show_item = await _get_or_create_show_item(db, entry)
-        if (
-            show_item
-            and entry.season_number is not None
-            and entry.episode_number is not None
-        ):
-            episode_item = await _get_or_create_episode_item(db, show_item, entry)
-    if entry.media_type == "movie" and not media_item:
-        return False
-    if entry.media_type != "movie" and not episode_item:
-        return False
-    if entry.media_type != "movie":
-        blacklist_match = await find_blacklisted_show(
-            db,
-            user_id,
-            imdb_id=(show_item.imdb_id if show_item else None) or entry.imdb_id,
-            tmdb_id=(show_item.tmdb_id if show_item else None) or entry.tmdb_id,
-            tvdb_id=(show_item.tvdb_id if show_item else None) or entry.tvdb_id,
-            tvmaze_id=None,
-        )
-        if blacklist_match:
-            if existing_blacklist_keys is not None:
-                if entry.entry_key in existing_blacklist_keys:
-                    return False
-            elif await _entry_already_blacklisted(db, user_id, entry.entry_key):
-                return False
-            raw = _build_event_raw(entry)
-            raw["blacklisted"] = True
-            raw["blacklist_id"] = blacklist_match.id
-            event = WatchEvent(
-                user_id=user_id,
-                media_item_id=None,
-                episode_item_id=episode_item.id if episode_item else None,
-                event_type="aiostreams_blacklisted",
-                occurred_at=entry.watched_at,
-                raw=raw,
-            )
-            db.add(event)
-            await db.commit()
-            return False
 
-    watched = WatchedItem(
-        user_id=user_id,
-        media_item_id=media_item.id if media_item else None,
-        episode_item_id=episode_item.id if episode_item else None,
+        async def _build_items(db: AsyncSession) -> ImportItems:
+            media_item = await _get_or_create_movie_item(db, entry)
+            return ImportItems(media_item=media_item, episode_item=None, show_item=None)
+
+        return ImportCandidate(
+            entry_key=entry.entry_key,
+            watched_at=entry.watched_at,
+            media_type="movie",
+            raw=_build_event_raw(entry),
+            rating=None,
+            external_id=entry.request_id,
+            blacklist_ids=None,
+            blacklist_enabled=False,
+            is_rewatch=False,
+            build_items=_build_items,
+        )
+
+    async def _build_items(db: AsyncSession) -> ImportItems:
+        show_item = await _get_or_create_show_item(db, entry)
+        if not show_item:
+            return ImportItems(media_item=None, episode_item=None, show_item=None)
+        episode_item: EpisodeItem | None = None
+        if entry.season_number is not None and entry.episode_number is not None:
+            episode_item = await _get_or_create_episode_item(db, show_item, entry)
+        return ImportItems(
+            media_item=None,
+            episode_item=episode_item,
+            show_item=show_item,
+        )
+
+    return ImportCandidate(
+        entry_key=entry.entry_key,
         watched_at=entry.watched_at,
-        rating=None,
-        source="aiostreams",
-    )
-    event = WatchEvent(
-        user_id=user_id,
-        media_item_id=media_item.id if media_item else None,
-        episode_item_id=episode_item.id if episode_item else None,
-        event_type="aiostreams_imported",
-        occurred_at=entry.watched_at,
+        media_type="episode",
         raw=_build_event_raw(entry),
-    )
-    db.add_all([watched, event])
-    await db.flush()
-    watch_sync = WatchSync(
-        user_id=user_id,
-        watched_item_id=watched.id,
-        provider="aiostreams",
-        status="synced_from_aiostreams",
-        is_rewatch=False,
+        rating=None,
         external_id=entry.request_id,
-        last_synced_at=datetime.now(timezone.utc),
-    )
-    db.add(watch_sync)
-    await enqueue_new_item_job(
-        db,
-        user_id,
-        watched.id,
+        blacklist_ids=BlacklistIds(
+            imdb_id=entry.imdb_id,
+            tmdb_id=entry.tmdb_id,
+            tvdb_id=entry.tvdb_id,
+            tvmaze_id=None,
+        ),
+        blacklist_enabled=True,
         is_rewatch=False,
-        source="aiostreams_import",
+        build_items=_build_items,
     )
-    await db.commit()
-    return True
 
 
 def _collect_entries(
@@ -906,19 +875,6 @@ async def _find_media_item(
         result = await db.execute(query)
         item = result.scalars().first()
     return item
-
-
-async def _entry_already_blacklisted(
-    db: AsyncSession, user_id: str, entry_key: str
-) -> bool:
-    result = await db.execute(
-        select(WatchEvent.id).where(
-            WatchEvent.user_id == user_id,
-            WatchEvent.event_type == "aiostreams_blacklisted",
-            WatchEvent.raw["entry_key"].as_string() == entry_key,
-        )
-    )
-    return result.scalars().first() is not None
 
 
 def _apply_media_updates(item: MediaItem, entry: ParsedEntry) -> None:

@@ -10,6 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.config import settings
+from librarysync.connectors.services.aiostreams_proxy import (
+    AIOStreamsClient,
+    AIOStreamsError,
+    has_required_aiostreams_fields,
+)
 from librarysync.connectors.services.anilist import (
     AniListClient,
     AniListError,
@@ -25,11 +30,6 @@ from librarysync.connectors.services.anilist import (
 )
 from librarysync.connectors.services.anilist import (
     token_to_secret_payload as anilist_token_to_secret_payload,
-)
-from librarysync.connectors.services.aiostreams_proxy import (
-    AIOStreamsClient,
-    AIOStreamsError,
-    has_required_aiostreams_fields,
 )
 from librarysync.connectors.services.letterboxd import (
     DEFAULT_LETTERBOXD_API_BASE_URL,

@@ -18,22 +18,23 @@ from librarysync.connectors.services.trakt import (
     parse_expires_at,
     token_to_secret_payload,
 )
-from librarysync.core.blacklist import find_blacklisted_show
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
-from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
     IntegrationSecret,
     MediaItem,
-    WatchedItem,
-    WatchEvent,
-    WatchSync,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
-from librarysync.jobs.import_utils import chunked, load_existing_entry_keys
+from librarysync.jobs.import_pipeline import (
+    BlacklistIds,
+    ImportCandidate,
+    ImportItems,
+    process_import_candidates,
+)
+from librarysync.jobs.import_utils import chunked
 
 LOOKBACK_DAYS = settings.history_lookback_days
 MAX_PAGES = 8
@@ -100,6 +101,7 @@ class TraktImportStrategy(ImportStrategy):
             self._lookback_days,
             self._per_page,
             self._max_pages,
+            context.now,
         )
 
 
@@ -109,6 +111,7 @@ async def _import_for_integration(
     lookback_days: int,
     per_page: int,
     max_pages: int,
+    now: datetime,
 ) -> ImportResult:
     if not settings.trakt_client_id or not settings.trakt_client_secret:
         return ImportResult(imported=0, attempted=False)
@@ -136,7 +139,6 @@ async def _import_for_integration(
         return ImportResult(imported=0, attempted=True)
 
     imported = 0
-    now = datetime.now(timezone.utc)
     full_history = lookback_days < 0
     start_at = _select_trakt_start_at(now, lookback_days)
     max_pages = None if full_history else max_pages
@@ -159,48 +161,21 @@ async def _import_for_integration(
                 user_id=integration.user_id,
             )
         for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
-            entry_keys = _prefetch_entry_keys(batch)
-            existing_keys = await load_existing_entry_keys(
+            candidates: list[ImportCandidate] = []
+            for entry in batch:
+                if history_type == "movies":
+                    candidate = _build_movie_candidate(entry, rating_lookup, now)
+                else:
+                    candidate = _build_episode_candidate(entry, rating_lookup, now)
+                if candidate:
+                    candidates.append(candidate)
+            imported += await process_import_candidates(
                 db,
                 integration.user_id,
-                "trakt_imported",
-                entry_keys,
+                "trakt",
+                candidates,
+                now=now,
             )
-            existing_blacklist_keys: set[str] | None = None
-            if history_type == "episodes":
-                existing_blacklist_keys = await load_existing_entry_keys(
-                    db,
-                    integration.user_id,
-                    "trakt_blacklisted",
-                    entry_keys,
-                )
-            for entry in batch:
-                try:
-                    if history_type == "movies":
-                        if await _import_movie_entry(
-                            db,
-                            integration.user_id,
-                            entry,
-                            rating_lookup,
-                            existing_keys,
-                        ):
-                            imported += 1
-                    else:
-                        if await _import_episode_entry(
-                            db,
-                            integration.user_id,
-                            entry,
-                            rating_lookup,
-                            existing_keys,
-                            existing_blacklist_keys,
-                        ):
-                            imported += 1
-                except Exception:
-                    logger.exception(
-                        "Trakt entry import failed for user %s",
-                        integration.user_id,
-                    )
-                    await db.rollback()
     if imported:
         logger.info(
             "Imported %s Trakt entries for user %s",
@@ -295,18 +270,16 @@ def _extract_entry_rating(
     return _lookup_rating(lookup, imdb_id, tmdb_id, trakt_id)
 
 
-async def _import_movie_entry(
-    db: AsyncSession,
-    user_id: str,
+def _build_movie_candidate(
     entry: dict[str, Any],
     rating_lookup: dict[str, float],
-    existing_entry_keys: set[str] | None = None,
-) -> bool:
+    default_watched_at: datetime,
+) -> ImportCandidate | None:
     history_id = _coerce_str(entry.get("id"))
-    watched_at = _parse_datetime(entry.get("watched_at")) or datetime.now(timezone.utc)
+    watched_at = _parse_datetime(entry.get("watched_at")) or default_watched_at
     movie = _extract_movie_summary(entry)
     if not movie:
-        return False
+        return None
     rating = _extract_entry_rating(
         entry, rating_lookup, movie.imdb_id, movie.tmdb_id, movie.trakt_id
     )
@@ -314,68 +287,37 @@ async def _import_movie_entry(
         history_id, movie.imdb_id, movie.tmdb_id, watched_at, "movie"
     )
     if not entry_key:
-        return False
-    if history_id and existing_entry_keys is not None:
-        if entry_key in existing_entry_keys:
-            return False
-    elif await _entry_already_imported(db, user_id, entry_key):
-        return False
-    media_item = await _get_or_create_movie_item(db, movie)
-    if not media_item:
-        return False
-    watched = WatchedItem(
-        user_id=user_id,
-        media_item_id=media_item.id,
-        episode_item_id=None,
+        return None
+
+    async def _build_items(db: AsyncSession) -> ImportItems:
+        media_item = await _get_or_create_movie_item(db, movie)
+        return ImportItems(media_item=media_item, episode_item=None, show_item=None)
+
+    return ImportCandidate(
+        entry_key=entry_key,
         watched_at=watched_at,
-        rating=rating,
-        source="trakt",
-    )
-    event = WatchEvent(
-        user_id=user_id,
-        media_item_id=media_item.id,
-        episode_item_id=None,
-        event_type="trakt_imported",
-        occurred_at=watched_at,
+        media_type="movie",
         raw=_build_event_raw(entry_key, history_id, watched_at, movie, None, rating),
-    )
-    db.add_all([watched, event])
-    await db.flush()
-    watch_sync = WatchSync(
-        user_id=user_id,
-        watched_item_id=watched.id,
-        provider="trakt",
-        status="synced_from_trakt",
-        is_rewatch=False,
+        rating=rating,
         external_id=history_id,
-        last_synced_at=datetime.now(timezone.utc),
-    )
-    db.add(watch_sync)
-    await enqueue_new_item_job(
-        db,
-        user_id,
-        watched.id,
+        blacklist_ids=None,
+        blacklist_enabled=False,
         is_rewatch=False,
-        source="trakt_import",
+        build_items=_build_items,
     )
-    await db.commit()
-    return True
 
 
-async def _import_episode_entry(
-    db: AsyncSession,
-    user_id: str,
+def _build_episode_candidate(
     entry: dict[str, Any],
     rating_lookup: dict[str, float],
-    existing_entry_keys: set[str] | None = None,
-    existing_blacklist_keys: set[str] | None = None,
-) -> bool:
+    default_watched_at: datetime,
+) -> ImportCandidate | None:
     history_id = _coerce_str(entry.get("id"))
-    watched_at = _parse_datetime(entry.get("watched_at")) or datetime.now(timezone.utc)
+    watched_at = _parse_datetime(entry.get("watched_at")) or default_watched_at
     show = _extract_show_summary(entry)
     episode = _extract_episode_summary(entry)
     if not show or not episode:
-        return False
+        return None
     rating = _extract_entry_rating(
         entry, rating_lookup, episode.imdb_id, episode.tmdb_id, episode.trakt_id
     )
@@ -387,122 +329,36 @@ async def _import_episode_entry(
         "episode",
     )
     if not entry_key:
-        return False
-    if history_id and existing_entry_keys is not None:
-        if entry_key in existing_entry_keys:
-            return False
-    elif await _entry_already_imported(db, user_id, entry_key):
-        return False
-    show_item = await _get_or_create_show_item(db, show)
-    if not show_item:
-        return False
-    blacklist_match = await find_blacklisted_show(
-        db,
-        user_id,
-        imdb_id=show_item.imdb_id or show.imdb_id,
-        tmdb_id=show_item.tmdb_id or show.tmdb_id,
-        tvdb_id=show_item.tvdb_id or show.tvdb_id,
-        tvmaze_id=show_item.tvmaze_id,
-    )
-    if blacklist_match:
-        use_prefetch = bool(history_id) and existing_blacklist_keys is not None
-        if use_prefetch:
-            if entry_key in existing_blacklist_keys:
-                return False
-        elif await _entry_already_blacklisted(db, user_id, entry_key):
-            return False
+        return None
+
+    async def _build_items(db: AsyncSession) -> ImportItems:
+        show_item = await _get_or_create_show_item(db, show)
+        if not show_item:
+            return ImportItems(media_item=None, episode_item=None, show_item=None)
         episode_item = await _get_or_create_episode_item(db, show_item, episode)
-        if not episode_item:
-            return False
-        raw = _build_event_raw(entry_key, history_id, watched_at, show, episode, rating)
-        raw["blacklisted"] = True
-        raw["blacklist_id"] = blacklist_match.id
-        event = WatchEvent(
-            user_id=user_id,
-            media_item_id=None,
-            episode_item_id=episode_item.id,
-            event_type="trakt_blacklisted",
-            occurred_at=watched_at,
-            raw=raw,
+        return ImportItems(
+            media_item=None,
+            episode_item=episode_item,
+            show_item=show_item,
         )
-        db.add(event)
-        await db.commit()
-        return False
-    episode_item = await _get_or_create_episode_item(db, show_item, episode)
-    if not episode_item:
-        return False
-    watched = WatchedItem(
-        user_id=user_id,
-        media_item_id=None,
-        episode_item_id=episode_item.id,
+
+    return ImportCandidate(
+        entry_key=entry_key,
         watched_at=watched_at,
-        rating=rating,
-        source="trakt",
-    )
-    event = WatchEvent(
-        user_id=user_id,
-        media_item_id=None,
-        episode_item_id=episode_item.id,
-        event_type="trakt_imported",
-        occurred_at=watched_at,
+        media_type="episode",
         raw=_build_event_raw(entry_key, history_id, watched_at, show, episode, rating),
-    )
-    db.add_all([watched, event])
-    await db.flush()
-    watch_sync = WatchSync(
-        user_id=user_id,
-        watched_item_id=watched.id,
-        provider="trakt",
-        status="synced_from_trakt",
-        is_rewatch=False,
+        rating=rating,
         external_id=history_id,
-        last_synced_at=datetime.now(timezone.utc),
-    )
-    db.add(watch_sync)
-    await enqueue_new_item_job(
-        db,
-        user_id,
-        watched.id,
+        blacklist_ids=BlacklistIds(
+            imdb_id=show.imdb_id,
+            tmdb_id=show.tmdb_id,
+            tvdb_id=show.tvdb_id,
+            tvmaze_id=None,
+        ),
+        blacklist_enabled=True,
         is_rewatch=False,
-        source="trakt_import",
+        build_items=_build_items,
     )
-    await db.commit()
-    return True
-
-
-def _prefetch_entry_keys(entries: list[dict[str, Any]]) -> list[str]:
-    keys: list[str] = []
-    for entry in entries:
-        history_id = _coerce_str(entry.get("id"))
-        if history_id:
-            keys.append(f"history:{history_id}")
-    return keys
-
-
-async def _entry_already_imported(
-    db: AsyncSession, user_id: str, entry_key: str
-) -> bool:
-    result = await db.execute(
-        select(WatchEvent.id).where(
-            WatchEvent.user_id == user_id,
-            WatchEvent.event_type == "trakt_imported",
-            WatchEvent.raw["entry_key"].as_string() == entry_key,
-        )
-    )
-    return result.scalars().first() is not None
-
-
-async def _entry_already_blacklisted(
-    db: AsyncSession, user_id: str, entry_key: str
-) -> bool:
-    result = await db.execute(
-        select(WatchEvent.id).where(
-            WatchEvent.user_id == user_id,
-            WatchEvent.event_type == "trakt_blacklisted",
-            WatchEvent.raw["entry_key"].as_string() == entry_key,
-        )
-    )
-    return result.scalars().first() is not None
 
 
 async def _get_or_create_movie_item(

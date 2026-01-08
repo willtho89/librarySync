@@ -345,6 +345,12 @@ class WatchEvent(Base):
             "(media_item_id IS NULL AND episode_item_id IS NOT NULL)",
             name="ck_watch_events_one_target",
         ),
+        UniqueConstraint(
+            "user_id",
+            "event_type",
+            "entry_key",
+            name="uq_watch_events_user_event_entry_key",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -366,6 +372,7 @@ class WatchEvent(Base):
         nullable=True,
     )
     event_type: Mapped[str] = mapped_column(String(32))
+    entry_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
