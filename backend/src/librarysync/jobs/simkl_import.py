@@ -19,23 +19,25 @@ from librarysync.connectors.services.simkl import (
     parse_expires_at,
     token_to_secret_payload,
 )
-from librarysync.core.blacklist import find_blacklisted_show
 from librarysync.core.import_schedule import parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
-from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
     IntegrationSecret,
     MediaItem,
-    WatchedItem,
     WatchEvent,
-    WatchSync,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
-from librarysync.jobs.import_utils import chunked, load_existing_entry_keys
+from librarysync.jobs.import_pipeline import (
+    BlacklistIds,
+    ImportCandidate,
+    ImportItems,
+    process_import_candidates,
+)
+from librarysync.jobs.import_utils import chunked
 
 LOOKBACK_DAYS = settings.history_lookback_days
 logger = logging.getLogger(__name__)
@@ -352,23 +354,15 @@ async def _import_movies_payload(
         return 0
     imported = 0
     for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
-        entry_keys = _prefetch_entry_keys(batch)
-        existing_keys = await load_existing_entry_keys(
-            db,
-            user_id,
-            "simkl_imported",
-            entry_keys,
-        )
+        candidates: list[ImportCandidate] = []
         for entry in batch:
-            try:
-                watched_at = _extract_item_watched_at(entry) or datetime.now(timezone.utc)
-                if date_from and watched_at < date_from:
-                    continue
-                if await _import_movie_entry(db, user_id, entry, watched_at, existing_keys):
-                    imported += 1
-            except Exception:
-                logger.exception("SIMKL movie import failed for user %s", user_id)
-                await db.rollback()
+            watched_at = _extract_item_watched_at(entry) or datetime.now(timezone.utc)
+            if date_from and watched_at < date_from:
+                continue
+            candidate = _build_movie_candidate(entry, watched_at)
+            if candidate:
+                candidates.append(candidate)
+        imported += await process_import_candidates(db, user_id, "simkl", candidates)
     return imported
 
 
@@ -392,19 +386,7 @@ async def _import_shows_payload(
         return 0
     imported = 0
     for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
-        entry_keys = _prefetch_entry_keys(batch)
-        existing_keys = await load_existing_entry_keys(
-            db,
-            user_id,
-            "simkl_imported",
-            entry_keys,
-        )
-        existing_blacklist_keys = await load_existing_entry_keys(
-            db,
-            user_id,
-            "simkl_blacklisted",
-            entry_keys,
-        )
+        candidates: list[ImportCandidate] = []
         for entry in batch:
             show_payload = _extract_show_payload(entry)
             episodes = _extract_episode_entries(entry)
@@ -414,22 +396,9 @@ async def _import_shows_payload(
                     continue
                 normalized = dict(entry)
                 normalized["show"] = show_payload or entry
-                try:
-                    if await _import_show_entry(
-                        db,
-                        user_id,
-                        normalized,
-                        watched_at,
-                        raw_type,
-                        existing_keys,
-                        existing_blacklist_keys,
-                    ):
-                        imported += 1
-                except Exception:
-                    logger.exception(
-                        "SIMKL show import failed for user %s", user_id
-                    )
-                    await db.rollback()
+                candidate = _build_show_candidate(normalized, watched_at, raw_type)
+                if candidate:
+                    candidates.append(candidate)
                 continue
             for episode in episodes:
                 normalized = dict(entry)
@@ -442,22 +411,10 @@ async def _import_shows_payload(
                     watched_at = datetime.now(timezone.utc)
                 if date_from and watched_at < date_from:
                     continue
-                try:
-                    if await _import_episode_entry(
-                        db,
-                        user_id,
-                        normalized,
-                        watched_at,
-                        raw_type,
-                        existing_keys,
-                        existing_blacklist_keys,
-                    ):
-                        imported += 1
-                except Exception:
-                    logger.exception(
-                        "SIMKL episode import failed for user %s", user_id
-                    )
-                    await db.rollback()
+                candidate = _build_episode_candidate(normalized, watched_at, raw_type)
+                if candidate:
+                    candidates.append(candidate)
+        imported += await process_import_candidates(db, user_id, "simkl", candidates)
     return imported
 
 
@@ -721,18 +678,15 @@ def _log_empty_all_items_payload(label: str, payload: dict[str, Any]) -> None:
         logger.info("SIMKL all-items payload empty for %s: %s", label, summary)
 
 
-async def _import_movie_entry(
-    db: AsyncSession,
-    user_id: str,
+def _build_movie_candidate(
     entry: dict[str, Any],
     watched_at: datetime | None,
-    existing_entry_keys: set[str] | None = None,
-) -> bool:
+) -> ImportCandidate | None:
     history_id = _extract_history_id(entry)
     watched_at = watched_at or datetime.now(timezone.utc)
     movie = _extract_movie_summary(entry)
     if not movie:
-        return False
+        return None
     rating = _extract_entry_rating(entry, include_show_rating=True)
     entry_key = _build_entry_key(
         history_id,
@@ -743,68 +697,36 @@ async def _import_movie_entry(
         "movie",
     )
     if not entry_key:
-        return False
-    if history_id and existing_entry_keys is not None:
-        if entry_key in existing_entry_keys:
-            return False
-    elif await _entry_already_imported(db, user_id, entry_key):
-        return False
-    media_item = await _get_or_create_movie_item(db, movie)
-    if not media_item:
-        return False
-    watched = WatchedItem(
-        user_id=user_id,
-        media_item_id=media_item.id,
-        episode_item_id=None,
+        return None
+
+    async def _build_items(db: AsyncSession) -> ImportItems:
+        media_item = await _get_or_create_movie_item(db, movie)
+        return ImportItems(media_item=media_item, episode_item=None, show_item=None)
+
+    return ImportCandidate(
+        entry_key=entry_key,
         watched_at=watched_at,
-        rating=rating,
-        source="simkl",
-    )
-    event = WatchEvent(
-        user_id=user_id,
-        media_item_id=media_item.id,
-        episode_item_id=None,
-        event_type="simkl_imported",
-        occurred_at=watched_at,
+        media_type="movie",
         raw=_build_event_raw(entry_key, history_id, watched_at, movie, None, rating),
-    )
-    db.add_all([watched, event])
-    await db.flush()
-    watch_sync = WatchSync(
-        user_id=user_id,
-        watched_item_id=watched.id,
-        provider="simkl",
-        status="synced_from_simkl",
-        is_rewatch=False,
+        rating=rating,
         external_id=history_id,
-        last_synced_at=datetime.now(timezone.utc),
-    )
-    db.add(watch_sync)
-    await enqueue_new_item_job(
-        db,
-        user_id,
-        watched.id,
+        blacklist_ids=None,
+        blacklist_enabled=False,
         is_rewatch=False,
-        source="simkl_import",
+        build_items=_build_items,
     )
-    await db.commit()
-    return True
 
 
-async def _import_show_entry(
-    db: AsyncSession,
-    user_id: str,
+def _build_show_candidate(
     entry: dict[str, Any],
     watched_at: datetime | None,
     raw_type: str,
-    existing_entry_keys: set[str] | None = None,
-    existing_blacklist_keys: set[str] | None = None,
-) -> bool:
+) -> ImportCandidate | None:
     history_id = _extract_history_id(entry)
     watched_at = watched_at or datetime.now(timezone.utc)
     show = _extract_show_summary(entry)
     if not show:
-        return False
+        return None
     rating = _extract_entry_rating(entry, include_show_rating=True)
     entry_key = _build_entry_key(
         history_id,
@@ -815,221 +737,77 @@ async def _import_show_entry(
         "show",
     )
     if not entry_key:
-        return False
-    if history_id and existing_entry_keys is not None:
-        if entry_key in existing_entry_keys:
-            return False
-    elif await _entry_already_imported(db, user_id, entry_key):
-        return False
-    media_item = await _get_or_create_show_item(db, show, raw_type)
-    if not media_item:
-        return False
-    blacklist_match = None
-    if raw_type != "anime":
-        blacklist_match = await find_blacklisted_show(
-            db,
-            user_id,
-            imdb_id=media_item.imdb_id or show.imdb_id,
-            tmdb_id=media_item.tmdb_id or show.tmdb_id,
-            tvdb_id=media_item.tvdb_id or show.tvdb_id,
-            tvmaze_id=media_item.tvmaze_id,
-        )
-    if blacklist_match:
-        use_prefetch = bool(history_id) and existing_blacklist_keys is not None
-        if use_prefetch:
-            if entry_key in existing_blacklist_keys:
-                return False
-        elif await _entry_already_blacklisted(db, user_id, entry_key):
-            return False
-        raw = _build_event_raw(entry_key, history_id, watched_at, show, None, rating)
-        raw["blacklisted"] = True
-        raw["blacklist_id"] = blacklist_match.id
-        event = WatchEvent(
-            user_id=user_id,
-            media_item_id=media_item.id,
-            episode_item_id=None,
-            event_type="simkl_blacklisted",
-            occurred_at=watched_at,
-            raw=raw,
-        )
-        db.add(event)
-        await db.commit()
-        return False
-    watched = WatchedItem(
-        user_id=user_id,
-        media_item_id=media_item.id,
-        episode_item_id=None,
+        return None
+
+    async def _build_items(db: AsyncSession) -> ImportItems:
+        media_item = await _get_or_create_show_item(db, show, raw_type)
+        return ImportItems(media_item=media_item, episode_item=None, show_item=media_item)
+
+    blacklist_enabled = raw_type != "anime"
+    return ImportCandidate(
+        entry_key=entry_key,
         watched_at=watched_at,
-        rating=rating,
-        source="simkl",
-    )
-    event = WatchEvent(
-        user_id=user_id,
-        media_item_id=media_item.id,
-        episode_item_id=None,
-        event_type="simkl_imported",
-        occurred_at=watched_at,
+        media_type="show",
         raw=_build_event_raw(entry_key, history_id, watched_at, show, None, rating),
-    )
-    db.add_all([watched, event])
-    await db.flush()
-    watch_sync = WatchSync(
-        user_id=user_id,
-        watched_item_id=watched.id,
-        provider="simkl",
-        status="synced_from_simkl",
-        is_rewatch=False,
+        rating=rating,
         external_id=history_id,
-        last_synced_at=datetime.now(timezone.utc),
-    )
-    db.add(watch_sync)
-    await enqueue_new_item_job(
-        db,
-        user_id,
-        watched.id,
+        blacklist_ids=BlacklistIds(
+            imdb_id=show.imdb_id,
+            tmdb_id=show.tmdb_id,
+            tvdb_id=show.tvdb_id,
+            tvmaze_id=None,
+        ),
+        blacklist_enabled=blacklist_enabled,
         is_rewatch=False,
-        source="simkl_import",
+        build_items=_build_items,
     )
-    await db.commit()
-    return True
 
 
-async def _import_episode_entry(
-    db: AsyncSession,
-    user_id: str,
+def _build_episode_candidate(
     entry: dict[str, Any],
     watched_at: datetime | None,
     raw_type: str,
-    existing_entry_keys: set[str] | None = None,
-    existing_blacklist_keys: set[str] | None = None,
-) -> bool:
+) -> ImportCandidate | None:
     history_id = _extract_history_id(entry)
     watched_at = watched_at or datetime.now(timezone.utc)
     show = _extract_show_summary(entry)
     episode = _extract_episode_summary(entry)
     if not show or not episode:
-        return False
+        return None
     rating = _extract_entry_rating(entry, include_show_rating=False)
     entry_key = _build_episode_entry_key(history_id, show, episode, watched_at)
     if not entry_key:
-        return False
-    if history_id and existing_entry_keys is not None:
-        if entry_key in existing_entry_keys:
-            return False
-    elif await _entry_already_imported(db, user_id, entry_key):
-        return False
-    show_item = await _get_or_create_show_item(db, show, raw_type)
-    if not show_item:
-        return False
-    blacklist_match = None
-    if raw_type != "anime":
-        blacklist_match = await find_blacklisted_show(
-            db,
-            user_id,
-            imdb_id=show_item.imdb_id or show.imdb_id,
-            tmdb_id=show_item.tmdb_id or show.tmdb_id,
-            tvdb_id=show_item.tvdb_id or show.tvdb_id,
-            tvmaze_id=show_item.tvmaze_id,
-        )
-    if blacklist_match:
-        use_prefetch = bool(history_id) and existing_blacklist_keys is not None
-        if use_prefetch:
-            if entry_key in existing_blacklist_keys:
-                return False
-        elif await _entry_already_blacklisted(db, user_id, entry_key):
-            return False
+        return None
+
+    async def _build_items(db: AsyncSession) -> ImportItems:
+        show_item = await _get_or_create_show_item(db, show, raw_type)
+        if not show_item:
+            return ImportItems(media_item=None, episode_item=None, show_item=None)
         episode_item = await _get_or_create_episode_item(db, show_item, episode)
-        if not episode_item:
-            return False
-        raw = _build_event_raw(entry_key, history_id, watched_at, show, episode, rating)
-        raw["blacklisted"] = True
-        raw["blacklist_id"] = blacklist_match.id
-        event = WatchEvent(
-            user_id=user_id,
-            media_item_id=None,
-            episode_item_id=episode_item.id,
-            event_type="simkl_blacklisted",
-            occurred_at=watched_at,
-            raw=raw,
+        return ImportItems(
+            media_item=None,
+            episode_item=episode_item,
+            show_item=show_item,
         )
-        db.add(event)
-        await db.commit()
-        return False
-    episode_item = await _get_or_create_episode_item(db, show_item, episode)
-    if not episode_item:
-        return False
-    watched = WatchedItem(
-        user_id=user_id,
-        media_item_id=None,
-        episode_item_id=episode_item.id,
+
+    blacklist_enabled = raw_type != "anime"
+    return ImportCandidate(
+        entry_key=entry_key,
         watched_at=watched_at,
-        rating=rating,
-        source="simkl",
-    )
-    event = WatchEvent(
-        user_id=user_id,
-        media_item_id=None,
-        episode_item_id=episode_item.id,
-        event_type="simkl_imported",
-        occurred_at=watched_at,
+        media_type="episode",
         raw=_build_event_raw(entry_key, history_id, watched_at, show, episode, rating),
-    )
-    db.add_all([watched, event])
-    await db.flush()
-    watch_sync = WatchSync(
-        user_id=user_id,
-        watched_item_id=watched.id,
-        provider="simkl",
-        status="synced_from_simkl",
-        is_rewatch=False,
+        rating=rating,
         external_id=history_id,
-        last_synced_at=datetime.now(timezone.utc),
-    )
-    db.add(watch_sync)
-    await enqueue_new_item_job(
-        db,
-        user_id,
-        watched.id,
+        blacklist_ids=BlacklistIds(
+            imdb_id=show.imdb_id,
+            tmdb_id=show.tmdb_id,
+            tvdb_id=show.tvdb_id,
+            tvmaze_id=None,
+        ),
+        blacklist_enabled=blacklist_enabled,
         is_rewatch=False,
-        source="simkl_import",
+        build_items=_build_items,
     )
-    await db.commit()
-    return True
-
-
-def _prefetch_entry_keys(entries: list[dict[str, Any]]) -> list[str]:
-    keys: list[str] = []
-    for entry in entries:
-        history_id = _extract_history_id(entry)
-        if history_id:
-            keys.append(f"history:{history_id}")
-    return keys
-
-
-async def _entry_already_imported(
-    db: AsyncSession, user_id: str, entry_key: str
-) -> bool:
-    result = await db.execute(
-        select(WatchEvent.id).where(
-            WatchEvent.user_id == user_id,
-            WatchEvent.event_type == "simkl_imported",
-            WatchEvent.raw["entry_key"].as_string() == entry_key,
-        )
-    )
-    return result.scalars().first() is not None
-
-
-async def _entry_already_blacklisted(
-    db: AsyncSession, user_id: str, entry_key: str
-) -> bool:
-    result = await db.execute(
-        select(WatchEvent.id).where(
-            WatchEvent.user_id == user_id,
-            WatchEvent.event_type == "simkl_blacklisted",
-            WatchEvent.raw["entry_key"].as_string() == entry_key,
-        )
-    )
-    return result.scalars().first() is not None
 
 
 async def _get_or_create_movie_item(
