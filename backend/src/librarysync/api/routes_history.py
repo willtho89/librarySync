@@ -765,6 +765,7 @@ async def update_watched_item(
                 episode_item,
                 watched_at_updated,
                 rating_updated,
+                previous_watched_at if watched_at_updated else None,
             )
     await db.commit()
     return {
@@ -1291,6 +1292,7 @@ async def _enqueue_update_syncs(
     episode_item: EpisodeItem | None,
     watched_at_updated: bool,
     rating_updated: bool,
+    previous_watched_at: datetime | None = None,
 ) -> None:
     await SYNC_COORDINATOR.enqueue_update_all(
         db,
@@ -1299,6 +1301,7 @@ async def _enqueue_update_syncs(
         episode_item,
         watched_at_updated,
         rating_updated,
+        previous_watched_at,
     )
 
 
