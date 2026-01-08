@@ -631,21 +631,28 @@ async function handleStremioDisconnect() {
   }
 }
 
-async function handleAIOStreamsSave(data) {
+async function handleAIOStreamsSave(data, form) {
   setMessage("aiostreams-message", "");
   const apiBaseUrl = (data.get("api_base_url") || "").trim();
   const username = (data.get("username") || "").trim();
-  const token = (data.get("token") || "").trim();
-  if (!apiBaseUrl || !username || !token) {
-    setMessage("aiostreams-message", "Enter base URL, username, and token.", true);
+  const auth = (data.get("auth") || "").trim();
+  if (!apiBaseUrl || !auth) {
+    setMessage("aiostreams-message", "Enter base URL and auth.", true);
     return;
   }
-  const payload = { api_base_url: apiBaseUrl, username, token };
+  const payload = { api_base_url: apiBaseUrl, auth };
+  if (username) {
+    payload.username = username;
+  }
   try {
     await requestJSON("/api/integrations/aiostreams", {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    const input = form.querySelector("input[name='auth']");
+    if (input) {
+      input.value = "";
+    }
     setMessage("aiostreams-message", "Saved.");
     await loadIntegrations();
   } catch (error) {
