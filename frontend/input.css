@@ -217,6 +217,46 @@
     @apply border border-line/70 bg-elevated text-ink;
   }
 
+  .tab-shell {
+    @apply grid items-start gap-6;
+  }
+
+  .tab-list {
+    @apply flex gap-2 overflow-x-auto pb-2;
+  }
+
+  .tab-button {
+    @apply w-full min-w-[170px] rounded-2xl border border-line/60 bg-surface/75 px-4 py-3 text-left text-sm text-muted transition;
+  }
+
+  .tab-button:hover {
+    @apply border-primary/40 text-ink;
+  }
+
+  .tab-button[aria-selected="true"] {
+    @apply border-primary/50 bg-gradient-to-br from-primary/15 via-surface to-surface text-ink shadow-glow;
+  }
+
+  .tab-title {
+    @apply block text-sm font-semibold text-ink;
+  }
+
+  .tab-meta {
+    @apply block text-xs text-muted;
+  }
+
+  .tab-button[aria-selected="true"] .tab-meta {
+    @apply text-ink/70;
+  }
+
+  .tab-panels {
+    @apply space-y-8;
+  }
+
+  .tab-panel {
+    @apply space-y-6;
+  }
+
   .mobile-nav-link {
     @apply rounded-lg px-4 py-2.5 text-base text-muted transition hover:bg-elevated hover:text-ink;
   }

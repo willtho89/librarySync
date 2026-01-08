@@ -991,6 +991,97 @@ h1,
   color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
 }
 
+.tab-shell {
+  display: grid;
+  align-items: flex-start;
+  gap: 1.5rem;
+}
+
+.tab-list {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.tab-button {
+  width: 100%;
+  min-width: 170px;
+  border-radius: 1.5rem;
+  border-width: 1px;
+  border-color: rgb(var(--color-line) / 0.6);
+  background-color: rgb(var(--color-surface) / 0.75);
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+  text-align: left;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, -webkit-backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter, -webkit-backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+.tab-button:hover {
+  border-color: rgb(var(--color-primary) / 0.4);
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
+}
+
+.tab-button[aria-selected="true"] {
+  border-color: rgb(var(--color-primary) / 0.5);
+  background-image: linear-gradient(to bottom right, var(--tw-gradient-stops));
+  --tw-gradient-from: rgb(var(--color-primary) / 0.15) var(--tw-gradient-from-position);
+  --tw-gradient-to: rgb(var(--color-primary) / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+  --tw-gradient-to: rgb(var(--color-surface) / 0)  var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), rgb(var(--color-surface) / 1) var(--tw-gradient-via-position), var(--tw-gradient-to);
+  --tw-gradient-to: rgb(var(--color-surface) / 1) var(--tw-gradient-to-position);
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
+  --tw-shadow: 0 0 0 1px rgba(13, 120, 211, 0.12), 0 12px 30px -24px rgba(13, 120, 211, 0.6);
+  --tw-shadow-colored: 0 0 0 1px var(--tw-shadow-color), 0 12px 30px -24px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.tab-title {
+  display: block;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
+}
+
+.tab-meta {
+  display: block;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+}
+
+.tab-button[aria-selected="true"] .tab-meta {
+  color: rgb(var(--color-ink) / 0.7);
+}
+
+.tab-panels > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(2rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(2rem * var(--tw-space-y-reverse));
+}
+
+.tab-panel > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(1.5rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(1.5rem * var(--tw-space-y-reverse));
+}
+
 .mobile-nav-link {
   border-radius: 0.5rem;
   padding-left: 1rem;
@@ -2253,6 +2344,10 @@ h1,
   min-width: 220px;
 }
 
+.max-w-2xl {
+  max-width: 42rem;
+}
+
 .max-w-6xl {
   max-width: 72rem;
 }
@@ -2322,6 +2417,12 @@ h1,
   gap: 1.5rem;
 }
 
+.space-y-2 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.5rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.5rem * var(--tw-space-y-reverse));
+}
+
 .space-y-3 > :not([hidden]) ~ :not([hidden]) {
   --tw-space-y-reverse: 0;
   margin-top: calc(0.75rem * calc(1 - var(--tw-space-y-reverse)));
@@ -2344,6 +2445,10 @@ h1,
   --tw-space-y-reverse: 0;
   margin-top: calc(2rem * calc(1 - var(--tw-space-y-reverse)));
   margin-bottom: calc(2rem * var(--tw-space-y-reverse));
+}
+
+.rounded-3xl {
+  border-radius: 1.5rem;
 }
 
 .rounded-lg {
@@ -2393,6 +2498,10 @@ h1,
   background-color: rgb(var(--color-surface) / 0.7);
 }
 
+.bg-surface\/80 {
+  background-color: rgb(var(--color-surface) / 0.8);
+}
+
 .bg-surface\/90 {
   background-color: rgb(var(--color-surface) / 0.9);
 }
@@ -2435,6 +2544,11 @@ h1,
 
 .font-display {
   font-family: Space Grotesk, IBM Plex Sans, system-ui, sans-serif;
+}
+
+.text-2xl {
+  font-size: 1.5rem;
+  line-height: 2rem;
 }
 
 .text-3xl {
@@ -2616,9 +2730,26 @@ h1,
   .md\:grid-cols-3 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .md\:p-8 {
+    padding: 2rem;
+  }
+
+  .md\:text-3xl {
+    font-size: 1.875rem;
+    line-height: 2.25rem;
+  }
 }
 
 @media (min-width: 1024px) {
+  .lg\:sticky {
+    position: sticky;
+  }
+
+  .lg\:top-24 {
+    top: 6rem;
+  }
+
   .lg\:grid-cols-2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2635,7 +2766,19 @@ h1,
     grid-template-columns: 1.2fr 0.8fr;
   }
 
+  .lg\:grid-cols-\[240px\2c 1fr\] {
+    grid-template-columns: 240px 1fr;
+  }
+
   .lg\:grid-cols-\[minmax\(0\2c 1fr\)_280px\] {
     grid-template-columns: minmax(0,1fr) 280px;
+  }
+
+  .lg\:flex-col {
+    flex-direction: column;
+  }
+
+  .lg\:overflow-visible {
+    overflow: visible;
   }
 }

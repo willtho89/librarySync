@@ -217,6 +217,89 @@ function initMobileMenu() {
   });
 }
 
+function initTabsets() {
+  document.querySelectorAll("[data-tabset]").forEach((tabset) => {
+    const buttons = Array.from(tabset.querySelectorAll("[data-tab-button]"));
+    const panels = Array.from(tabset.querySelectorAll("[data-tab-panel]"));
+    if (!buttons.length || !panels.length) {
+      return;
+    }
+
+    const tabs = buttons.map((button) => button.dataset.tab).filter(Boolean);
+    const buttonMap = new Map();
+    buttons.forEach((button) => {
+      if (button.dataset.tab) {
+        buttonMap.set(button.dataset.tab, button);
+      }
+    });
+
+    function setActive(tabId, options = {}) {
+      const target = buttonMap.get(tabId);
+      if (!target) {
+        return;
+      }
+      buttons.forEach((button) => {
+        const isActive = button.dataset.tab === tabId;
+        button.setAttribute("aria-selected", isActive ? "true" : "false");
+        button.tabIndex = isActive ? 0 : -1;
+      });
+      panels.forEach((panel) => {
+        panel.hidden = panel.dataset.tab !== tabId;
+      });
+      if (options.updateHash) {
+        history.replaceState(null, "", `#${tabId}`);
+      }
+      if (options.focus) {
+        target.focus();
+      }
+    }
+
+    function tabFromHash() {
+      const raw = window.location.hash.replace("#", "");
+      if (!raw) {
+        return null;
+      }
+      return buttonMap.has(raw) ? raw : null;
+    }
+
+    setActive(tabFromHash() || tabs[0], { updateHash: false });
+
+    buttons.forEach((button, index) => {
+      button.addEventListener("click", () => {
+        setActive(button.dataset.tab, { updateHash: true });
+      });
+      button.addEventListener("keydown", (event) => {
+        if (event.key === "Home") {
+          event.preventDefault();
+          setActive(tabs[0], { updateHash: true, focus: true });
+          return;
+        }
+        if (event.key === "End") {
+          event.preventDefault();
+          setActive(tabs[tabs.length - 1], { updateHash: true, focus: true });
+          return;
+        }
+        const isNext = event.key === "ArrowRight" || event.key === "ArrowDown";
+        const isPrev = event.key === "ArrowLeft" || event.key === "ArrowUp";
+        if (!isNext && !isPrev) {
+          return;
+        }
+        event.preventDefault();
+        const direction = isNext ? 1 : -1;
+        const nextIndex = (index + direction + tabs.length) % tabs.length;
+        setActive(tabs[nextIndex], { updateHash: true, focus: true });
+      });
+    });
+
+    window.addEventListener("hashchange", () => {
+      const hashTab = tabFromHash();
+      if (hashTab) {
+        setActive(hashTab, { updateHash: false });
+      }
+    });
+  });
+}
+
 function applyQuickImportControls(statusData) {
   const form = document.getElementById("quick-import-form");
   if (!form) {
@@ -5028,6 +5111,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const guestOnly = body && body.dataset.guestOnly === "true";
   initThemeToggle();
   initMobileMenu();
+  initTabsets();
   const user = await loadCurrentUser();
   applyAuthVisibility(user);
 
