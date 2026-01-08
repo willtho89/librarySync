@@ -7,6 +7,7 @@
       <div>
         <h2 class="section-title">Find a title</h2>
         <p class="section-subtitle">Search by name, IMDb, TMDB, or other provider ID.</p>
+        <p class="helper-text">Search starts as you type and reuses recent matches.</p>
       </div>
     </div>
     <form id="lookup-form" class="grid gap-4 md:grid-cols-3">
@@ -44,9 +45,9 @@
       </div>
     </div>
     <form id="confirm-form" class="space-y-6">
-      <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
-        <div id="candidate-list" class="candidate-list"></div>
-        <aside id="episode-picker" class="episode-picker" hidden>
+      <div id="candidate-list" class="candidate-list"></div>
+      <div id="confirm-panel" class="space-y-6" hidden>
+        <div id="episode-picker" class="episode-picker" hidden>
           <h3 class="text-base font-display">Episode picker</h3>
           <div class="mt-3 grid gap-3">
             <label class="field">
@@ -62,54 +63,54 @@
               TV matches require a specific episode. Movies skip this step.
             </p>
           </div>
-        </aside>
-      </div>
+        </div>
 
-      <div class="grid gap-4 md:grid-cols-3">
-        <label class="field">
-          <span>Watch date (optional)</span>
-          <input class="input" type="datetime-local" name="watched_at" />
-        </label>
-        <div class="field md:col-span-2">
-          <span>Rating (optional)</span>
-          <div class="mt-2 flex flex-wrap items-center gap-3">
-            <div class="rating-stars" role="radiogroup" aria-label="Rating">
-              <input type="radio" id="rating-5" name="rating" value="5" />
-              <label for="rating-5" aria-label="5 stars"></label>
-              <input type="radio" id="rating-4-5" name="rating" value="4.5" />
-              <label for="rating-4-5" class="half" aria-label="4.5 stars"></label>
-              <input type="radio" id="rating-4" name="rating" value="4" />
-              <label for="rating-4" aria-label="4 stars"></label>
-              <input type="radio" id="rating-3-5" name="rating" value="3.5" />
-              <label for="rating-3-5" class="half" aria-label="3.5 stars"></label>
-              <input type="radio" id="rating-3" name="rating" value="3" />
-              <label for="rating-3" aria-label="3 stars"></label>
-              <input type="radio" id="rating-2-5" name="rating" value="2.5" />
-              <label for="rating-2-5" class="half" aria-label="2.5 stars"></label>
-              <input type="radio" id="rating-2" name="rating" value="2" />
-              <label for="rating-2" aria-label="2 stars"></label>
-              <input type="radio" id="rating-1-5" name="rating" value="1.5" />
-              <label for="rating-1-5" class="half" aria-label="1.5 stars"></label>
-              <input type="radio" id="rating-1" name="rating" value="1" />
-              <label for="rating-1" aria-label="1 star"></label>
-              <input type="radio" id="rating-0-5" name="rating" value="0.5" />
-              <label for="rating-0-5" class="half" aria-label="0.5 stars"></label>
+        <div class="grid gap-4 md:grid-cols-3">
+          <label class="field">
+            <span>Watch date (optional)</span>
+            <input class="input" type="datetime-local" name="watched_at" />
+          </label>
+          <div class="field md:col-span-2">
+            <span>Rating (optional)</span>
+            <div class="mt-2 flex flex-wrap items-center gap-3">
+              <div class="rating-stars" role="radiogroup" aria-label="Rating">
+                <input type="radio" id="rating-5" name="rating" value="5" />
+                <label for="rating-5" aria-label="5 stars"></label>
+                <input type="radio" id="rating-4-5" name="rating" value="4.5" />
+                <label for="rating-4-5" class="half" aria-label="4.5 stars"></label>
+                <input type="radio" id="rating-4" name="rating" value="4" />
+                <label for="rating-4" aria-label="4 stars"></label>
+                <input type="radio" id="rating-3-5" name="rating" value="3.5" />
+                <label for="rating-3-5" class="half" aria-label="3.5 stars"></label>
+                <input type="radio" id="rating-3" name="rating" value="3" />
+                <label for="rating-3" aria-label="3 stars"></label>
+                <input type="radio" id="rating-2-5" name="rating" value="2.5" />
+                <label for="rating-2-5" class="half" aria-label="2.5 stars"></label>
+                <input type="radio" id="rating-2" name="rating" value="2" />
+                <label for="rating-2" aria-label="2 stars"></label>
+                <input type="radio" id="rating-1-5" name="rating" value="1.5" />
+                <label for="rating-1-5" class="half" aria-label="1.5 stars"></label>
+                <input type="radio" id="rating-1" name="rating" value="1" />
+                <label for="rating-1" aria-label="1 star"></label>
+                <input type="radio" id="rating-0-5" name="rating" value="0.5" />
+                <label for="rating-0-5" class="half" aria-label="0.5 stars"></label>
+              </div>
+              <button type="button" class="btn btn-ghost btn-xs" data-rating-clear>
+                Clear rating
+              </button>
             </div>
-            <button type="button" class="btn btn-ghost btn-xs" data-rating-clear>
-              Clear rating
-            </button>
+            <p class="helper-text">Ratings use 0.5 star increments.</p>
           </div>
-          <p class="helper-text">Ratings use 0.5 star increments.</p>
         </div>
-      </div>
-      <div class="card card-muted">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <p class="text-sm text-muted">
-            Review your selection. If no watch date is provided, the current time is used.
-          </p>
-          <button class="btn btn-primary" type="submit">Confirm watched</button>
+        <div class="card card-muted">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <p class="text-sm text-muted">
+              Review your selection. If no watch date is provided, the current time is used.
+            </p>
+            <button class="btn btn-primary" type="submit">Confirm watched</button>
+          </div>
+          <p id="confirm-message" class="form-message" role="status" hidden></p>
         </div>
-        <p id="confirm-message" class="form-message" role="status" hidden></p>
       </div>
     </form>
   </div>

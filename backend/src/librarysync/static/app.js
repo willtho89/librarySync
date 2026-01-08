@@ -8,6 +8,11 @@ const lookupState = {
   id: null,
   timer: null,
   candidates: [],
+  cache: new Map(),
+  searchTimer: null,
+  requestVersion: 0,
+  lastQuery: "",
+  lastScope: "all",
 };
 const episodeState = {
   tmdbId: null,
@@ -1528,6 +1533,34 @@ function clearLookupTimer() {
   }
 }
 
+function clearLookupSearchTimer() {
+  if (lookupState.searchTimer) {
+    window.clearTimeout(lookupState.searchTimer);
+    lookupState.searchTimer = null;
+  }
+}
+
+function normalizeLookupQuery(query) {
+  return query.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getLookupCacheKey(query, scope) {
+  return `${normalizeLookupQuery(query)}::${scope}`;
+}
+
+function readLookupCache(cacheKey) {
+  const entry = lookupState.cache.get(cacheKey);
+  if (!entry) {
+    return null;
+  }
+  const ageMs = Date.now() - entry.savedAt;
+  return { ...entry, ageMs };
+}
+
+function writeLookupCache(cacheKey, candidates) {
+  lookupState.cache.set(cacheKey, { candidates, savedAt: Date.now() });
+}
+
 function resetLookupUI() {
   const resultsCard = document.getElementById("lookup-results");
   const candidatesEl = document.getElementById("candidate-list");
@@ -1539,9 +1572,61 @@ function resetLookupUI() {
   }
   lookupState.id = null;
   lookupState.candidates = [];
+  lookupState.lastQuery = "";
+  lookupState.lastScope = "all";
+  restoreConfirmPanel();
   resetEpisodePicker();
   setMessage("lookup-message", "");
   setMessage("confirm-message", "");
+}
+
+function getConfirmPanel() {
+  return document.getElementById("confirm-panel");
+}
+
+function restoreConfirmPanel() {
+  const panel = getConfirmPanel();
+  const form = document.getElementById("confirm-form");
+  if (!panel || !form) {
+    return;
+  }
+  form.appendChild(panel);
+  panel.setAttribute("hidden", "hidden");
+}
+
+function showConfirmPanel(panel) {
+  panel.removeAttribute("hidden");
+}
+
+function moveConfirmPanelToCandidate(candidateId) {
+  const panel = getConfirmPanel();
+  if (!panel) {
+    return;
+  }
+  const candidatesEl = document.getElementById("candidate-list");
+  if (!candidatesEl) {
+    restoreConfirmPanel();
+    return;
+  }
+  const selectedInput =
+    (candidateId &&
+      candidatesEl.querySelector(
+        `input[name='candidate_id'][value="${candidateId}"]`,
+      )) ||
+    candidatesEl.querySelector("input[name='candidate_id']:checked");
+  if (!selectedInput) {
+    candidatesEl.appendChild(panel);
+    showConfirmPanel(panel);
+    return;
+  }
+  const selectedLabel = selectedInput.closest(".candidate-option");
+  if (!selectedLabel) {
+    candidatesEl.appendChild(panel);
+    showConfirmPanel(panel);
+    return;
+  }
+  selectedLabel.insertAdjacentElement("afterend", panel);
+  showConfirmPanel(panel);
 }
 
 function resetEpisodePicker() {
@@ -1550,7 +1635,6 @@ function resetEpisodePicker() {
   const episodeSelect = document.getElementById("episode-select");
   if (picker) {
     picker.hidden = true;
-    picker.style.marginTop = "";
   }
   if (seasonSelect) {
     seasonSelect.innerHTML = "";
@@ -1565,9 +1649,86 @@ function resetEpisodePicker() {
   setMessage("episode-message", "");
 }
 
-async function handleLookupSubmit(data) {
-  resetLookupUI();
+function scheduleLookup(query, searchScope) {
+  clearLookupSearchTimer();
+  const normalized = normalizeLookupQuery(query);
+  if (!normalized) {
+    resetLookupUI();
+    return;
+  }
+  if (
+    normalized === normalizeLookupQuery(lookupState.lastQuery) &&
+    searchScope === lookupState.lastScope
+  ) {
+    return;
+  }
+  if (normalized.length < 3) {
+    setMessage("lookup-message", "Keep typing to search.", false);
+    return;
+  }
+  lookupState.searchTimer = window.setTimeout(() => {
+    startLookup(query, searchScope, { force: false });
+  }, 350);
+}
+
+function bindLookupAutoSearch() {
+  const form = document.getElementById("lookup-form");
+  if (!form) {
+    return;
+  }
+  const queryInput = form.querySelector("input[name='query']");
+  const scopeSelect = form.querySelector("select[name='search_scope']");
+  if (!queryInput || !scopeSelect) {
+    return;
+  }
+  queryInput.addEventListener("input", () => {
+    scheduleLookup(queryInput.value, scopeSelect.value);
+  });
+  scopeSelect.addEventListener("change", () => {
+    if (!queryInput.value.trim()) {
+      return;
+    }
+    scheduleLookup(queryInput.value, scopeSelect.value);
+  });
+}
+
+async function startLookup(query, searchScope, options = {}) {
+  const { force = false } = options;
+  const cacheKey = getLookupCacheKey(query, searchScope);
+  const cached = readLookupCache(cacheKey);
+  const cacheFresh = cached && cached.ageMs < 2 * 60 * 1000;
+
   clearLookupTimer();
+  clearLookupSearchTimer();
+  lookupState.lastQuery = query;
+  lookupState.lastScope = searchScope;
+
+  if (cached) {
+    renderCandidates(cached.candidates || []);
+    if (cacheFresh && !force) {
+      setMessage("lookup-message", "");
+      return;
+    }
+  } else {
+    resetLookupUI();
+  }
+
+  try {
+    setMessage("lookup-message", cached ? "Refreshing results..." : "Searching...");
+    const requestVersion = lookupState.requestVersion + 1;
+    lookupState.requestVersion = requestVersion;
+    const response = await requestJSON("/api/metadata/lookup", {
+      method: "POST",
+      body: JSON.stringify({ query, search_scope: searchScope }),
+    });
+    lookupState.id = response.lookup_id;
+    await pollLookupStatus(response.lookup_id, requestVersion, cacheKey);
+  } catch (error) {
+    setMessage("lookup-message", error.message, true);
+  }
+}
+
+async function handleLookupSubmit(data) {
   const query = (data.get("query") || "").trim();
   const scopeRaw = (data.get("search_scope") || "all").toLowerCase();
   const searchScope = ["all", "movie", "tv", "anime"].includes(scopeRaw)
@@ -1577,31 +1738,33 @@ async function handleLookupSubmit(data) {
     setMessage("lookup-message", "Enter a title or ID to search.", true);
     return;
   }
-  try {
-    setMessage("lookup-message", "Searching...");
-    const response = await requestJSON("/api/metadata/lookup", {
-      method: "POST",
-      body: JSON.stringify({ query, search_scope: searchScope }),
-    });
-    lookupState.id = response.lookup_id;
-    await pollLookupStatus(response.lookup_id);
-  } catch (error) {
-    setMessage("lookup-message", error.message, true);
-  }
+  await startLookup(query, searchScope, { force: true });
 }
 
-async function pollLookupStatus(lookupId) {
+async function pollLookupStatus(lookupId, requestVersion, cacheKey) {
   try {
     const data = await requestJSON(`/api/metadata/lookup/${lookupId}`);
+    if (lookupState.requestVersion !== requestVersion || lookupState.id !== lookupId) {
+      return;
+    }
+    const candidates = data.candidates || [];
     if (data.status === "completed") {
-      renderCandidates(data.candidates || []);
+      renderCandidates(candidates);
+      writeLookupCache(cacheKey, candidates);
       return;
     }
     if (data.status === "failed") {
       setMessage("lookup-message", data.error || "Lookup failed.", true);
       return;
     }
-    lookupState.timer = window.setTimeout(() => pollLookupStatus(lookupId), 1500);
+    if (candidates.length) {
+      renderCandidates(candidates);
+      writeLookupCache(cacheKey, candidates);
+    }
+    lookupState.timer = window.setTimeout(
+      () => pollLookupStatus(lookupId, requestVersion, cacheKey),
+      1200,
+    );
   } catch (error) {
     setMessage("lookup-message", error.message, true);
   }
@@ -1613,10 +1776,13 @@ function renderCandidates(candidates) {
   if (!resultsCard || !candidatesEl) {
     return;
   }
+  const selectedId = getSelectedCandidateId();
+  restoreConfirmPanel();
   lookupState.candidates = candidates;
   candidatesEl.innerHTML = "";
   if (!candidates.length) {
     candidatesEl.textContent = "No matches found.";
+    restoreConfirmPanel();
     resetEpisodePicker();
   } else {
     candidates.forEach((candidate, index) => {
@@ -1626,7 +1792,9 @@ function renderCandidates(candidates) {
       input.type = "radio";
       input.name = "candidate_id";
       input.value = candidate.id;
-      if (index === 0) {
+      if (selectedId && candidate.id === selectedId) {
+        input.checked = true;
+      } else if (!selectedId && index === 0) {
         input.checked = true;
       }
 
@@ -1657,6 +1825,13 @@ function renderCandidates(candidates) {
       label.appendChild(meta);
       candidatesEl.appendChild(label);
     });
+    if (selectedId && !getSelectedCandidateId()) {
+      const firstInput = candidatesEl.querySelector("input[name='candidate_id']");
+      if (firstInput) {
+        firstInput.checked = true;
+      }
+    }
+    moveConfirmPanelToCandidate(getSelectedCandidateId());
     handleCandidateSelection();
   }
   resultsCard.hidden = false;
@@ -1676,35 +1851,9 @@ function getSelectedCandidateId() {
   return input ? input.value : null;
 }
 
-function updateEpisodePickerOffset() {
-  const picker = document.getElementById("episode-picker");
-  if (!picker) {
-    return;
-  }
-  const isWide = window.matchMedia("(min-width: 1024px)").matches;
-  if (!isWide || picker.hidden) {
-    picker.style.marginTop = "";
-    return;
-  }
-  const candidatesEl = document.getElementById("candidate-list");
-  const selectedInput = document.querySelector("input[name='candidate_id']:checked");
-  if (!candidatesEl || !selectedInput) {
-    picker.style.marginTop = "";
-    return;
-  }
-  const selectedLabel = selectedInput.closest(".candidate-option");
-  if (!selectedLabel) {
-    picker.style.marginTop = "";
-    return;
-  }
-  const listRect = candidatesEl.getBoundingClientRect();
-  const labelRect = selectedLabel.getBoundingClientRect();
-  const offset = Math.max(0, labelRect.top - listRect.top);
-  picker.style.marginTop = `${offset}px`;
-}
-
 async function handleCandidateSelection() {
   const candidate = getSelectedCandidate();
+  moveConfirmPanelToCandidate(getSelectedCandidateId());
   if (!candidate || candidate.media_type !== "tv") {
     resetEpisodePicker();
     return;
@@ -1715,7 +1864,6 @@ async function handleCandidateSelection() {
     const picker = document.getElementById("episode-picker");
     if (picker) {
       picker.hidden = false;
-      updateEpisodePickerOffset();
     }
     setMessage(
       "episode-message",
@@ -1735,7 +1883,6 @@ async function loadSeasons(tmdbId) {
     return;
   }
   picker.hidden = false;
-  updateEpisodePickerOffset();
   seasonSelect.disabled = true;
   episodeSelect.disabled = true;
   episodeSelect.innerHTML = "";
@@ -1837,6 +1984,20 @@ function getEpisodeSelection() {
   };
 }
 
+function clearConfirmInputs() {
+  const form = document.getElementById("confirm-form");
+  if (!form) {
+    return;
+  }
+  const watchedInput = form.querySelector("input[name='watched_at']");
+  if (watchedInput) {
+    watchedInput.value = "";
+  }
+  form.querySelectorAll(".rating-stars input[type='radio']").forEach((input) => {
+    input.checked = false;
+  });
+}
+
 async function handleLookupConfirm(data) {
   setMessage("confirm-message", "");
   if (!lookupState.candidates.length) {
@@ -1890,10 +2051,7 @@ async function handleLookupConfirm(data) {
       body: JSON.stringify(payload),
     });
     setMessage("confirm-message", "Watched saved.");
-    const confirmForm = document.getElementById("confirm-form");
-    if (confirmForm) {
-      confirmForm.reset();
-    }
+    clearConfirmInputs();
     await loadHistory();
   } catch (error) {
     setMessage("confirm-message", error.message, true);
@@ -5145,6 +5303,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindForm("confirm-form", handleLookupConfirm);
   bindForm("blacklist-lookup-form", handleBlacklistLookupSubmit);
   bindRatingClearControls();
+  bindLookupAutoSearch();
 
   const candidateList = document.getElementById("candidate-list");
   if (candidateList) {
@@ -5153,10 +5312,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         handleCandidateSelection();
       }
     });
-  }
-  const episodePicker = document.getElementById("episode-picker");
-  if (episodePicker) {
-    window.addEventListener("resize", () => updateEpisodePickerOffset());
   }
   const seasonSelect = document.getElementById("season-select");
   if (seasonSelect) {

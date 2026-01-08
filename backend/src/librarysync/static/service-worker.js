@@ -1,4 +1,5 @@
-const CACHE_NAME = "librarysync-v1";
+// Bump the cache to ensure updated assets (like app.js) are served after UI changes.
+const CACHE_NAME = "librarysync-v2";
 const CORE_ASSETS = [
   "/",
   "/login",
@@ -52,6 +53,21 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   if (url.pathname.startsWith("/api/")) {
+    return;
+  }
+  if (
+    url.pathname.startsWith("/static/app.js") ||
+    url.pathname.startsWith("/static/styles.css")
+  ) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return response;
+        })
+        .catch(() => caches.match(event.request)),
+    );
     return;
   }
 

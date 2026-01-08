@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from typing import AsyncIterator
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
@@ -19,6 +21,16 @@ DETAILS_ENRICH_LIMIT = 5
 LOCAL_SEARCH_LIMIT = 10
 LOCAL_PROVIDER = "local"
 LOOKUP_ENGINE = MetadataLookupEngine(detail_limit=DETAILS_ENRICH_LIMIT)
+
+
+async def _iter_completed(tasks: list[asyncio.Task]) -> AsyncIterator[asyncio.Task]:
+    iterator = asyncio.as_completed(tasks)
+    if hasattr(iterator, "__aiter__"):
+        async for task in iterator:
+            yield task
+    else:
+        for task in iterator:
+            yield task
 
 
 async def process_metadata_lookups_once(limit: int = 5) -> int:
@@ -65,7 +77,6 @@ async def _process_request(db: AsyncSession, request: MetadataLookupRequest) -> 
             )
             return
 
-        candidates: list[MediaCandidate] = []
         provider_names: list[str] = []
         errors: list[str] = []
         lookup_request = LookupRequest(
@@ -75,16 +86,8 @@ async def _process_request(db: AsyncSession, request: MetadataLookupRequest) -> 
         )
         for provider in providers:
             provider_names.append(provider.provider)
-            try:
-                provider_candidates = await LOOKUP_ENGINE.lookup(provider, lookup_request)
-            except Exception as exc:
-                errors.append(f"{provider.provider}: {exc}")
-                continue
-            if provider_candidates:
-                candidates.extend(provider_candidates)
         if local_candidates:
             provider_names.append(LOCAL_PROVIDER)
-            candidates.extend(local_candidates)
         request.providers = provider_names
 
         await db.execute(
@@ -92,10 +95,34 @@ async def _process_request(db: AsyncSession, request: MetadataLookupRequest) -> 
                 MetadataLookupCandidate.lookup_request_id == request.id
             )
         )
-        for idx, candidate in enumerate(candidates, start=1):
-            db.add(_candidate_to_model(request.id, candidate, idx))
 
-        if not candidates:
+        rank = 1
+        if local_candidates:
+            for candidate in local_candidates:
+                db.add(_candidate_to_model(request.id, candidate, rank))
+                rank += 1
+            await db.commit()
+
+        tasks: dict[asyncio.Task, str] = {}
+        for provider in providers:
+            task = asyncio.create_task(LOOKUP_ENGINE.lookup(provider, lookup_request))
+            tasks[task] = provider.provider
+
+        async for task in _iter_completed(list(tasks.keys())):
+            provider_name = tasks[task]
+            try:
+                provider_candidates = await task
+            except Exception as exc:
+                errors.append(f"{provider_name}: {exc}")
+                continue
+            if not provider_candidates:
+                continue
+            for candidate in provider_candidates:
+                db.add(_candidate_to_model(request.id, candidate, rank))
+                rank += 1
+            await db.commit()
+
+        if rank == 1:
             message = "No matches found"
             if errors:
                 message = f"{message}. Provider errors: {', '.join(errors)}"
