@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date, datetime
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,9 +88,7 @@ def _needs_anime_enrichment(media_item: MediaItem) -> bool:
     )
 
 
-async def _enrich_anime_metadata(
-    db: AsyncSession, user_id: str, media_item: MediaItem
-) -> None:
+async def _enrich_anime_metadata(db: AsyncSession, user_id: str, media_item: MediaItem) -> None:
     if not _needs_anime_enrichment(media_item):
         return
     if not media_item.title:
@@ -155,9 +154,7 @@ async def _find_anime_candidate(
     try:
         candidates = await provider.search(media_item.title, scope)
     except Exception as exc:
-        logger.warning(
-            "%s anime search failed for %s: %s", provider.provider, media_item.id, exc
-        )
+        logger.warning("%s anime search failed for %s: %s", provider.provider, media_item.id, exc)
         return None
     return _select_anime_candidate(candidates, media_item)
 
@@ -171,9 +168,7 @@ def _select_anime_candidate(
     if not target_key:
         return None
     matches = [
-        candidate
-        for candidate in candidates
-        if _normalize_title_key(candidate.title) == target_key
+        candidate for candidate in candidates if _normalize_title_key(candidate.title) == target_key
     ]
     if not matches:
         return None
@@ -286,18 +281,14 @@ async def _fetch_provider_candidate(
         try:
             return await provider.get_details(provider_id, scope)
         except Exception as exc:
-            logger.warning(
-                "%s details failed for %s: %s", provider.provider, media_item.id, exc
-            )
+            logger.warning("%s details failed for %s: %s", provider.provider, media_item.id, exc)
             return None
     if media_item.imdb_id:
         imdb_id = media_item.imdb_id.lower()
         try:
             candidates = await provider.find_by_external_id(imdb_id, scope)
         except Exception as exc:
-            logger.warning(
-                "%s lookup failed for %s: %s", provider.provider, media_item.id, exc
-            )
+            logger.warning("%s lookup failed for %s: %s", provider.provider, media_item.id, exc)
             return None
         return _select_candidate(candidates, scope)
     return None
@@ -314,6 +305,13 @@ async def _apply_candidate_to_media_item(
         media_item.poster_url = candidate.poster_url
     if media_item.year is None and candidate.year is not None:
         media_item.year = candidate.year
+
+    if not media_item.release_date and candidate.release_date:
+        media_item.release_date = _parse_date(candidate.release_date)
+    if not media_item.first_air_date and candidate.first_air_date:
+        media_item.first_air_date = _parse_date(candidate.first_air_date)
+    if not media_item.last_air_date and candidate.last_air_date:
+        media_item.last_air_date = _parse_date(candidate.last_air_date)
 
 
 async def _apply_anime_candidate(
@@ -343,9 +341,7 @@ async def _apply_episode_metadata(
     try:
         episodes = await provider.list_episodes(media_item.tmdb_id, episode_item.season_number)
     except Exception as exc:
-        logger.warning(
-            "%s episode lookup failed for %s: %s", provider.provider, media_item.id, exc
-        )
+        logger.warning("%s episode lookup failed for %s: %s", provider.provider, media_item.id, exc)
         return
     for summary in episodes:
         if summary.episode_number != episode_item.episode_number:
@@ -354,6 +350,8 @@ async def _apply_episode_metadata(
             episode_item.tmdb_id = summary.provider_id
         if summary.title and not episode_item.title:
             episode_item.title = summary.title
+        if summary.air_date and not episode_item.air_date:
+            episode_item.air_date = _parse_date(summary.air_date)
         break
 
 
@@ -478,9 +476,7 @@ def _extract_anime_candidate_ids(candidate: MediaCandidate) -> dict[str, str]:
     kitsu_id = _extract_raw_id(raw, ("kitsu_id", "kitsuId", "kitsuID"))
     if kitsu_id:
         ids.setdefault("kitsu_id", kitsu_id)
-    myanimelist_id = _extract_raw_id(
-        raw, ("myanimelist_id", "myanimelistId", "myanimelistID")
-    )
+    myanimelist_id = _extract_raw_id(raw, ("myanimelist_id", "myanimelistId", "myanimelistID"))
     if myanimelist_id:
         ids.setdefault("myanimelist_id", myanimelist_id)
     mal_id = _extract_raw_id(raw, ("mal_id", "malId", "malID"))
@@ -554,3 +550,12 @@ def _extract_tmdb_from_remote_ids(raw: dict) -> str | None:
             if tmdb_value:
                 return str(tmdb_value)
     return None
+
+
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None

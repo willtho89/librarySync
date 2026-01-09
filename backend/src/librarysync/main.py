@@ -17,6 +17,7 @@ from librarysync.api import (
     routes_integrations,
     routes_metadata,
     routes_settings,
+    routes_watchlist,
 )
 from librarysync.api.deps import get_optional_user
 from librarysync.config import settings
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_dashboard.router)
     app.include_router(routes_settings.router)
     app.include_router(routes_blacklist.router)
+    app.include_router(routes_watchlist.router)
     app.include_router(routes_admin.router)
 
     app_version = get_app_version()
@@ -249,6 +251,20 @@ def create_app() -> FastAPI:
             "history.html",
             page_title="History",
             active_page="history",
+            requires_auth=True,
+            current_user=current_user,
+        )
+
+    @app.get("/watchlist", include_in_schema=False)
+    async def watchlist(
+        request: Request,
+        current_user: User | None = Depends(get_optional_user),
+    ):
+        return _render_page(
+            request,
+            "watchlist.html",
+            page_title="Watchlist",
+            active_page="watchlist",
             requires_auth=True,
             current_user=current_user,
         )

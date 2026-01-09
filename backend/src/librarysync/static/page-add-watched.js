@@ -615,11 +615,48 @@ function bindRatingClearControls() {
   });
 }
 
+function bindWatchlistButton() {
+  const btn = document.getElementById("btn-add-watchlist");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    setMessage("confirm-message", "");
+    const candidate = getSelectedCandidate();
+    if (!candidate) {
+      setMessage("confirm-message", "Select a result to add.", true);
+      return;
+    }
+    const payload = buildHistoryPayload(candidate);
+    if (!hasHistoryIds(payload)) {
+      setMessage("confirm-message", "Selected result is missing external IDs.", true);
+      return;
+    }
+    
+    // Watchlist doesn't support episodes yet, only shows/movies
+    // If it's a TV show, we ignore episode selection for now and just add the show
+    
+    try {
+      setMessage("confirm-message", "Adding to watchlist...");
+      const res = await requestJSON("/api/watchlist/items", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (res.status === "already_exists") {
+        setMessage("confirm-message", "Item is already in your watchlist.");
+      } else {
+        setMessage("confirm-message", "Added to watchlist.");
+      }
+    } catch (error) {
+      setMessage("confirm-message", error.message, true);
+    }
+  });
+}
+
 window.librarysyncPageInit = () => {
   bindForm("lookup-form", handleLookupSubmit);
   bindForm("confirm-form", handleLookupConfirm);
   bindRatingClearControls();
   bindLookupAutoSearch();
+  bindWatchlistButton();
 
   const candidateList = document.getElementById("candidate-list");
   if (candidateList) {

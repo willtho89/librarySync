@@ -107,7 +107,10 @@
             <p class="text-sm text-muted">
               Review your selection. If no watch date is provided, the current time is used.
             </p>
-            <button class="btn btn-primary" type="submit">Confirm watched</button>
+            <div class="flex items-center gap-3">
+              <button class="btn btn-secondary" type="button" id="btn-add-watchlist">Add to Watchlist</button>
+              <button class="btn btn-primary" type="submit">Confirm watched</button>
+            </div>
           </div>
           <p id="confirm-message" class="form-message" role="status" hidden></p>
         </div>

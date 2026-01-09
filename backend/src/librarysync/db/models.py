@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Date,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -24,15 +25,11 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     username: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    include_adult_in_search: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
+    include_adult_in_search: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -49,9 +46,7 @@ class Integration(Base):
         UniqueConstraint("user_id", "provider", name="uq_integrations_user_provider"),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -71,14 +66,10 @@ class Integration(Base):
 class IntegrationSecret(Base):
     __tablename__ = "integration_secrets"
     __table_args__ = (
-        UniqueConstraint(
-            "integration_id", name="uq_integration_secrets_integration_id"
-        ),
+        UniqueConstraint("integration_id", name="uq_integration_secrets_integration_id"),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     integration_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("integrations.id", ondelete="CASCADE"), index=True
     )
@@ -100,12 +91,8 @@ class ScheduledJob(Base):
     next_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
-    last_run_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    lease_until: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -120,9 +107,7 @@ class ScheduledJob(Base):
 class MetadataLookupRequest(Base):
     __tablename__ = "metadata_lookup_requests"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -133,9 +118,7 @@ class MetadataLookupRequest(Base):
     providers: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     selected_candidate_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -149,9 +132,7 @@ class MetadataLookupRequest(Base):
 class MetadataLookupCandidate(Base):
     __tablename__ = "metadata_lookup_candidates"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     lookup_request_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey("metadata_lookup_requests.id", ondelete="CASCADE"),
@@ -187,9 +168,7 @@ class BlacklistItem(Base):
         Index("ix_blacklist_items_user_tvmaze_id", "user_id", "tvmaze_id"),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -215,9 +194,7 @@ class MediaItem(Base):
         UniqueConstraint("media_type", "tmdb_id", name="uq_media_items_tmdb_id_type"),
         UniqueConstraint("media_type", "tvdb_id", name="uq_media_items_tvdb_id_type"),
         UniqueConstraint("media_type", "kitsu_id", name="uq_media_items_kitsu_id_type"),
-        UniqueConstraint(
-            "media_type", "tvmaze_id", name="uq_media_items_tvmaze_id_type"
-        ),
+        UniqueConstraint("media_type", "tvmaze_id", name="uq_media_items_tvmaze_id_type"),
         UniqueConstraint(
             "media_type",
             "myanimelist_id",
@@ -230,9 +207,7 @@ class MediaItem(Base):
         ),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     media_type: Mapped[str] = mapped_column(String(32), default="movie")
     title: Mapped[str] = mapped_column(String(255))
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -240,14 +215,13 @@ class MediaItem(Base):
     tvdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     kitsu_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     tvmaze_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
-    myanimelist_id: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, index=True
-    )
-    anilist_id: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, index=True
-    )
+    myanimelist_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    anilist_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     poster_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    release_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    first_air_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    last_air_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -257,6 +231,7 @@ class MediaItem(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
 
 class EpisodeItem(Base):
     __tablename__ = "episode_items"
@@ -273,15 +248,14 @@ class EpisodeItem(Base):
         UniqueConstraint("imdb_id", name="uq_episode_items_imdb_id"),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     show_media_item_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("media_items.id", ondelete="CASCADE"), index=True
     )
     season_number: Mapped[int] = mapped_column(Integer)
     episode_number: Mapped[int] = mapped_column(Integer)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    air_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
     tmdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     tvdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     tvmaze_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
@@ -311,9 +285,7 @@ class WatchedItem(Base):
         ),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -353,9 +325,7 @@ class WatchEvent(Base):
         ),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -383,14 +353,10 @@ class WatchEvent(Base):
 class WatchSync(Base):
     __tablename__ = "watch_syncs"
     __table_args__ = (
-        UniqueConstraint(
-            "watched_item_id", "provider", name="uq_watch_syncs_watched_provider"
-        ),
+        UniqueConstraint("watched_item_id", "provider", name="uq_watch_syncs_watched_provider"),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -402,9 +368,40 @@ class WatchSync(Base):
     is_rewatch: Mapped[bool] = mapped_column(Boolean, default=False)
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_synced_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class WatchlistItem(Base):
+    __tablename__ = "watchlist_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "media_item_id",
+            name="uq_watchlist_items_user_media",
+        ),
+        Index("ix_watchlist_items_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    media_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("media_items.id", ondelete="CASCADE"), index=True
+    )
+    # type: movie, show
+    type: Mapped[str] = mapped_column(String(32))
+    # status: active, hidden, removed
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    source: Mapped[str] = mapped_column(String(32), default="manual")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -418,9 +415,7 @@ class WatchSync(Base):
 class ProgressEvent(Base):
     __tablename__ = "progress_events"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -449,9 +444,7 @@ class OutboxJob(Base):
         Index("ix_outbox_user_provider", "user_id", "target_provider"),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -459,9 +452,7 @@ class OutboxJob(Base):
     job_type: Mapped[str] = mapped_column(String(50))
     payload: Mapped[dict] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
-    run_after: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    run_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     dedupe_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -478,9 +469,7 @@ class OutboxJob(Base):
 class SyncAttempt(Base):
     __tablename__ = "sync_attempts"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     job_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("outbox.id", ondelete="CASCADE"), index=True
     )
@@ -502,17 +491,13 @@ class RateLimitBucket(Base):
         ),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     provider: Mapped[str] = mapped_column(String(32), index=True)
     tokens: Mapped[float] = mapped_column(Float, default=0.0)
-    last_refill_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    last_refill_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

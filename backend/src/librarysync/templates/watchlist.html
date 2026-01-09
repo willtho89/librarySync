@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="space-y-6">
+  <div class="history-toolbar-group">
+    <div class="card history-toolbar">
+      <div class="history-toolbar-row">
+        <label class="field min-w-[160px]">
+          <span>Status</span>
+          <select id="watchlist-status-filter" class="select">
+            <option value="active">Active</option>
+            <option value="waiting">Waiting</option>
+            <option value="watched">Watched</option>
+            <option value="all">All</option>
+          </select>
+        </label>
+        <label class="field min-w-[160px]">
+          <span>Watched items</span>
+          <select id="watchlist-watched-display" class="select" disabled>
+            <option value="hide">Hide</option>
+            <option value="overlay" selected>Overlay</option>
+            <option value="show">Show</option>
+          </select>
+        </label>
+        <label class="field min-w-[160px]">
+          <span>Type</span>
+          <select id="watchlist-type-filter" class="select">
+            <option value="all">All types</option>
+            <option value="movie">Movies</option>
+            <option value="tv">TV</option>
+            <option value="anime">Anime</option>
+          </select>
+        </label>
+        <label class="field min-w-[120px]">
+          <span>Per page</span>
+          <select id="watchlist-page-size" class="select">
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+      </div>
+      <div class="history-toolbar-actions">
+        <div class="flex flex-wrap items-center gap-3">
+          <button id="watchlist-page-prev" type="button" class="btn btn-ghost btn-sm">
+            Previous
+          </button>
+          <span id="watchlist-page-info" class="helper-text">Loading...</span>
+          <button id="watchlist-page-next" type="button" class="btn btn-ghost btn-sm">
+            Next
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <h2 class="section-title">Watchlist</h2>
+        <p class="section-subtitle">Track what you want to watch.</p>
+      </div>
+    </div>
+    <div id="watchlist-list" class="candidate-list">Loading...</div>
+  </div>
+</section>
+
+<div id="watchlist-bulk-bar" class="history-bulk-bar" data-bulk-bar>
+  <div class="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-4 px-4 py-3">
+    <label class="inline-control">
+      <input id="watchlist-select-all" type="checkbox" />
+      <span>Select all</span>
+    </label>
+    <button id="watchlist-delete-selected" type="button" class="btn btn-danger btn-sm" disabled>
+      Remove selected
+    </button>
+  </div>
+</div>
+
+<div id="metadata-modal" class="metadata-drawer" hidden>
+  <div class="metadata-backdrop" data-modal-close></div>
+  <div class="metadata-panel" role="dialog" aria-modal="true" aria-labelledby="metadata-title">
+    <header class="metadata-header">
+      <h2 id="metadata-title" class="section-title">Item metadata</h2>
+      <button type="button" class="btn btn-ghost btn-sm" data-modal-close>Close</button>
+    </header>
+    <div id="metadata-body" class="metadata-body"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ static_url('/static/watch-utils.js') }}" defer></script>
+  <script src="{{ static_url('/static/page-watchlist.js') }}" defer></script>
+{% endblock %}

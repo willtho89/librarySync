@@ -279,5 +279,11 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
             year=year,
             poster_url=poster_url,
             imdb_id=imdb_id,
+            release_date=raw.get("releaseDate") or raw.get("firstAired")
+            if normalized == MEDIA_TYPE_MOVIE
+            else None,
+            first_air_date=raw.get("firstAired") or raw.get("releaseDate")
+            if normalized == MEDIA_TYPE_TV
+            else None,
             raw=normalized_raw,
         )

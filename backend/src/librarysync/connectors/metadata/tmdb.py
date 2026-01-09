@@ -335,5 +335,8 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             year=year,
             poster_url=poster_url,
             imdb_id=imdb_id,
+            release_date=raw.get("release_date") if normalized_type == MEDIA_TYPE_MOVIE else None,
+            first_air_date=raw.get("first_air_date") if normalized_type == MEDIA_TYPE_TV else None,
+            last_air_date=raw.get("last_air_date") if normalized_type == MEDIA_TYPE_TV else None,
             raw=raw,
         )
