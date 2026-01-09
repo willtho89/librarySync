@@ -4,11 +4,12 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
+from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist_links import (
     parse_letterboxd_list_urls,
     parse_trakt_list_urls,
@@ -38,10 +39,12 @@ from librarysync.connectors.services.letterboxd import LetterboxdError
 from librarysync.connectors.services.simkl import SimklError
 from librarysync.connectors.services.trakt import TraktError
 from librarysync.db.models import (
+    EpisodeItem,
     Integration,
     MediaItem,
     User,
     WatchedItem,
+    WatchEvent,
     WatchlistItem,
     WatchlistSource,
     WatchlistSourceItem,
@@ -235,9 +238,7 @@ async def list_watchlist_sources_route(
             )
     if integrations:
         await db.commit()
-    sources = await list_watchlist_sources(
-        db, current_user.id, include_disabled=True
-    )
+    sources = await list_watchlist_sources(db, current_user.id, include_disabled=True)
     items = [
         WatchlistSourceOut(
             id=source.id,
@@ -268,9 +269,7 @@ async def add_watchlist_source(
     url = payload.url.strip()
     trakt_refs = parse_trakt_list_urls([url])
     letterboxd_refs = parse_letterboxd_list_urls([url]) if not trakt_refs else []
-    ref = trakt_refs[0] if trakt_refs else (
-        letterboxd_refs[0] if letterboxd_refs else None
-    )
+    ref = trakt_refs[0] if trakt_refs else (letterboxd_refs[0] if letterboxd_refs else None)
     if not ref:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -480,6 +479,8 @@ async def list_watchlist_items(
     offset: int = Query(0, ge=0),
     status: str | None = Query("all", description="Comma-separated list of statuses"),
     media_type: Literal["movie", "tv", "anime"] | None = Query(None),
+    search: str | None = Query(None, max_length=200),
+    source: str | None = Query(None, max_length=32),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -505,6 +506,42 @@ async def list_watchlist_items(
 
     if media_type:
         query = query.where(WatchlistItem.type == media_type)
+
+    if source:
+        normalized_source = source.strip().lower()
+        if normalized_source == "manual":
+            query = query.where(WatchlistItem.source == "manual")
+        elif normalized_source:
+            query = (
+                query.join(
+                    WatchlistSourceItem,
+                    WatchlistItem.id == WatchlistSourceItem.watchlist_item_id,
+                )
+                .join(
+                    WatchlistSource,
+                    WatchlistSourceItem.source_id == WatchlistSource.id,
+                )
+                .where(WatchlistSource.provider == normalized_source)
+                .distinct()
+            )
+
+    if search:
+        normalized_search = search.strip()
+        like_value = f"%{normalized_search}%"
+        search_clauses = [
+            MediaItem.title.ilike(like_value),
+            MediaItem.imdb_id.ilike(like_value),
+            MediaItem.tmdb_id.ilike(like_value),
+            MediaItem.tvdb_id.ilike(like_value),
+            MediaItem.tvmaze_id.ilike(like_value),
+            MediaItem.kitsu_id.ilike(like_value),
+            MediaItem.myanimelist_id.ilike(like_value),
+            MediaItem.anilist_id.ilike(like_value),
+        ]
+        if normalized_search.isdigit() and len(normalized_search) == 4:
+            year_value = int(normalized_search)
+            search_clauses.append(MediaItem.year == year_value)
+        query = query.where(or_(*search_clauses))
 
     total_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = int(total_result.scalar() or 0)
@@ -633,20 +670,168 @@ async def remove_watchlist_item(
     # But for "filter - remove from watchlist when watched", we might want soft delete or just delete.
     # The checklist item "Hard delete on remove" implies DELETE endpoint does hard delete.
 
-    await log_watchlist_event(
-        db, current_user.id, item.media_item_id, "watchlist_removed", {}
-    )
+    await log_watchlist_event(db, current_user.id, item.media_item_id, "watchlist_removed", {})
     media_item = None
     if item.media_item_id:
-        media_result = await db.execute(
-            select(MediaItem).where(MediaItem.id == item.media_item_id)
-        )
+        media_result = await db.execute(select(MediaItem).where(MediaItem.id == item.media_item_id))
         media_item = media_result.scalars().first()
     if media_item:
         await enqueue_personal_watchlist_removal(db, item, media_item)
     await db.delete(item)
     await db.commit()
     return {"status": "deleted"}
+
+
+@router.post(
+    "/items/{watchlist_id}/mark-watched",
+    summary="Mark watchlist item as watched",
+    description="Mark a movie as watched or the next episode of a show as watched.",
+)
+async def mark_watchlist_item_watched(
+    watchlist_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    # 1. Fetch watchlist item
+    result = await db.execute(
+        select(WatchlistItem, MediaItem)
+        .join(MediaItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.id == watchlist_id,
+            WatchlistItem.user_id == current_user.id,
+        )
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
+        )
+    watchlist_item, media_item = row
+
+    # 2. Determine target (Movie or Next Episode)
+    target_media = media_item
+    target_episode: EpisodeItem | None = None
+
+    if media_item.media_type == "tv":
+        # Logic to find next episode:
+        # a) Get all released episodes
+        now_date = datetime.now(timezone.utc).date()
+        episodes_result = await db.execute(
+            select(EpisodeItem)
+            .where(
+                EpisodeItem.show_media_item_id == media_item.id,
+                EpisodeItem.air_date != None,
+                EpisodeItem.air_date <= now_date,
+            )
+            .order_by(EpisodeItem.season_number, EpisodeItem.episode_number)
+        )
+        released_episodes = episodes_result.scalars().all()
+        if not released_episodes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No released episodes found for this show",
+            )
+
+        # b) Get watched episodes
+        watched_result = await db.execute(
+            select(WatchedItem.episode_item_id).where(
+                WatchedItem.user_id == current_user.id,
+                WatchedItem.media_item_id == None,
+                WatchedItem.episode_item_id.in_([e.id for e in released_episodes]),
+            )
+        )
+        watched_episode_ids = set(watched_result.scalars().all())
+
+        # c) Find first unwatched
+        for ep in released_episodes:
+            if ep.id not in watched_episode_ids:
+                target_episode = ep
+                break
+
+        if not target_episode:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="All released episodes are already watched",
+            )
+        target_media = None  # WatchedItem for episode links to episode_item_id, not media_item_id directly usually, or both?
+        # WatchedItem definition:
+        # CheckConstraint: (media_item_id IS NOT NULL AND episode_item_id IS NULL) OR (media_item_id IS NULL AND episode_item_id IS NOT NULL)
+        # So for episode, media_item_id must be NULL.
+
+    # 3. Create WatchedItem
+    # Check if rewatch (only for movies, shows handle individual eps)
+    is_rewatch = False
+    if media_item.media_type == "movie":
+        check_rewatch = await db.execute(
+            select(WatchedItem.id)
+            .where(
+                WatchedItem.user_id == current_user.id,
+                WatchedItem.media_item_id == media_item.id,
+            )
+            .limit(1)
+        )
+        is_rewatch = check_rewatch.scalars().first() is not None
+
+    watched_at = datetime.now(timezone.utc)
+    watched = WatchedItem(
+        user_id=current_user.id,
+        media_item_id=target_media.id if target_media else None,
+        episode_item_id=target_episode.id if target_episode else None,
+        watched_at=watched_at,
+        source="manual",
+    )
+
+    event_raw = {
+        "source": "manual",
+        "watchlist_id": watchlist_item.id,
+        "from_watchlist": True,
+    }
+    if is_rewatch:
+        event_raw["rewatch"] = True
+    if target_episode:
+        event_raw["episode"] = {
+            "season_number": target_episode.season_number,
+            "episode_number": target_episode.episode_number,
+            "title": target_episode.title,
+            "id": target_episode.id,
+        }
+
+    event = WatchEvent(
+        user_id=current_user.id,
+        media_item_id=target_media.id if target_media else None,
+        episode_item_id=target_episode.id if target_episode else None,
+        event_type="manual_watched",
+        occurred_at=watched_at,
+        raw=event_raw,
+    )
+
+    db.add_all([watched, event])
+    await db.flush()
+
+    # 4. Enqueue Jobs
+    await enqueue_new_item_job(
+        db,
+        current_user.id,
+        watched.id,
+        is_rewatch=is_rewatch,
+        source="manual",
+    )
+
+    # 5. Update Watchlist Status (Handled by background/hooks usually, but we can trigger check)
+    # The `enqueue_new_item_job` calls `process_new_item_job` which calls `check_and_update_watchlist`.
+    # So the status update should happen asynchronously.
+    # However, for immediate UI feedback, we might want to return the updated status?
+    # Or just return success.
+
+    await db.commit()
+
+    return {
+        "watched_id": watched.id,
+        "media_type": media_item.media_type,
+        "added_episode": f"S{target_episode.season_number}E{target_episode.episode_number}"
+        if target_episode
+        else None,
+    }
 
 
 async def _get_show_progress(db: AsyncSession, user_id: str, media_item_id: str) -> dict:

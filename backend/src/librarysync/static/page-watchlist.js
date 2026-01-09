@@ -5,8 +5,11 @@ const watchlistState = {
   filters: {
     status: "all",
     mediaType: "all",
+    source: "all",
+    search: "",
     watchedDisplay: "overlay", // hide, overlay, show
   },
+  searchTimer: null,
 };
 
 const watchlistSelectionState = {
@@ -46,6 +49,15 @@ function formatWatchlistSources(sources) {
   return sources.map((source) => formatWatchlistSourceLabel(source)).filter(Boolean);
 }
 
+function watchlistHasActiveFilters() {
+  return (
+    (watchlistState.filters.search && watchlistState.filters.search.trim()) ||
+    watchlistState.filters.status !== "all" ||
+    watchlistState.filters.mediaType !== "all" ||
+    watchlistState.filters.source !== "all"
+  );
+}
+
 function buildWatchlistQueryParams() {
   const params = new URLSearchParams();
   params.set("limit", String(watchlistState.pageSize));
@@ -68,6 +80,15 @@ function buildWatchlistQueryParams() {
   if (watchlistState.filters.mediaType !== "all") {
     params.set("media_type", watchlistState.filters.mediaType);
   }
+
+  if (watchlistState.filters.source !== "all") {
+    params.set("source", watchlistState.filters.source);
+  }
+
+  if (watchlistState.filters.search && watchlistState.filters.search.trim()) {
+    params.set("search", watchlistState.filters.search.trim());
+  }
+
   return params;
 }
 
@@ -80,11 +101,14 @@ function updateWatchlistPagination() {
   const info = document.getElementById("watchlist-page-info");
   const prev = document.getElementById("watchlist-page-prev");
   const next = document.getElementById("watchlist-page-next");
+  const clearFilters = document.getElementById("watchlist-filters-clear");
   const total = watchlistState.total;
   const totalPages = getWatchlistTotalPages(total);
   const label = total
     ? `Page ${watchlistState.page} of ${totalPages} · ${total} items`
-    : "No items found.";
+    : watchlistHasActiveFilters()
+      ? "No matches for your filters."
+      : "No items found.";
   if (info) {
     info.textContent = label;
   }
@@ -93,6 +117,9 @@ function updateWatchlistPagination() {
   }
   if (next) {
     next.disabled = watchlistState.page >= totalPages;
+  }
+  if (clearFilters) {
+    clearFilters.disabled = !watchlistHasActiveFilters();
   }
 }
 
@@ -153,6 +180,7 @@ async function loadWatchlist() {
   if (!container) {
     return;
   }
+  bindWatchlistUi();
   container.textContent = "Loading...";
   const params = buildWatchlistQueryParams();
   let data = null;
@@ -177,7 +205,9 @@ async function loadWatchlist() {
   resetWatchlistSelection(items);
   
   if (!items.length) {
-    container.textContent = "No watchlist items.";
+    container.textContent = watchlistHasActiveFilters()
+      ? "No watchlist items match your filters."
+      : "No watchlist items.";
     return;
   }
   
@@ -303,25 +333,83 @@ async function loadWatchlist() {
     menuPanel.setAttribute("role", "menu");
     menuPanel.setAttribute("data-menu-panel", "true");
 
+    // Add "Mark watched" button
+    let showMarkWatched = true;
+    let markWatchedLabel = "Mark watched";
+    
+    if (item.media_type === "tv") {
+        if (item.status === "watched" || item.status === "waiting") {
+            showMarkWatched = false; // Already fully watched
+        } else if (item.progress && item.progress.watched >= item.progress.total && item.progress.total > 0) {
+            showMarkWatched = false;
+        } else {
+            markWatchedLabel = "Mark next episode watched";
+        }
+    } else {
+        // Movies
+        if (item.status === "watched") {
+            markWatchedLabel = "Mark rewatched";
+        }
+    }
+
+    if (showMarkWatched) {
+        const markWatchedButton = document.createElement("button");
+        markWatchedButton.type = "button";
+        markWatchedButton.textContent = markWatchedLabel;
+        markWatchedButton.setAttribute("role", "menuitem");
+        markWatchedButton.addEventListener("click", async () => {
+            closeWatchlistMenus();
+            try {
+                const res = await requestJSON(`/api/watchlist/items/${item.id}/mark-watched`, {
+                    method: "POST",
+                });
+                let msg = "Marked as watched.";
+                if (res.added_episode) {
+                    msg = `Marked ${res.added_episode} as watched.`;
+                }
+                // Show a toast or just reload
+                // Using alert for now or simple reload
+                // Ideally a toast, but we have setMessage on history page, here we have no message container?
+                // Actually base template might not have one globally.
+                // We'll just reload the list to reflect status changes.
+                await loadWatchlist();
+            } catch (e) {
+                alert(e.message);
+            }
+        });
+        menuPanel.appendChild(markWatchedButton);
+    }
+
     const metadataButton = document.createElement("button");
     metadataButton.type = "button";
     metadataButton.textContent = "View metadata";
     metadataButton.setAttribute("role", "menuitem");
     metadataButton.addEventListener("click", () => {
         closeWatchlistMenus();
-        // Since item might not have all fields populated like history items
-        // We might need to construct a compatible object or just pass basic metadata if we had it
-        // The current item structure is WatchlistItemOut + Media details
-        // We'll create a fake "history item" structure for openMetadataModal if needed, or update openMetadataModal
-        // Actually page-history.js functions are available globally now if loaded in base.html or here.
-        // openMetadataModal expects item.metadata.
-        // Our WatchlistItemOut doesn't include 'metadata' structure fully.
-        // For now, let's just alert or skip metadata until we update the API to return full metadata object if needed.
-        // Wait, 'page-history.js' is loaded in 'watchlist.html' now.
-        // But 'openMetadataModal' expects specific structure.
-        // Let's implement a simplified metadata view or just show raw data for now?
-        // Actually, we can just skip this button for now or implement a basic alert with IDs.
-        alert(`External IDs:\nIMDb: ${item.imdb_id || 'N/A'}\nTMDB: ${item.tmdb_id || 'N/A'}\nTVDB: ${item.tvdb_id || 'N/A'}`);
+        // Construct metadata object for openMetadataModal
+        const modalItem = {
+            id: item.id,
+            title: item.title,
+            season_number: null,
+            episode_number: null,
+            imdb_id: item.imdb_id,
+            tmdb_id: item.tmdb_id,
+            tvdb_id: item.tvdb_id,
+            metadata: {
+                media_item_id: item.media_item_id,
+                ids: {
+                    imdb_id: item.imdb_id,
+                    tmdb_id: item.tmdb_id,
+                    tvdb_id: item.tvdb_id,
+                },
+                watched_created_at: item.created_at,
+                media_created_at: null, // Not available
+                media_updated_at: null, // Not available
+                first_sync_at: null,
+                last_sync_at: null
+            }
+        };
+        openMetadataModal(modalItem);
     });
 
     const deleteButton = document.createElement("button");
@@ -373,10 +461,41 @@ async function loadWatchlist() {
   });
 }
 
+let watchlistUiBound = false;
+
 function bindWatchlistUi() {
+    if (watchlistUiBound) {
+        return;
+    }
+
+    const modal = document.getElementById("metadata-modal");
+    if (modal) {
+        modal.querySelectorAll("[data-modal-close]").forEach((button) => {
+            button.addEventListener("click", closeMetadataModal);
+        });
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                closeMetadataModal();
+            }
+        });
+    }
+
+    const searchInput = document.getElementById("watchlist-search");
+    if (searchInput) {
+        searchInput.value = watchlistState.filters.search;
+        searchInput.addEventListener("input", () => {
+            watchlistState.filters.search = searchInput.value || "";
+            watchlistState.page = 1;
+            if (watchlistState.searchTimer) {
+                window.clearTimeout(watchlistState.searchTimer);
+            }
+            watchlistState.searchTimer = window.setTimeout(() => {
+                loadWatchlist();
+            }, 250);
+        });
+    }
+
     const statusSelect = document.getElementById("watchlist-status-filter");
-    const watchedDisplaySelect = document.getElementById("watchlist-watched-display");
-    
     if (statusSelect) {
         statusSelect.value = watchlistState.filters.status;
         statusSelect.addEventListener("change", () => {
@@ -386,6 +505,17 @@ function bindWatchlistUi() {
         });
     }
     
+    const sourceSelect = document.getElementById("watchlist-source-filter");
+    if (sourceSelect) {
+        sourceSelect.value = watchlistState.filters.source;
+        sourceSelect.addEventListener("change", () => {
+            watchlistState.filters.source = sourceSelect.value || "all";
+            watchlistState.page = 1;
+            loadWatchlist();
+        });
+    }
+
+    const watchedDisplaySelect = document.getElementById("watchlist-watched-display");
     if (watchedDisplaySelect) {
         watchedDisplaySelect.value = watchlistState.filters.watchedDisplay;
         watchedDisplaySelect.addEventListener("change", () => {
@@ -436,6 +566,27 @@ function bindWatchlistUi() {
         });
     }
 
+    const clearFilters = document.getElementById("watchlist-filters-clear");
+    if (clearFilters) {
+        clearFilters.addEventListener("click", () => {
+            watchlistState.filters.search = "";
+            watchlistState.filters.status = "all";
+            watchlistState.filters.source = "all";
+            watchlistState.filters.mediaType = "all";
+            watchlistState.page = 1;
+
+            if (searchInput) searchInput.value = "";
+            if (statusSelect) statusSelect.value = "all";
+            if (sourceSelect) sourceSelect.value = "all";
+            if (typeSelect) typeSelect.value = "all";
+            // Don't reset watchedDisplay as it's more of a view preference?
+            // History clears everything. Let's clear everything but maybe watchedDisplay?
+            // Actually history clears "Type" and "Source".
+            
+            loadWatchlist();
+        });
+    }
+
     const selectAll = document.getElementById("watchlist-select-all");
     if (selectAll) {
         selectAll.addEventListener("change", () => {
@@ -459,14 +610,7 @@ function bindWatchlistUi() {
             
             if (!confirm(`Remove ${selectedIds.length} items from watchlist?`)) return;
             
-            // We need a bulk delete endpoint really, but for now loop?
-            // Actually, best to add bulk delete endpoint.
-            // Checklist didn't strictly specify bulk delete endpoint but "DELETE /api/watchlist/items/{id}".
-            // We can do parallel requests or add the endpoint. 
-            // For robustness, let's just do parallel requests for now as v1 scope is small.
-            
             try {
-                // Ideally this should be a bulk endpoint
                 await Promise.all(selectedIds.map(id => 
                     requestJSON(`/api/watchlist/items/${id}`, { method: "DELETE" })
                 ));
@@ -484,12 +628,14 @@ function bindWatchlistUi() {
         }
         closeWatchlistMenus();
     });
+
+    watchlistUiBound = true;
 }
 
 window.librarysyncPageInit = async ({ user }) => {
   if (!user) {
     return;
   }
-  bindWatchlistUi();
+  // No need to load integrations for sync buttons as watchlist doesn't have them yet
   await loadWatchlist();
 };

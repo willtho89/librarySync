@@ -25,6 +25,14 @@ from librarysync.db.models import (
 )
 
 router = APIRouter(prefix="/api/history", tags=["history"])
+IMPORT_EVENT_PROVIDERS = {
+    "aiostreams",
+    "anilist",
+    "letterboxd",
+    "simkl",
+    "stremio",
+    "trakt",
+}
 
 
 class HistoryItemIds(BaseModel):
@@ -42,6 +50,11 @@ class HistoryEpisodeIds(BaseModel):
     tmdb_id: str | None = None
     tvdb_id: str | None = None
     tvmaze_id: str | None = None
+
+
+class ImportHistoryResetIn(BaseModel):
+    provider: str
+    include_blacklisted: bool = True
 
 
 class HistoryItemMetadata(BaseModel):
@@ -669,6 +682,42 @@ async def clear_watched_items(
     )
     await db.commit()
     return {"deleted": len(rows)}
+
+
+@router.post(
+    "/import-history/clear",
+    summary="Clear import history",
+    description="Delete import history events for a provider to allow re-importing.",
+)
+async def clear_import_history(
+    payload: ImportHistoryResetIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    provider = payload.provider.strip().lower()
+    if provider not in IMPORT_EVENT_PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported provider"
+        )
+    event_types = [f"{provider}_imported"]
+    if payload.include_blacklisted:
+        event_types.append(f"{provider}_blacklisted")
+    conditions = [
+        WatchEvent.user_id == current_user.id,
+        WatchEvent.event_type.in_(event_types),
+    ]
+    result = await db.execute(
+        select(func.count()).select_from(WatchEvent).where(*conditions)
+    )
+    count = int(result.scalar_one() or 0)
+    if count:
+        await db.execute(delete(WatchEvent).where(*conditions))
+        await db.commit()
+    return {
+        "deleted": count,
+        "provider": provider,
+        "event_types": event_types,
+    }
 
 
 @router.patch(

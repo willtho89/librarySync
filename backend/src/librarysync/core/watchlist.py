@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 WATCHLIST_IMPORT_KEY = "watchlist_import"
 
 
-def _is_future_date(value: datetime.date | None, now_date: datetime.date) -> bool:
+def _is_future_date(value: date | None, now_date: date) -> bool:
     return value is not None and value > now_date
 
 
@@ -29,11 +29,16 @@ def determine_movie_watchlist_status(
     media_item: MediaItem,
     *,
     has_watched: bool,
-    now_date: datetime.date,
+    now_date: date,
 ) -> str:
     if has_watched:
         return "watched"
-    if media_item.release_date is None or _is_future_date(media_item.release_date, now_date):
+    if media_item.release_date is not None:
+        if _is_future_date(media_item.release_date, now_date):
+            return "not_released"
+    elif media_item.year is not None and media_item.year <= now_date.year:
+        return "added"
+    elif media_item.release_date is None:
         return "not_released"
     return "added"
 
@@ -42,9 +47,9 @@ def determine_show_watchlist_status(
     *,
     total_released: int,
     watched_count: int,
-    first_air_date: datetime.date | None,
-    earliest_air_date: datetime.date | None,
-    now_date: datetime.date,
+    first_air_date: date | None,
+    earliest_air_date: date | None,
+    now_date: date,
 ) -> str:
     if total_released <= 0:
         if (
@@ -81,7 +86,7 @@ def parse_watchlist_import_config(config: dict | None) -> WatchlistImportConfig:
     )
 
 
-def _parse_air_date(value: str | None) -> datetime.date | None:
+def _parse_air_date(value: str | None) -> date | None:
     if not value:
         return None
     try:
@@ -187,11 +192,7 @@ async def backfill_show_episodes(
                 logger.warning("TMDB external ID lookup failed for %s: %s", media_item.id, exc)
             else:
                 candidate = next(
-                    (
-                        item
-                        for item in candidates
-                        if item.provider_id and item.media_type == "tv"
-                    ),
+                    (item for item in candidates if item.provider_id and item.media_type == "tv"),
                     None,
                 )
                 if candidate and candidate.provider_id:
@@ -384,13 +385,9 @@ async def find_media_item_by_ids(
     if ids.get("imdb_id"):
         clauses.append(MediaItem.imdb_id == ids["imdb_id"])
     if ids.get("tmdb_id"):
-        clauses.append(
-            (MediaItem.tmdb_id == ids["tmdb_id"]) & (MediaItem.media_type == media_type)
-        )
+        clauses.append((MediaItem.tmdb_id == ids["tmdb_id"]) & (MediaItem.media_type == media_type))
     if ids.get("tvdb_id"):
-        clauses.append(
-            (MediaItem.tvdb_id == ids["tvdb_id"]) & (MediaItem.media_type == media_type)
-        )
+        clauses.append((MediaItem.tvdb_id == ids["tvdb_id"]) & (MediaItem.media_type == media_type))
     if ids.get("tvmaze_id"):
         clauses.append(
             (MediaItem.tvmaze_id == ids["tvmaze_id"]) & (MediaItem.media_type == media_type)

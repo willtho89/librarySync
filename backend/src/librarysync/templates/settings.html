@@ -767,6 +767,38 @@
             </div>
             <p id="history-clear-message" class="form-message" role="status" hidden></p>
           </div>
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h3 class="section-title">Reset import history</h3>
+                <p class="section-subtitle">Allow a provider to re-import past entries.</p>
+              </div>
+            </div>
+            <form id="import-history-reset-form" class="space-y-4">
+              <label class="field">
+                <span>Provider</span>
+                <select class="select" name="provider" required>
+                  <option value="aiostreams">AIOStreams</option>
+                  <option value="trakt">Trakt</option>
+                  <option value="simkl">SIMKL</option>
+                  <option value="letterboxd">Letterboxd</option>
+                  <option value="stremio">Stremio</option>
+                  <option value="anilist">AniList</option>
+                </select>
+              </label>
+              <label class="inline-control">
+                <input type="checkbox" name="include_blacklisted" checked />
+                <span>Also clear blacklisted import events</span>
+              </label>
+              <p class="helper-text">
+                Use this if reimport says entries already exist even after clearing history.
+              </p>
+              <button class="btn btn-secondary btn-sm" type="submit">
+                Reset import history
+              </button>
+              <p id="import-history-reset-message" class="form-message" role="status" hidden></p>
+            </form>
+          </div>
         </div>
       </div>
     </div>

@@ -3,6 +3,17 @@
 {% block content %}
 <section class="space-y-6">
   <div class="history-toolbar-group">
+    <div class="history-search-bar">
+      <label class="field history-search-field">
+        <span>Search</span>
+        <input
+          id="watchlist-search"
+          class="input"
+          type="search"
+          placeholder="Title, ID, or year"
+        />
+      </label>
+    </div>
     <div class="card history-toolbar">
       <div class="history-toolbar-row">
         <label class="field min-w-[160px]">
@@ -14,6 +25,16 @@
             <option value="watched">Watched</option>
             <option value="not_released">Not released yet</option>
           </select>
+        </label>
+        <label class="field min-w-[160px]">
+           <span>Source</span>
+           <select id="watchlist-source-filter" class="select">
+             <option value="all">All sources</option>
+             <option value="manual">Manual</option>
+             <option value="trakt">Trakt</option>
+             <option value="simkl">SIMKL</option>
+             <option value="letterboxd">Letterboxd</option>
+           </select>
         </label>
         <label class="field min-w-[160px]">
           <span>Watched items</span>
@@ -51,6 +72,9 @@
             Next
           </button>
         </div>
+        <button id="watchlist-filters-clear" type="button" class="btn btn-secondary btn-sm">
+          Clear filters
+        </button>
       </div>
     </div>
   </div>
@@ -82,10 +106,10 @@
   <div class="metadata-backdrop" data-modal-close></div>
   <div class="metadata-panel" role="dialog" aria-modal="true" aria-labelledby="metadata-title">
     <header class="metadata-header">
-      <h2 id="metadata-title" class="section-title">Item metadata</h2>
+      <h2 id="metadata-title" class="section-title" data-modal-title>Item metadata</h2>
       <button type="button" class="btn btn-ghost btn-sm" data-modal-close>Close</button>
     </header>
-    <div id="metadata-body" class="metadata-body"></div>
+    <div id="metadata-body" class="metadata-body" data-modal-body></div>
   </div>
 </div>
 {% endblock %}

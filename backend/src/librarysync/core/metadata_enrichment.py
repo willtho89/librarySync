@@ -27,6 +27,7 @@ PREFERRED_POSTER_HOSTS = (
 )
 ANIME_PROVIDERS = ("myanimelist", "kitsu", "anilist")
 POSTER_PROVIDER_ORDER = ("tvdb", "tmdb", "imdb")
+TITLE_LOOKUP_PREFIXES = ("AIOStreams ", "Stremio ", "Trakt ", "SIMKL ", "Letterboxd ")
 
 
 async def enrich_watched_metadata(
@@ -56,6 +57,18 @@ async def enrich_watched_metadata(
         return
 
     candidate_map: dict[str, MediaCandidate] = {}
+    if _should_lookup_by_title(media_item):
+        candidate = await _lookup_by_title(media_item, tmdb, tvdb, imdb)
+        if candidate:
+            candidate_map[candidate.provider] = candidate
+            await _apply_candidate_to_media_item(db, media_item, candidate, update_poster=True)
+            if (
+                episode_item
+                and candidate.provider == "tmdb"
+                and isinstance(tmdb, EpisodeMetadataProvider)
+            ):
+                await _apply_episode_metadata(tmdb, media_item, episode_item)
+
     if tmdb:
         candidate = await _fetch_provider_candidate(tmdb, media_item, "tmdb_id")
         if candidate:
@@ -103,6 +116,79 @@ def _needs_media_enrichment(media_item: MediaItem, episode_item: EpisodeItem | N
         and not episode_item.tmdb_id
     )
     return missing_ids or poster_missing or missing_year or episode_needs_tmdb
+
+
+def _should_lookup_by_title(media_item: MediaItem) -> bool:
+    if media_item.imdb_id or media_item.tmdb_id or media_item.tvdb_id:
+        return False
+    if not media_item.title:
+        return False
+    return not media_item.title.startswith(TITLE_LOOKUP_PREFIXES)
+
+
+async def _lookup_by_title(
+    media_item: MediaItem,
+    tmdb: MetadataProvider | None,
+    tvdb: MetadataProvider | None,
+    imdb: MetadataProvider | None,
+) -> MediaCandidate | None:
+    scope = _scope_for_media_item(media_item)
+    if scope is None:
+        return None
+    queries = _build_lookup_queries(media_item.title, media_item.year)
+    for provider in (tmdb, tvdb, imdb):
+        if not provider or not provider.capabilities.supports_search:
+            continue
+        if not provider.supports_scope(scope):
+            continue
+        for query in queries:
+            try:
+                candidates = await provider.search(query, scope)
+            except Exception as exc:
+                logger.warning(
+                    "%s title search failed for %s: %s",
+                    provider.provider,
+                    media_item.id,
+                    exc,
+                )
+                continue
+            candidate = _select_title_candidate(candidates, media_item.title, media_item.year)
+            if candidate:
+                return candidate
+    return None
+
+
+def _build_lookup_queries(title: str, year: int | None) -> list[str]:
+    cleaned = title.strip()
+    if not cleaned:
+        return []
+    if year is None:
+        return [cleaned]
+    return [f"{cleaned} {year}", cleaned]
+
+
+def _select_title_candidate(
+    candidates: list[MediaCandidate],
+    title: str | None,
+    year: int | None,
+) -> MediaCandidate | None:
+    if not candidates or not title:
+        return None
+    title_key = _normalize_title_key(title)
+    if not title_key:
+        return None
+    title_matches = [
+        candidate
+        for candidate in candidates
+        if candidate.title and _normalize_title_key(candidate.title) == title_key
+    ]
+    if year is not None:
+        year_matches = [candidate for candidate in title_matches if candidate.year == year]
+        if year_matches:
+            return year_matches[0]
+    if title_matches:
+        return title_matches[0]
+    return None
 
 
 def _needs_anime_enrichment(media_item: MediaItem) -> bool:

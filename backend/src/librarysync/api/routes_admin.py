@@ -2,15 +2,24 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_admin_api_key, get_db
-from librarysync.db.models import OutboxJob, ScheduledJob
+from librarysync.db.models import OutboxJob, ScheduledJob, WatchEvent
 from librarysync.jobs.metadata_backfill import METADATA_BACKFILL_JOB
 from librarysync.jobs.watchlist_refresh import WATCHLIST_REFRESH_JOB
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+IMPORT_EVENT_PROVIDERS = {
+    "aiostreams",
+    "anilist",
+    "letterboxd",
+    "simkl",
+    "stremio",
+    "trakt",
+}
 
 
 @router.post(
@@ -206,5 +215,72 @@ async def schedule_watchlist_refresh(
         {
             "message": "Watchlist refresh scheduled",
             "next_run_at": job.next_run_at.isoformat() if job.next_run_at else None,
+        }
+    )
+
+
+@router.delete(
+    "/import-history",
+    summary="Reset import history",
+    description="Delete import history events for a provider to allow re-importing.",
+)
+async def reset_import_history(
+    provider: str = Query(..., description="Import provider (e.g., aiostreams)"),
+    user_id: str | None = Query(
+        None,
+        description="Optional user id to scope the reset. Omit to reset all users.",
+    ),
+    include_blacklisted: bool = Query(
+        True,
+        description="Also delete provider_blacklisted events.",
+    ),
+    dry_run: bool = Query(False, description="If true, return count without deleting"),
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_admin_api_key),
+) -> JSONResponse:
+    normalized = provider.strip().lower()
+    if normalized not in IMPORT_EVENT_PROVIDERS:
+        return JSONResponse(
+            {
+                "message": "Unsupported provider",
+                "deleted": 0,
+                "provider": normalized,
+            },
+            status_code=400,
+        )
+    event_types = [f"{normalized}_imported"]
+    if include_blacklisted:
+        event_types.append(f"{normalized}_blacklisted")
+    conditions = [WatchEvent.event_type.in_(event_types)]
+    if user_id:
+        conditions.append(WatchEvent.user_id == user_id)
+
+    count_result = await db.execute(
+        select(func.count()).select_from(WatchEvent).where(*conditions)
+    )
+    count = int(count_result.scalar_one() or 0)
+    if dry_run:
+        return JSONResponse(
+            {
+                "message": "Dry run: would delete import history",
+                "deleted": 0,
+                "provider": normalized,
+                "user_id": user_id,
+                "event_types": event_types,
+                "match_count": count,
+            }
+        )
+
+    if count:
+        await db.execute(delete(WatchEvent).where(*conditions))
+        await db.commit()
+
+    return JSONResponse(
+        {
+            "message": "Import history reset",
+            "deleted": count,
+            "provider": normalized,
+            "user_id": user_id,
+            "event_types": event_types,
         }
     )

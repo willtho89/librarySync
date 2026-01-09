@@ -1567,6 +1567,30 @@ async function handleAniListProviderSave(data) {
   }
 }
 
+async function handleImportHistoryReset(data) {
+  setMessage("import-history-reset-message", "");
+  const provider = data.get("provider");
+  if (!provider) {
+    setMessage("import-history-reset-message", "Choose a provider.", true);
+    return;
+  }
+  const include_blacklisted = data.get("include_blacklisted") === "on";
+  const payload = { provider, include_blacklisted };
+  try {
+    const result = await requestJSON("/api/history/import-history/clear", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const deleted = result.deleted ?? 0;
+    setMessage(
+      "import-history-reset-message",
+      `Cleared ${deleted} import events for ${provider}.`
+    );
+  } catch (error) {
+    setMessage("import-history-reset-message", error.message, true);
+  }
+}
+
 function bindHistoryClear() {
   const openButton = document.getElementById("history-clear-open");
   const modal = document.getElementById("history-clear-modal");
@@ -1675,6 +1699,7 @@ window.librarysyncPageInit = async ({ user }) => {
   bindForm("kitsu-form", handleKitsuSave);
   bindForm("myanimelist-form", handleMyAnimeListSave);
   bindForm("anilist-provider-form", handleAniListProviderSave);
+  bindForm("import-history-reset-form", handleImportHistoryReset);
   bindHistoryClear();
   bindWatchlistSourceActions();
 

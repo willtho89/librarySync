@@ -42,6 +42,8 @@ IMDB_ID_RE = re.compile(r"(tt\d{3,10})", re.IGNORECASE)
 TMDB_ID_RE = re.compile(r"tmdb[:/](\d+)", re.IGNORECASE)
 TVDB_ID_RE = re.compile(r"tvdb[:/](\d+)", re.IGNORECASE)
 YEAR_RE = re.compile(r"(19\d{2}|20\d{2})")
+SEASON_EPISODE_RE = re.compile(r"[Ss](\d{1,2})[ ._-]?[Ee](\d{1,3})")
+SEASON_EPISODE_ALT_RE = re.compile(r"(\d{1,2})x(\d{1,3})", re.IGNORECASE)
 LOOKUP_ENGINE = MetadataLookupEngine(detail_limit=5)
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,7 @@ async def _import_for_integration(
     lookback_days: int,
     now: datetime,
 ) -> ImportResult:
+    debug_prefix = f"AIOStreams user {integration.user_id}"
     integration, secret_data = await load_integration_with_secrets(
         db, integration.user_id, "aiostreams"
     )
@@ -110,6 +113,7 @@ async def _import_for_integration(
         return ImportResult(imported=0, attempted=False)
     client = AIOStreamsClient(api_base_url=api_base_url)
     username = _extract_username(integration, auth)
+    logger.info("%s import starting (username=%s)", debug_prefix, username or "auto")
 
     try:
         stats = await client.get_stats(auth)
@@ -122,6 +126,7 @@ async def _import_for_integration(
         return ImportResult(imported=0, attempted=True)
 
     entries = _collect_entries(stats, username)
+    logger.info("%s stats returned %s entries", debug_prefix, len(entries))
     if not entries:
         return ImportResult(imported=0, attempted=True)
 
@@ -129,17 +134,31 @@ async def _import_for_integration(
 
     parsed_entries: list[ParsedEntry] = []
     entry_keys: list[str] = []
+    dropped_unparsed = 0
+    dropped_lookback = 0
+    dropped_threshold = 0
     for entry in entries:
         parsed = _parse_entry(entry)
         if not parsed:
+            dropped_unparsed += 1
             continue
         if since and parsed.watched_at < since:
+            dropped_lookback += 1
             continue
         if not _passes_watch_threshold(parsed):
+            dropped_threshold += 1
             continue
         parsed_entries.append(parsed)
         entry_keys.append(parsed.entry_key)
 
+    logger.info(
+        "%s parsed=%s dropped_unparsed=%s dropped_lookback=%s dropped_threshold=%s",
+        debug_prefix,
+        len(parsed_entries),
+        dropped_unparsed,
+        dropped_lookback,
+        dropped_threshold,
+    )
     if not parsed_entries:
         return ImportResult(imported=0, attempted=True)
 
@@ -156,11 +175,18 @@ async def _import_for_integration(
         entry_keys,
     )
     seen_keys: set[str] = set()
+    skipped_existing = 0
+    skipped_seen = 0
+    skipped_build = 0
     imported = 0
     providers = await _load_lookup_providers(db, integration.user_id, parsed_entries)
     candidates: list[ImportCandidate] = []
     for parsed in parsed_entries:
         if parsed.entry_key in existing_keys or parsed.entry_key in seen_keys:
+            if parsed.entry_key in existing_keys:
+                skipped_existing += 1
+            else:
+                skipped_seen += 1
             continue
         seen_keys.add(parsed.entry_key)
         candidate = await _build_candidate(
@@ -171,6 +197,16 @@ async def _import_for_integration(
         )
         if candidate:
             candidates.append(candidate)
+        else:
+            skipped_build += 1
+    logger.info(
+        "%s candidates=%s skipped_existing=%s skipped_seen=%s skipped_build=%s",
+        debug_prefix,
+        len(candidates),
+        skipped_existing,
+        skipped_seen,
+        skipped_build,
+    )
     imported += await process_import_candidates(
         db,
         integration.user_id,
@@ -180,6 +216,7 @@ async def _import_for_integration(
         existing_entry_keys=existing_keys,
         existing_blacklist_keys=existing_blacklist_keys,
     )
+    logger.info("%s imported=%s", debug_prefix, imported)
     if imported:
         logger.info(
             "Imported %s AIOStreams entries for user %s",
@@ -251,14 +288,17 @@ def _collect_entries(
     stats: dict[str, Any], username: str | None
 ) -> list[dict[str, Any]]:
     users = stats.get("users")
-    if not isinstance(users, dict):
-        return []
-    selected_user = None
-    if username and username in users:
-        selected_user = users.get(username)
-    if selected_user is None and users:
-        selected_user = next(iter(users.values()), None)
-    if not isinstance(selected_user, dict):
+    if isinstance(users, dict):
+        selected_user = None
+        if username and username in users:
+            selected_user = users.get(username)
+        if selected_user is None and users:
+            selected_user = next(iter(users.values()), None)
+        if not isinstance(selected_user, dict):
+            return []
+    elif isinstance(stats, dict):
+        selected_user = stats
+    else:
         return []
     active = selected_user.get("active")
     history = selected_user.get("history")
@@ -580,8 +620,21 @@ def _extract_filename_details(
         season_number, episode_number = _extract_parsett_season_episode(parsed)
         title = _clean_title(_coerce_str(parsed.get("title")) or "")
         year = _coerce_int(parsed.get("year"))
+        if season_number is not None and episode_number is not None:
+            return season_number, episode_number, title, year
+        fallback_season, fallback_episode, fallback_title = _extract_season_episode_from_text(base)
+        if fallback_season is not None and fallback_episode is not None:
+            return (
+                fallback_season,
+                fallback_episode,
+                fallback_title or title,
+                year,
+            )
         return season_number, episode_number, title, year
-    return None, None, None, None
+    season_number, episode_number, title = _extract_season_episode_from_text(base)
+    if season_number is None or episode_number is None:
+        return None, None, None, None
+    return season_number, episode_number, title, None
 
 
 def _strip_extension(filename: str) -> str:
@@ -601,6 +654,20 @@ def _extract_parsett_season_episode(parsed: dict[str, Any]) -> tuple[int | None,
                 season_number = season_number or _first_int(episode_parsed.get("seasons"))
                 episode_number = episode_number or _first_int(episode_parsed.get("episodes"))
     return season_number, episode_number
+
+
+def _extract_season_episode_from_text(
+    value: str,
+) -> tuple[int | None, int | None, str | None]:
+    for regex in (SEASON_EPISODE_RE, SEASON_EPISODE_ALT_RE):
+        match = regex.search(value)
+        if not match:
+            continue
+        season_number = _coerce_int(match.group(1))
+        episode_number = _coerce_int(match.group(2))
+        title = _clean_title(value[: match.start()])
+        return season_number, episode_number, title
+    return None, None, None
 
 
 def _first_int(value: object) -> int | None:
