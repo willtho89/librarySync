@@ -7,7 +7,9 @@
       <div>
         <h2 class="section-title">Find a title</h2>
         <p class="section-subtitle">Search by name, IMDb, TMDB, or other provider ID.</p>
-        <p class="helper-text">Search starts as you type and reuses recent matches.</p>
+        <p class="helper-text">
+          Search starts in your library as you type. Use external providers for more results.
+        </p>
       </div>
     </div>
     <form id="lookup-form" class="grid gap-4 md:grid-cols-3">
@@ -46,6 +48,14 @@
     </div>
     <form id="confirm-form" class="space-y-6">
       <div id="candidate-list" class="candidate-list"></div>
+      <div id="lookup-actions" class="flex flex-wrap items-center gap-3" hidden>
+        <button class="btn btn-secondary" type="button" id="btn-load-more">
+          Load more from library
+        </button>
+        <button class="btn btn-secondary" type="button" id="btn-search-external">
+          Search external providers
+        </button>
+      </div>
       <div id="confirm-panel" class="space-y-6" hidden>
         <div id="episode-picker" class="episode-picker" hidden>
           <h3 class="text-base font-display">Episode picker</h3>

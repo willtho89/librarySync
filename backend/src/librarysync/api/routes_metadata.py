@@ -2,7 +2,7 @@ import re
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -92,6 +92,15 @@ class LookupStatusOut(BaseModel):
     query: str
     query_type: str
     search_scope: str
+    candidates: list[CandidateOut]
+
+
+class LocalLookupOut(BaseModel):
+    query: str
+    search_scope: str
+    offset: int
+    limit: int
+    has_more: bool
     candidates: list[CandidateOut]
 
 
@@ -397,6 +406,26 @@ def _candidate_group_to_out(group: dict) -> CandidateOut:
     )
 
 
+def _media_item_to_candidate_out(item: MediaItem) -> CandidateOut:
+    return CandidateOut(
+        id=item.id,
+        provider="local",
+        provider_item_id=item.id,
+        providers=["local"],
+        media_type=item.media_type,
+        title=item.title,
+        year=item.year,
+        poster_url=item.poster_url,
+        imdb_id=item.imdb_id,
+        tmdb_id=item.tmdb_id,
+        tvdb_id=item.tvdb_id,
+        tvmaze_id=item.tvmaze_id,
+        kitsu_id=item.kitsu_id,
+        myanimelist_id=item.myanimelist_id,
+        anilist_id=item.anilist_id,
+    )
+
+
 def _apply_candidate_ids(item: MediaItem, ids: dict[str, str]) -> None:
     if ids.get("imdb_id") and not item.imdb_id:
         item.imdb_id = ids["imdb_id"]
@@ -420,7 +449,7 @@ def _apply_candidate_ids(item: MediaItem, ids: dict[str, str]) -> None:
     description="Return metadata provider status and stored settings for the user.",
 )
 async def list_providers(
-    current_user: User = Depends(get_current_user),
+    _current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
@@ -786,6 +815,59 @@ async def create_lookup(
     await db.commit()
     await db.refresh(request)
     return LookupCreateOut(lookup_id=request.id, status=request.status)
+
+
+@router.get(
+    "/lookup/local",
+    response_model=LocalLookupOut,
+    summary="Search local metadata",
+    description="Search the local library cache before querying external providers.",
+)
+async def lookup_local(
+    query: str = Query(..., min_length=1, max_length=255),
+    search_scope: Literal["all", "movie", "tv", "anime"] = "all",
+    offset: int = Query(0, ge=0, le=10_000),
+    limit: int = Query(8, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LocalLookupOut:
+    normalized = query.strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query is required",
+        )
+    query_type, normalized = _classify_query(normalized)
+    criteria = []
+    if search_scope != "all":
+        criteria.append(MediaItem.media_type == search_scope)
+    if query_type == "imdb":
+        criteria.append(MediaItem.imdb_id == normalized)
+    elif query_type == "tmdb":
+        criteria.append(MediaItem.tmdb_id == normalized)
+    else:
+        criteria.append(MediaItem.title.ilike(f"%{normalized}%"))
+
+    result = await db.execute(
+        select(MediaItem)
+        .where(*criteria)
+        .order_by(MediaItem.year.desc(), MediaItem.title)
+        .offset(offset)
+        .limit(limit + 1)
+    )
+    items = result.scalars().all()
+    has_more = len(items) > limit
+    if has_more:
+        items = items[:limit]
+    candidates = [_media_item_to_candidate_out(item) for item in items]
+    return LocalLookupOut(
+        query=normalized,
+        search_scope=search_scope,
+        offset=offset,
+        limit=limit,
+        has_more=has_more,
+        candidates=candidates,
+    )
 
 
 @router.get(
