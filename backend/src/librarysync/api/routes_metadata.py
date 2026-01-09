@@ -6,7 +6,7 @@ from typing import Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
@@ -34,6 +34,8 @@ from librarysync.db.models import (
     MetadataLookupCandidate,
     MetadataLookupRequest,
     User,
+    WatchedItem,
+    WatchlistItem,
 )
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
@@ -857,10 +859,43 @@ async def lookup_local(
     else:
         criteria.append(MediaItem.title.ilike(f"%{normalized}%"))
 
+    watch_counts = (
+        select(
+            WatchedItem.media_item_id.label("media_item_id"),
+            func.count(WatchedItem.id).label("watch_count"),
+        )
+        .where(
+            WatchedItem.user_id == current_user.id,
+            WatchedItem.media_item_id.is_not(None),
+        )
+        .group_by(WatchedItem.media_item_id)
+        .subquery()
+    )
+    watchlist_counts = (
+        select(
+            WatchlistItem.media_item_id.label("media_item_id"),
+            func.count(WatchlistItem.id).label("watchlist_count"),
+        )
+        .where(
+            WatchlistItem.user_id == current_user.id,
+            WatchlistItem.media_item_id.is_not(None),
+            WatchlistItem.status != "removed",
+        )
+        .group_by(WatchlistItem.media_item_id)
+        .subquery()
+    )
+    interaction_count = (
+        func.coalesce(watch_counts.c.watch_count, 0)
+        + func.coalesce(watchlist_counts.c.watchlist_count, 0)
+    ).label("interaction_count")
     result = await db.execute(
         select(MediaItem)
+        .outerjoin(watch_counts, watch_counts.c.media_item_id == MediaItem.id)
+        .outerjoin(watchlist_counts, watchlist_counts.c.media_item_id == MediaItem.id)
         .where(*criteria)
-        .order_by(MediaItem.year.desc(), MediaItem.title)
+        .order_by(
+            interaction_count.desc(), MediaItem.year.desc(), MediaItem.title
+        )
         .offset(offset)
         .limit(limit + 1)
     )

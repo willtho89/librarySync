@@ -60,9 +60,10 @@ All defaults below are from `.env.example`.
 
 ### Worker Modes
 - `LIBRARYSYNC_WORKER_MODES` (default `all`): comma-separated list of worker loops.
-  Options: `outbox`, `metadata`, `quick_import`, `import_all`.
+  Options: `outbox`, `metadata`, `metadata_cache`, `quick_import`, `import_all`, `watchlist`.
 - `LIBRARYSYNC_WORKER_OUTBOX_CONCURRENCY` (default `1`): outbox loop concurrency.
 - `LIBRARYSYNC_WORKER_METADATA_CONCURRENCY` (default `1`): metadata loop concurrency.
+- `LIBRARYSYNC_WORKER_METADATA_CACHE_CONCURRENCY` (default `1`): metadata cache loop concurrency.
 - `LIBRARYSYNC_WORKER_QUICK_IMPORT_CONCURRENCY` (default `1`): quick import loop concurrency.
 - `LIBRARYSYNC_WORKER_IMPORT_ALL_CONCURRENCY` (default `1`): import-all loop concurrency.
 
@@ -103,6 +104,9 @@ Example values (replace `example.com` with your domain):
    `cd worker && uv run python -m librarysync_worker.main`
 5. Lint:
    `uv run ruff check ./backend/ ./worker/`
+
+If you’re using `docker compose` with the `scaled-workers` profile, `worker-metadata-cache`
+is now available and will run the metadata cache loop (`LIBRARYSYNC_WORKER_MODES=metadata_cache`).
 
 ## Static File Cache Invalidation
 

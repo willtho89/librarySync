@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from librarysync.api.deps import get_admin_api_key, get_db
 from librarysync.db.models import OutboxJob, ScheduledJob, WatchEvent
 from librarysync.jobs.metadata_backfill import METADATA_BACKFILL_JOB
+from librarysync.jobs.metadata_cache import METADATA_CACHE_JOB
 from librarysync.jobs.watchlist_refresh import WATCHLIST_REFRESH_JOB
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -214,6 +215,37 @@ async def schedule_watchlist_refresh(
     return JSONResponse(
         {
             "message": "Watchlist refresh scheduled",
+            "next_run_at": job.next_run_at.isoformat() if job.next_run_at else None,
+        }
+    )
+
+
+@router.post(
+    "/metadata-cache",
+    summary="Schedule metadata cache refresh",
+    description="Schedule the metadata cache refresh job to run immediately.",
+)
+async def schedule_metadata_cache(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_admin_api_key),
+) -> JSONResponse:
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(ScheduledJob).where(ScheduledJob.name == METADATA_CACHE_JOB)
+    )
+    job = result.scalars().first()
+    if not job:
+        job = ScheduledJob(name=METADATA_CACHE_JOB, next_run_at=now)
+        db.add(job)
+    else:
+        job.next_run_at = now
+        job.lease_until = None
+        job.lease_owner = None
+        job.updated_at = now
+    await db.commit()
+    return JSONResponse(
+        {
+            "message": "Metadata cache refresh scheduled",
             "next_run_at": job.next_run_at.isoformat() if job.next_run_at else None,
         }
     )

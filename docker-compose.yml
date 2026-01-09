@@ -91,5 +91,11 @@ services:
     environment:
       LIBRARYSYNC_WORKER_MODES: watchlist
 
+  worker-metadata-cache:
+    <<: *worker-base
+    profiles: ["scaled-workers"]
+    environment:
+      LIBRARYSYNC_WORKER_MODES: metadata_cache
+
 volumes:
   pgdata:

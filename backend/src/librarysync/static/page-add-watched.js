@@ -245,10 +245,16 @@ async function startLocalLookup(query, searchScope, options = {}) {
   const cached = readLocalCache(cacheKey);
   const cacheFresh = cached && cached.ageMs < 2 * 60 * 1000;
   if (cached) {
-    lookupState.localOffset = cached.offset + cached.candidates.length;
+    const cachedCandidates = cached.candidates || [];
+    const cachedOffset =
+      typeof cached.offset === "number" ? cached.offset : 0;
+    lookupState.localOffset = cachedOffset + cachedCandidates.length;
     lookupState.hasMoreLocal = cached.hasMore;
-    renderCandidates(cached.candidates || []);
+    renderCandidates(cachedCandidates);
     if (cacheFresh && !force) {
+      if (!cachedCandidates.length) {
+        triggerExternalLookupIfNeeded(query, searchScope);
+      }
       setMessage("lookup-message", "");
       return;
     }
@@ -272,6 +278,9 @@ async function startLocalLookup(query, searchScope, options = {}) {
     lookupState.localOffset = candidates.length;
     lookupState.hasMoreLocal = Boolean(response.has_more);
     renderCandidates(candidates);
+    if (!candidates.length) {
+      triggerExternalLookupIfNeeded(query, searchScope);
+    }
     writeLocalCache(cacheKey, {
       candidates,
       hasMore: lookupState.hasMoreLocal,
@@ -321,6 +330,17 @@ async function startExternalLookup(query, searchScope, options = {}) {
     updateLookupActions();
     setMessage("lookup-message", error.message, true);
   }
+}
+
+function triggerExternalLookupIfNeeded(query, searchScope) {
+  const normalized = normalizeLookupQuery(query);
+  if (!normalized) {
+    return;
+  }
+  if (lookupState.externalLoaded || lookupState.externalPending) {
+    return;
+  }
+  void startExternalLookup(query, searchScope, { force: true });
 }
 
 async function handleLookupSubmit(data) {
