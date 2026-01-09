@@ -80,10 +80,10 @@ def load_settings() -> Settings:
             (_get_env("LIBRARYSYNC_ENABLE_DASHBOARD_STATS", "true") or "true").lower() == "true"
         ),
         trakt_max_batch_size=int(
-            _get_env("LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE", "10000") or "10000"
+            _get_env("LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE", "750") or "750"
         ),
         simkl_max_batch_size=int(
-            _get_env("LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE", "1000") or "1000"
+            _get_env("LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE", "750") or "750"
         ),
     )
 

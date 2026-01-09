@@ -241,8 +241,8 @@ librarySync/
 - `LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE`
 - `LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE`
 - `LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE`
-- `LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE` (default 10000): Maximum items per Trakt batch request
-- `LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE` (default 1000): Maximum items per SIMKL batch request
+- `LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE` (default 750): Maximum items per Trakt batch request
+- `LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE` (default 750): Maximum items per SIMKL batch request
 
 ---
 

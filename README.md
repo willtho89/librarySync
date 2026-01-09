@@ -73,8 +73,8 @@ All defaults below are from `.env.example`.
 - `LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE` (default `120`).
 
 ### Batch Sizes (for batch-capable providers)
-- `LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE` (default `10000`): Maximum number of items per Trakt batch request.
-- `LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE` (default `1000`): Maximum number of items per SIMKL batch request (limited by 20MB POST size).
+- `LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE` (default `750`): Maximum number of items per Trakt batch request.
+- `LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE` (default `750`): Maximum number of items per SIMKL batch request (limited by 20MB POST size).
 
 ## Integrations
 

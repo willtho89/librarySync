@@ -23,15 +23,15 @@ class TestBatchSizeLimits(unittest.TestCase):
         """Test that Trakt batch size is retrieved correctly."""
         size = _get_provider_max_batch_size("trakt")
         self.assertGreater(size, 0)
-        # Should be default 10000 or configured value
-        self.assertGreaterEqual(size, 1000)
+        # Should be default 750 or configured value
+        self.assertGreaterEqual(size, 750)
 
     def test_get_provider_max_batch_size_simkl(self):
         """Test that SIMKL batch size is retrieved correctly."""
         size = _get_provider_max_batch_size("simkl")
         self.assertGreater(size, 0)
-        # Should be default 1000 or configured value
-        self.assertGreaterEqual(size, 100)
+        # Should be default 750 or configured value
+        self.assertGreaterEqual(size, 750)
 
     def test_get_provider_max_batch_size_unknown(self):
         """Test that unknown provider returns default batch size."""
@@ -71,17 +71,19 @@ class TestBatchSizeLimits(unittest.TestCase):
         """Test chunking with large dataset simulating 50k episodes."""
         jobs = [_create_mock_job(i) for i in range(50000)]
 
-        # Test with SIMKL batch size (1000)
-        chunks = _chunk_jobs(jobs, 1000)
-        self.assertEqual(len(chunks), 50)
-        for chunk in chunks:
-            self.assertEqual(len(chunk), 1000)
+        # Test with SIMKL batch size (750)
+        chunks = _chunk_jobs(jobs, 750)
+        self.assertEqual(len(chunks), 67)
+        for chunk in chunks[:-1]:
+            self.assertEqual(len(chunk), 750)
+        self.assertEqual(len(chunks[-1]), 500)
 
-        # Test with Trakt batch size (10000)
-        chunks = _chunk_jobs(jobs, 10000)
-        self.assertEqual(len(chunks), 5)
-        for chunk in chunks:
-            self.assertEqual(len(chunk), 10000)
+        # Test with Trakt batch size (750)
+        chunks = _chunk_jobs(jobs, 750)
+        self.assertEqual(len(chunks), 67)
+        for chunk in chunks[:-1]:
+            self.assertEqual(len(chunk), 750)
+        self.assertEqual(len(chunks[-1]), 500)
 
     def test_chunk_jobs_zero_size(self):
         """Test chunking with zero chunk size uses default."""
@@ -101,7 +103,7 @@ class TestBatchSizeLimits(unittest.TestCase):
 
     def test_group_batchable_jobs_splits_large_batches(self):
         """Test that large batches are split according to provider limits."""
-        # Create 5555 jobs for Trakt (should be split into chunks of 10000 max)
+        # Create 5555 jobs for Trakt (should be split into chunks of 750 max)
         trakt_jobs = []
         for i in range(5555):
             job = _create_mock_job(i)
@@ -112,14 +114,16 @@ class TestBatchSizeLimits(unittest.TestCase):
 
         batch_groups, remaining = _group_batchable_jobs(trakt_jobs)
 
-        # Should have 1 batch since all fit in 10000 limit and at least 2 items
-        self.assertEqual(len(batch_groups), 1)
-        self.assertEqual(len(batch_groups[0]), 5555)
+        # Should have 8 batches (750 * 7 + 305)
+        self.assertEqual(len(batch_groups), 8)
+        for group in batch_groups[:-1]:
+            self.assertEqual(len(group), 750)
+        self.assertEqual(len(batch_groups[-1]), 305)
         self.assertEqual(len(remaining), 0)
 
     def test_group_batchable_jobs_splits_simkl_batches(self):
-        """Test that SIMKL batches are split according to 1000 item limit."""
-        # Create 2550 jobs for SIMKL (should be split into 3 batches)
+        """Test that SIMKL batches are split according to 750 item limit."""
+        # Create 2550 jobs for SIMKL (should be split into 4 batches)
         simkl_jobs = []
         for i in range(2550):
             job = _create_mock_job(i)
@@ -130,11 +134,12 @@ class TestBatchSizeLimits(unittest.TestCase):
 
         batch_groups, remaining = _group_batchable_jobs(simkl_jobs)
 
-        # Should have 3 batches (1000, 1000, 550)
-        self.assertEqual(len(batch_groups), 3)
-        self.assertEqual(len(batch_groups[0]), 1000)
-        self.assertEqual(len(batch_groups[1]), 1000)
-        self.assertEqual(len(batch_groups[2]), 550)
+        # Should have 4 batches (750, 750, 750, 300)
+        self.assertEqual(len(batch_groups), 4)
+        self.assertEqual(len(batch_groups[0]), 750)
+        self.assertEqual(len(batch_groups[1]), 750)
+        self.assertEqual(len(batch_groups[2]), 750)
+        self.assertEqual(len(batch_groups[3]), 300)
         self.assertEqual(len(remaining), 0)
 
     def test_group_batchable_jobs_single_item(self):
@@ -169,7 +174,7 @@ class TestBatchSizeLimits(unittest.TestCase):
         """Test grouping with mixed providers and batch sizes."""
         jobs = []
 
-        # 1500 Trakt jobs (should be in 1 batch)
+        # 1500 Trakt jobs (should be in 2 batches)
         for i in range(1500):
             job = _create_mock_job(i)
             job.user_id = "user1"
@@ -177,7 +182,7 @@ class TestBatchSizeLimits(unittest.TestCase):
             job.job_type = "push_watched"
             jobs.append(job)
 
-        # 2100 SIMKL jobs (should be in 3 batches: 1000, 1000, 100)
+        # 2100 SIMKL jobs (should be in 3 batches: 750, 750, 600)
         for i in range(2100):
             job = _create_mock_job(1500 + i)
             job.user_id = "user1"
@@ -195,10 +200,10 @@ class TestBatchSizeLimits(unittest.TestCase):
 
         batch_groups, remaining = _group_batchable_jobs(jobs)
 
-        # Trakt: 1 batch
-        # SIMKL: 3 batches (1000, 1000, 100)
+        # Trakt: 2 batches
+        # SIMKL: 3 batches (750, 750, 600)
         # Letterboxd: all in remaining
-        self.assertEqual(len(batch_groups), 4)  # 1 Trakt + 3 SIMKL
+        self.assertEqual(len(batch_groups), 5)  # 2 Trakt + 3 SIMKL
         self.assertEqual(len(remaining), 5)  # All Letterboxd
 
 
