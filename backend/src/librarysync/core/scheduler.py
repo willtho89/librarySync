@@ -54,6 +54,19 @@ async def complete_scheduled_job(
     await db.commit()
 
 
+async def extend_scheduled_job(
+    db: AsyncSession,
+    job: ScheduledJob,
+    lease_duration: timedelta,
+    now: datetime | None = None,
+) -> None:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    job.lease_until = now + lease_duration
+    job.updated_at = now
+    await db.commit()
+
+
 async def release_scheduled_job(
     db: AsyncSession,
     job: ScheduledJob,

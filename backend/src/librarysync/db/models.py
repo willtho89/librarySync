@@ -5,6 +5,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -13,7 +14,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    Date,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 

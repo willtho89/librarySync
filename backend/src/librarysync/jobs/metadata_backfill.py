@@ -8,9 +8,10 @@ from librarysync.core.metadata_enrichment import enrich_watched_metadata
 from librarysync.core.scheduler import (
     claim_scheduled_job,
     complete_scheduled_job,
+    extend_scheduled_job,
     release_scheduled_job,
 )
-from librarysync.db.models import EpisodeItem, MediaItem, User, WatchedItem
+from librarysync.db.models import EpisodeItem, MediaItem, ScheduledJob, User, WatchedItem
 from librarysync.db.session import SessionLocal, init_session_factory
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ async def process_metadata_backfill_once() -> int:
         if not job:
             return 0
         try:
-            await run_metadata_backfill(db)
+            await run_metadata_backfill(db, job)
         except Exception:
             logger.exception("Metadata backfill failed")
             await release_scheduled_job(db, job, METADATA_BACKFILL_RETRY_DELAY)
@@ -44,7 +45,9 @@ async def process_metadata_backfill_once() -> int:
 
 
 async def run_metadata_backfill(
-    db: AsyncSession, batch_size: int = METADATA_BACKFILL_BATCH_SIZE
+    db: AsyncSession,
+    job: ScheduledJob,
+    batch_size: int = METADATA_BACKFILL_BATCH_SIZE,
 ) -> None:
     logger.info("Starting metadata backfill")
 
@@ -52,12 +55,18 @@ async def run_metadata_backfill(
     user_ids = result.scalars().all()
 
     for user_id in user_ids:
-        await _backfill_user_media(db, user_id, batch_size)
+        await _backfill_user_media(db, user_id, batch_size, job)
+        await extend_scheduled_job(db, job, METADATA_BACKFILL_LEASE)
 
     logger.info("Finished metadata backfill")
 
 
-async def _backfill_user_media(db: AsyncSession, user_id: str, batch_size: int) -> None:
+async def _backfill_user_media(
+    db: AsyncSession,
+    user_id: str,
+    batch_size: int,
+    job: ScheduledJob,
+) -> None:
     direct_ids = select(WatchedItem.media_item_id.label("media_item_id")).where(
         WatchedItem.user_id == user_id,
         WatchedItem.media_item_id.is_not(None),
@@ -94,4 +103,5 @@ async def _backfill_user_media(db: AsyncSession, user_id: str, batch_size: int) 
             await enrich_watched_metadata(db, user_id, media_item, None)
 
         await db.commit()
+        await extend_scheduled_job(db, job, METADATA_BACKFILL_LEASE)
         offset += batch_size

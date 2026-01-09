@@ -6,14 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
+from librarysync.connectors.services.letterboxd import LetterboxdError
+from librarysync.connectors.services.simkl import SimklError
+from librarysync.connectors.services.trakt import TraktError
 from librarysync.core.watch_pipeline import enqueue_new_item_job
-from librarysync.core.watchlist_links import (
-    parse_letterboxd_list_urls,
-    parse_trakt_list_urls,
-)
 from librarysync.core.watchlist import (
     determine_movie_watchlist_status,
     determine_show_watchlist_status,
@@ -21,9 +19,9 @@ from librarysync.core.watchlist import (
     normalize_media_ids,
     upsert_watchlist_item,
 )
-from librarysync.core.watchlist_sync import (
-    enqueue_personal_watchlist_removal,
-    enqueue_personal_watchlist_sync,
+from librarysync.core.watchlist_links import (
+    parse_letterboxd_list_urls,
+    parse_trakt_list_urls,
 )
 from librarysync.core.watchlist_sources import (
     LEGACY_LIST_SOURCE_TYPE,
@@ -35,9 +33,10 @@ from librarysync.core.watchlist_sources import (
     remove_watchlist_source,
     upsert_watchlist_source_item,
 )
-from librarysync.connectors.services.letterboxd import LetterboxdError
-from librarysync.connectors.services.simkl import SimklError
-from librarysync.connectors.services.trakt import TraktError
+from librarysync.core.watchlist_sync import (
+    enqueue_personal_watchlist_removal,
+    enqueue_personal_watchlist_sync,
+)
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
@@ -668,10 +667,6 @@ async def remove_watchlist_item(
             status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
         )
 
-    # We can hard delete or soft delete. The checklist says "Hard delete on remove; emit watch_events entries"
-    # But for "filter - remove from watchlist when watched", we might want soft delete or just delete.
-    # The checklist item "Hard delete on remove" implies DELETE endpoint does hard delete.
-
     await log_watchlist_event(db, current_user.id, item.media_item_id, "watchlist_removed", {})
     media_item = None
     if item.media_item_id:
@@ -722,7 +717,7 @@ async def mark_watchlist_item_watched(
             select(EpisodeItem)
             .where(
                 EpisodeItem.show_media_item_id == media_item.id,
-                EpisodeItem.air_date != None,
+                EpisodeItem.air_date is not None,
                 EpisodeItem.air_date <= now_date,
                 EpisodeItem.season_number > 0,  # Exclude specials (season 0)
             )
@@ -739,7 +734,7 @@ async def mark_watchlist_item_watched(
         watched_result = await db.execute(
             select(WatchedItem.episode_item_id).where(
                 WatchedItem.user_id == current_user.id,
-                WatchedItem.media_item_id == None,
+                WatchedItem.media_item_id is None,
                 WatchedItem.episode_item_id.in_([e.id for e in released_episodes]),
             )
         )
@@ -756,11 +751,7 @@ async def mark_watchlist_item_watched(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="All released episodes are already watched",
             )
-        target_media = None  # WatchedItem for episode links to episode_item_id, not media_item_id directly usually, or both?
-        # WatchedItem definition:
-        # CheckConstraint: (media_item_id IS NOT NULL AND episode_item_id IS NULL) OR (media_item_id IS NULL AND episode_item_id IS NOT NULL)
-        # So for episode, media_item_id must be NULL.
-
+        target_media = None # For shows, we set media to None in WatchedItem
     # 3. Create WatchedItem
     # Check if rewatch (only for movies, shows handle individual eps)
     is_rewatch = False
@@ -821,7 +812,7 @@ async def mark_watchlist_item_watched(
     )
 
     # 5. Update Watchlist Status (Handled by background/hooks usually, but we can trigger check)
-    # The `enqueue_new_item_job` calls `process_new_item_job` which calls `check_and_update_watchlist`.
+    # `enqueue_new_item_job` calls `process_new_item_job` which calls `check_and_update_watchlist`.
     # So the status update should happen asynchronously.
     # However, for immediate UI feedback, we might want to return the updated status?
     # Or just return success.

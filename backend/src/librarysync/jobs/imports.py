@@ -104,11 +104,13 @@ async def process_import_all_once(limit: int = 1) -> int:
 
 async def _claim_quick_import_runs(db: AsyncSession, limit: int) -> list[Integration]:
     now = datetime.now(timezone.utc)
+    candidate_limit = max(limit * 5, limit)
     async with db.begin():
         result = await db.execute(
             select(Integration)
             .where(Integration.provider == IMPORT_ALL_PROVIDER)
             .order_by(Integration.updated_at)
+            .limit(candidate_limit)
             .with_for_update(skip_locked=True)
         )
         runs: list[Integration] = []

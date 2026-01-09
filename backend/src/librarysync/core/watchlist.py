@@ -296,7 +296,7 @@ async def evaluate_show_watchlist_status(
     result = await db.execute(
         select(EpisodeItem).where(
             EpisodeItem.show_media_item_id == media_item.id,
-            EpisodeItem.air_date != None,
+            EpisodeItem.air_date is not None,
             EpisodeItem.air_date <= now_date,
             EpisodeItem.season_number > 0,  # Exclude specials (season 0)
         )
@@ -319,7 +319,7 @@ async def evaluate_show_watchlist_status(
         result = await db.execute(
             select(func.count(func.distinct(WatchedItem.episode_item_id))).where(
                 WatchedItem.user_id == user_id,
-                WatchedItem.media_item_id == None,
+                WatchedItem.media_item_id is None,
                 WatchedItem.episode_item_id.in_([e.id for e in released_episodes]),
             )
         )

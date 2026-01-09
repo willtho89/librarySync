@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +28,9 @@ from librarysync.connectors.services.letterboxd import (
 from librarysync.connectors.services.letterboxd import (
     token_to_secret_payload as letterboxd_token_to_secret_payload,
 )
+from librarysync.core.integrations import load_integration_with_secrets
+from librarysync.core.ratings import coerce_star_rating
+from librarysync.core.security import encrypt_value
 from librarysync.core.watchlist_links import parse_letterboxd_list_urls
 from librarysync.core.watchlist_sources import (
     LEGACY_LIST_SOURCE_TYPE,
@@ -36,9 +40,6 @@ from librarysync.core.watchlist_sources import (
     list_watchlist_sources,
     reconcile_watchlist_source,
 )
-from librarysync.core.integrations import load_integration_with_secrets
-from librarysync.core.ratings import coerce_star_rating
-from librarysync.core.security import encrypt_value
 from librarysync.db.models import (
     Integration,
     IntegrationSecret,

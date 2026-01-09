@@ -1,12 +1,13 @@
 import logging
 from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from librarysync.db.models import EpisodeItem, MediaItem, User, WatchlistItem
-from librarysync.db.session import SessionLocal, init_session_factory
+
 from librarysync.core.scheduler import (
     claim_scheduled_job,
     complete_scheduled_job,
+    extend_scheduled_job,
     release_scheduled_job,
 )
 from librarysync.core.watchlist import (
@@ -15,6 +16,8 @@ from librarysync.core.watchlist import (
     evaluate_show_watchlist_status,
     log_watchlist_event,
 )
+from librarysync.db.models import EpisodeItem, MediaItem, ScheduledJob, User, WatchlistItem
+from librarysync.db.session import SessionLocal, init_session_factory
 
 logger = logging.getLogger(__name__)
 WATCHLIST_REFRESH_JOB = "watchlist_refresh"
@@ -35,7 +38,7 @@ async def process_watchlist_refresh_once() -> int:
         if not job:
             return 0
         try:
-            await run_watchlist_refresh(db)
+            await run_watchlist_refresh(db, job)
         except Exception:
             logger.exception("Watchlist refresh failed")
             await release_scheduled_job(db, job, WATCHLIST_REFRESH_RETRY_DELAY)
@@ -44,7 +47,7 @@ async def process_watchlist_refresh_once() -> int:
     return 1
 
 
-async def run_watchlist_refresh(db: AsyncSession) -> None:
+async def run_watchlist_refresh(db: AsyncSession, job: ScheduledJob) -> None:
     logger.info("Starting watchlist refresh")
 
     # Get all users
@@ -80,6 +83,7 @@ async def run_watchlist_refresh(db: AsyncSession) -> None:
                 await _refresh_movie_status(db, user_id, item, media)
             elif media.media_type == "tv":
                 await evaluate_show_watchlist_status(db, user_id, item, media)
+        await extend_scheduled_job(db, job, WATCHLIST_REFRESH_LEASE)
 
     await db.commit()
     logger.info("Finished daily watchlist refresh")
