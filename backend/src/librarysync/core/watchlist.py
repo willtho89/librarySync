@@ -529,7 +529,6 @@ async def upsert_watchlist_item(
                 {"restored": True, "source": source, **(event_raw or {})},
             )
             if media_type == "tv":
-                await backfill_show_episodes(db, user_id, media_item)
                 await evaluate_show_watchlist_status(db, user_id, existing, media_item)
             return existing, "restored"
         return existing, "already_exists"
@@ -571,7 +570,6 @@ async def upsert_watchlist_item(
     )
     await db.flush()
     if media_type == "tv":
-        await backfill_show_episodes(db, user_id, media_item)
         await evaluate_show_watchlist_status(db, user_id, watchlist_item, media_item)
     return watchlist_item, "created"
 

@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from librarysync.db.models import User, WatchlistItem, MediaItem
+from librarysync.db.models import EpisodeItem, MediaItem, User, WatchlistItem
 from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.core.scheduler import (
     claim_scheduled_job,
@@ -10,6 +10,7 @@ from librarysync.core.scheduler import (
     release_scheduled_job,
 )
 from librarysync.core.watchlist import (
+    backfill_show_episodes,
     determine_movie_watchlist_status,
     evaluate_show_watchlist_status,
     log_watchlist_event,
@@ -72,6 +73,8 @@ async def run_watchlist_refresh(db: AsyncSession) -> None:
         )
         rows = items_result.all()
 
+        await _backfill_missing_show_episodes(db, user_id, rows)
+
         for item, media in rows:
             if media.media_type == "movie":
                 await _refresh_movie_status(db, user_id, item, media)
@@ -80,6 +83,31 @@ async def run_watchlist_refresh(db: AsyncSession) -> None:
 
     await db.commit()
     logger.info("Finished daily watchlist refresh")
+
+
+async def _backfill_missing_show_episodes(
+    db: AsyncSession,
+    user_id: str,
+    rows: list[tuple[WatchlistItem, MediaItem]],
+) -> None:
+    media_by_id = {
+        media.id: media for item, media in rows if media.media_type == "tv"
+    }
+    if not media_by_id:
+        return
+
+    result = await db.execute(
+        select(EpisodeItem.show_media_item_id)
+        .where(EpisodeItem.show_media_item_id.in_(list(media_by_id.keys())))
+        .distinct()
+    )
+    existing_ids = set(result.scalars().all())
+    missing_ids = [media_id for media_id in media_by_id.keys() if media_id not in existing_ids]
+    for media_id in missing_ids:
+        media_item = media_by_id[media_id]
+        if not (media_item.tmdb_id or media_item.imdb_id):
+            continue
+        await backfill_show_episodes(db, user_id, media_item)
 
 
 async def _refresh_movie_status(

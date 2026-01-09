@@ -574,15 +574,17 @@ async def list_watchlist_items(
             )
 
     now_date = datetime.now(timezone.utc).date()
+    tv_media_ids = [media.id for _, media in rows if media.media_type == "tv"]
+    progress_map = await _get_show_progress_bulk(db, current_user.id, tv_media_ids)
     items = []
     status_changed = False
     for item, media in rows:
         progress = None
         desired_status = item.status
         if media.media_type == "tv":
-            # For v1, this N+1 query is acceptable for small page size (25-100)
-            # In future, use group by subquery or CTE
-            progress = await _get_show_progress(db, current_user.id, media.id)
+            progress = progress_map.get(
+                media.id, {"watched": 0, "total": 0, "earliest_air_date": None}
+            )
             desired_status = determine_show_watchlist_status(
                 total_released=progress["total"],
                 watched_count=progress["watched"],
@@ -835,47 +837,81 @@ async def mark_watchlist_item_watched(
     }
 
 
-async def _get_show_progress(db: AsyncSession, user_id: str, media_item_id: str) -> dict:
-    from librarysync.db.models import EpisodeItem, WatchedItem
+async def _get_show_progress_bulk(
+    db: AsyncSession, user_id: str, media_item_ids: list[str]
+) -> dict[str, dict]:
+    if not media_item_ids:
+        return {}
 
-    # Count released episodes (excluding specials)
     now = datetime.now(timezone.utc).date()
-    result = await db.execute(
-        select(EpisodeItem.id).where(
-            EpisodeItem.show_media_item_id == media_item_id,
-            EpisodeItem.air_date != None,
+    released_subq = (
+        select(
+            EpisodeItem.show_media_item_id.label("media_item_id"),
+            func.count(EpisodeItem.id).label("total_released"),
+        )
+        .where(
+            EpisodeItem.show_media_item_id.in_(media_item_ids),
+            EpisodeItem.air_date.is_not(None),
             EpisodeItem.air_date <= now,
-            EpisodeItem.season_number > 0,  # Exclude specials (season 0)
+            EpisodeItem.season_number > 0,
         )
+        .group_by(EpisodeItem.show_media_item_id)
+        .subquery()
     )
-    released_ids = result.scalars().all()
-    total_released = len(released_ids)
-
-    earliest_result = await db.execute(
-        select(func.min(EpisodeItem.air_date)).where(
-            EpisodeItem.show_media_item_id == media_item_id,
-            EpisodeItem.season_number > 0,  # Exclude specials (season 0)
+    earliest_subq = (
+        select(
+            EpisodeItem.show_media_item_id.label("media_item_id"),
+            func.min(EpisodeItem.air_date).label("earliest_air_date"),
         )
+        .where(
+            EpisodeItem.show_media_item_id.in_(media_item_ids),
+            EpisodeItem.season_number > 0,
+        )
+        .group_by(EpisodeItem.show_media_item_id)
+        .subquery()
     )
-    earliest_air_date = earliest_result.scalar()
-
-    if total_released == 0:
-        return {"watched": 0, "total": 0, "earliest_air_date": earliest_air_date}
-
-    # Count watched among released
-    result = await db.execute(
-        select(func.count(func.distinct(WatchedItem.episode_item_id))).where(
+    watched_subq = (
+        select(
+            EpisodeItem.show_media_item_id.label("media_item_id"),
+            func.count(func.distinct(WatchedItem.episode_item_id)).label("watched_count"),
+        )
+        .join(WatchedItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .where(
+            EpisodeItem.show_media_item_id.in_(media_item_ids),
+            EpisodeItem.air_date.is_not(None),
+            EpisodeItem.air_date <= now,
+            EpisodeItem.season_number > 0,
             WatchedItem.user_id == user_id,
-            WatchedItem.media_item_id == None,
-            WatchedItem.episode_item_id.in_(released_ids),
+            WatchedItem.media_item_id.is_(None),
         )
+        .group_by(EpisodeItem.show_media_item_id)
+        .subquery()
     )
-    watched_count = result.scalar() or 0
-    return {
-        "watched": watched_count,
-        "total": total_released,
-        "earliest_air_date": earliest_air_date,
-    }
+    base = (
+        select(MediaItem.id.label("media_item_id"))
+        .where(MediaItem.id.in_(media_item_ids))
+        .subquery()
+    )
+    result = await db.execute(
+        select(
+            base.c.media_item_id,
+            func.coalesce(released_subq.c.total_released, 0).label("total_released"),
+            earliest_subq.c.earliest_air_date,
+            func.coalesce(watched_subq.c.watched_count, 0).label("watched_count"),
+        )
+        .select_from(base)
+        .outerjoin(released_subq, released_subq.c.media_item_id == base.c.media_item_id)
+        .outerjoin(earliest_subq, earliest_subq.c.media_item_id == base.c.media_item_id)
+        .outerjoin(watched_subq, watched_subq.c.media_item_id == base.c.media_item_id)
+    )
+    progress_map: dict[str, dict] = {}
+    for row in result.all():
+        progress_map[row.media_item_id] = {
+            "watched": int(row.watched_count or 0),
+            "total": int(row.total_released or 0),
+            "earliest_air_date": row.earliest_air_date,
+        }
+    return progress_map
 
 
 async def _refresh_watchlist_statuses_for_filter(
@@ -900,13 +936,17 @@ async def _refresh_watchlist_statuses_for_filter(
         return
 
     now_date = datetime.now(timezone.utc).date()
+    tv_media_ids = [media.id for _, media in rows if media.media_type == "tv"]
+    progress_map = await _get_show_progress_bulk(db, user_id, tv_media_ids)
     status_changed = False
     for item, media in rows:
         if item.status == "removed":
             continue
         desired_status = item.status
         if media.media_type == "tv":
-            progress = await _get_show_progress(db, user_id, media.id)
+            progress = progress_map.get(
+                media.id, {"watched": 0, "total": 0, "earliest_air_date": None}
+            )
             desired_status = determine_show_watchlist_status(
                 total_released=progress["total"],
                 watched_count=progress["watched"],
