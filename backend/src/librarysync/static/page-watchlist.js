@@ -3,7 +3,7 @@ const watchlistState = {
   pageSize: 50,
   total: 0,
   filters: {
-    status: "active",
+    status: "all",
     mediaType: "all",
     watchedDisplay: "overlay", // hide, overlay, show
   },
@@ -210,6 +210,11 @@ async function loadWatchlist() {
             card.classList.add("is-watched"); // For grey overlay
         }
     }
+    if (item.status === "waiting" && item.media_type === "tv") {
+        if (watchlistState.filters.watchedDisplay === "overlay") {
+            card.classList.add("is-watched"); // Caught up overlay for shows
+        }
+    }
     
     // Progress for shows
     if (item.progress && item.media_type === "tv") {
@@ -237,7 +242,11 @@ async function loadWatchlist() {
     
     const actions = document.createElement("div");
     actions.className = "history-actions";
-    
+
+    const pill = document.createElement("span");
+    pill.className = "watchlist-pill";
+    pill.textContent = item.status === "waiting" && item.media_type === "tv" ? "Caught up" : "Watched";
+
     // --- Menu ---
     const menuButton = document.createElement("button");
     menuButton.type = "button";
@@ -301,6 +310,9 @@ async function loadWatchlist() {
     menuPanel.appendChild(metadataButton);
     menuPanel.appendChild(deleteButton);
     
+    if (card.classList.contains("is-watched")) {
+      actions.appendChild(pill);
+    }
     actions.appendChild(menuButton);
     actions.appendChild(menuPanel);
 
@@ -332,25 +344,11 @@ function bindWatchlistUi() {
     const statusSelect = document.getElementById("watchlist-status-filter");
     const watchedDisplaySelect = document.getElementById("watchlist-watched-display");
     
-    function updateControls() {
-        if (statusSelect && watchedDisplaySelect) {
-            // "Watched items" selector only relevant if status is "All" (or includes watched explicitly)
-            // If user selects "Watched" explicitly, we disable the display selector (force show?)
-            // Or if user selects "Active", we disable it (none to show).
-            if (statusSelect.value === "all") {
-                watchedDisplaySelect.disabled = false;
-            } else {
-                watchedDisplaySelect.disabled = true;
-            }
-        }
-    }
-
     if (statusSelect) {
         statusSelect.value = watchlistState.filters.status;
         statusSelect.addEventListener("change", () => {
             watchlistState.filters.status = statusSelect.value;
             watchlistState.page = 1;
-            updateControls();
             loadWatchlist();
         });
     }
@@ -363,9 +361,6 @@ function bindWatchlistUi() {
             loadWatchlist();
         });
     }
-    
-    // Init state
-    updateControls();
     
     const typeSelect = document.getElementById("watchlist-type-filter");
     if (typeSelect) {

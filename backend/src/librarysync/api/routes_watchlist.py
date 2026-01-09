@@ -372,7 +372,7 @@ async def _get_show_progress(db: AsyncSession, user_id: str, media_item_id: str)
 
     # Count watched among released
     result = await db.execute(
-        select(func.count(WatchedItem.id)).where(
+        select(func.count(func.distinct(WatchedItem.episode_item_id))).where(
             WatchedItem.user_id == user_id,
             WatchedItem.media_item_id == None,
             WatchedItem.episode_item_id.in_(released_ids),
