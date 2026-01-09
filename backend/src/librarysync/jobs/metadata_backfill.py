@@ -16,7 +16,7 @@ from librarysync.db.session import SessionLocal, init_session_factory
 logger = logging.getLogger(__name__)
 
 METADATA_BACKFILL_JOB = "metadata_backfill"
-METADATA_BACKFILL_INTERVAL = timedelta(days=3650)
+METADATA_BACKFILL_INTERVAL = timedelta(days=1)
 METADATA_BACKFILL_LEASE = timedelta(hours=2)
 METADATA_BACKFILL_RETRY_DELAY = timedelta(minutes=10)
 METADATA_BACKFILL_BATCH_SIZE = 200

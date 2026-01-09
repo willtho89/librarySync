@@ -14,6 +14,8 @@ from librarysync.core.watchlist_links import (
     parse_trakt_list_urls,
 )
 from librarysync.core.watchlist import (
+    determine_movie_watchlist_status,
+    determine_show_watchlist_status,
     log_watchlist_event,
     normalize_media_ids,
     upsert_watchlist_item,
@@ -476,11 +478,20 @@ async def delete_watchlist_source(
 async def list_watchlist_items(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    status: str | None = Query("active", description="Comma-separated list of statuses"),
+    status: str | None = Query("all", description="Comma-separated list of statuses"),
     media_type: Literal["movie", "tv", "anime"] | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    if status and status != "all":
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+        if "not_released" in statuses:
+            await _refresh_watchlist_statuses_for_filter(
+                db,
+                current_user.id,
+                media_type=media_type,
+            )
+
     query = (
         select(WatchlistItem, MediaItem)
         .join(MediaItem, WatchlistItem.media_item_id == MediaItem.id)
@@ -525,29 +536,42 @@ async def list_watchlist_items(
                 )
             )
 
+    now_date = datetime.now(timezone.utc).date()
     items = []
     status_changed = False
     for item, media in rows:
         progress = None
+        desired_status = item.status
         if media.media_type == "tv":
             # For v1, this N+1 query is acceptable for small page size (25-100)
             # In future, use group by subquery or CTE
             progress = await _get_show_progress(db, current_user.id, media.id)
-            if progress and progress["total"] > 0 and item.status != "removed":
-                desired_status = (
-                    "waiting" if progress["watched"] >= progress["total"] else "active"
-                )
-                if item.status != desired_status:
-                    item.status = desired_status
-                    item.updated_at = datetime.now(timezone.utc)
-                    await log_watchlist_event(
-                        db,
-                        current_user.id,
-                        media.id,
-                        "watchlist_status_changed",
-                        {"status": desired_status, "reason": "auto_evaluation"},
-                    )
-                    status_changed = True
+            desired_status = determine_show_watchlist_status(
+                total_released=progress["total"],
+                watched_count=progress["watched"],
+                first_air_date=media.first_air_date,
+                earliest_air_date=progress.get("earliest_air_date"),
+                now_date=now_date,
+            )
+        elif media.media_type == "movie":
+            has_watched = item.status in {"watched", "waiting"}
+            desired_status = determine_movie_watchlist_status(
+                media,
+                has_watched=has_watched,
+                now_date=now_date,
+            )
+
+        if item.status != "removed" and item.status != desired_status:
+            item.status = desired_status
+            item.updated_at = datetime.now(timezone.utc)
+            await log_watchlist_event(
+                db,
+                current_user.id,
+                media.id,
+                "watchlist_status_changed",
+                {"status": desired_status, "reason": "auto_evaluation"},
+            )
+            status_changed = True
 
         items.append(
             WatchlistItemOut(
@@ -640,8 +664,15 @@ async def _get_show_progress(db: AsyncSession, user_id: str, media_item_id: str)
     released_ids = result.scalars().all()
     total_released = len(released_ids)
 
+    earliest_result = await db.execute(
+        select(func.min(EpisodeItem.air_date)).where(
+            EpisodeItem.show_media_item_id == media_item_id
+        )
+    )
+    earliest_air_date = earliest_result.scalar()
+
     if total_released == 0:
-        return {"watched": 0, "total": 0}
+        return {"watched": 0, "total": 0, "earliest_air_date": earliest_air_date}
 
     # Count watched among released
     result = await db.execute(
@@ -652,4 +683,68 @@ async def _get_show_progress(db: AsyncSession, user_id: str, media_item_id: str)
         )
     )
     watched_count = result.scalar() or 0
-    return {"watched": watched_count, "total": total_released}
+    return {
+        "watched": watched_count,
+        "total": total_released,
+        "earliest_air_date": earliest_air_date,
+    }
+
+
+async def _refresh_watchlist_statuses_for_filter(
+    db: AsyncSession,
+    user_id: str,
+    *,
+    media_type: str | None,
+) -> None:
+    query = (
+        select(WatchlistItem, MediaItem)
+        .join(MediaItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.status.in_(["added", "active", "hidden", "not_released"]),
+        )
+    )
+    if media_type:
+        query = query.where(WatchlistItem.type == media_type)
+
+    rows = (await db.execute(query)).all()
+    if not rows:
+        return
+
+    now_date = datetime.now(timezone.utc).date()
+    status_changed = False
+    for item, media in rows:
+        if item.status == "removed":
+            continue
+        desired_status = item.status
+        if media.media_type == "tv":
+            progress = await _get_show_progress(db, user_id, media.id)
+            desired_status = determine_show_watchlist_status(
+                total_released=progress["total"],
+                watched_count=progress["watched"],
+                first_air_date=media.first_air_date,
+                earliest_air_date=progress.get("earliest_air_date"),
+                now_date=now_date,
+            )
+        elif media.media_type == "movie":
+            has_watched = item.status == "watched"
+            desired_status = determine_movie_watchlist_status(
+                media,
+                has_watched=has_watched,
+                now_date=now_date,
+            )
+
+        if item.status != desired_status:
+            item.status = desired_status
+            item.updated_at = datetime.now(timezone.utc)
+            await log_watchlist_event(
+                db,
+                user_id,
+                media.id,
+                "watchlist_status_changed",
+                {"status": desired_status, "reason": "auto_evaluation"},
+            )
+            status_changed = True
+
+    if status_changed:
+        await db.commit()

@@ -20,6 +20,15 @@ const WATCHLIST_PROVIDER_LABELS = {
   manual: "Manual",
 };
 
+const WATCHLIST_STATUS_LABELS = {
+  added: "Added",
+  in_progress: "In progress",
+  watched: "Watched",
+  not_released: "Not released yet",
+  active: "Added",
+  waiting: "Watched",
+};
+
 function formatWatchlistSourceLabel(source) {
   if (!source) return "Unknown";
   const provider =
@@ -44,9 +53,9 @@ function buildWatchlistQueryParams() {
   
   // Logic for Status + Watched Display
   if (watchlistState.filters.status === "all") {
-      // All means Active + Waiting + (Watched depending on display)
-      // We exclude "removed" by default in "all" unless requested explicitly, but user removed "removed" option.
-      const statuses = ["active", "waiting"];
+      // All means Added + In Progress + Not Released + (Watched depending on display)
+      // Include legacy statuses to backfill existing items.
+      const statuses = ["added", "in_progress", "not_released", "active", "waiting"];
       if (watchlistState.filters.watchedDisplay !== "hide") {
           statuses.push("watched");
       }
@@ -213,7 +222,7 @@ async function loadWatchlist() {
     const detail = document.createElement("p");
     const year = item.year ? item.year : "Year unknown";
     const mediaType = formatMediaType(item.media_type);
-    const statusLabel = item.status.toUpperCase();
+    const statusLabel = WATCHLIST_STATUS_LABELS[item.status] || item.status;
     const detailParts = [year, mediaType, `Status: ${statusLabel}`];
     
     if (item.release_date) {
@@ -225,17 +234,13 @@ async function loadWatchlist() {
     
     // Add badges for status
     let badgeClass = "badge-neutral";
-    if (item.status === "active") badgeClass = "badge-success"; // Unwatched / Partial
-    if (item.status === "waiting") badgeClass = "badge-warning"; // Caught up
-    if (item.status === "watched") {
+    if (item.status === "added") badgeClass = "badge-success";
+    if (item.status === "in_progress") badgeClass = "badge-warning";
+    if (item.status === "not_released") badgeClass = "badge-neutral";
+    if (item.status === "watched" || item.status === "waiting") {
         badgeClass = "badge-neutral";
         if (watchlistState.filters.watchedDisplay === "overlay") {
             card.classList.add("is-watched"); // For grey overlay
-        }
-    }
-    if (item.status === "waiting" && item.media_type === "tv") {
-        if (watchlistState.filters.watchedDisplay === "overlay") {
-            card.classList.add("is-watched"); // Caught up overlay for shows
         }
     }
     
@@ -254,7 +259,7 @@ async function loadWatchlist() {
             }
         }
     } else if (item.media_type === "movie") {
-        if (item.status === "active") detailParts.push("Unwatched");
+        if (item.status === "added") detailParts.push("Unwatched");
         if (item.status === "watched") detailParts.push("Watched");
     }
 
@@ -273,7 +278,7 @@ async function loadWatchlist() {
 
     const pill = document.createElement("span");
     pill.className = "watchlist-pill";
-    pill.textContent = item.status === "waiting" && item.media_type === "tv" ? "Caught up" : "Watched";
+    pill.textContent = item.media_type === "tv" ? "Caught up" : "Watched";
 
     // --- Menu ---
     const menuButton = document.createElement("button");

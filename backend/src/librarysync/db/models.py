@@ -399,8 +399,8 @@ class WatchlistItem(Base):
     )
     # type: movie, show
     type: Mapped[str] = mapped_column(String(32))
-    # status: active, hidden, removed
-    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    # status: added, in_progress, watched, not_released, removed
+    status: Mapped[str] = mapped_column(String(32), default="added", index=True)
     source: Mapped[str] = mapped_column(String(32), default="manual")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

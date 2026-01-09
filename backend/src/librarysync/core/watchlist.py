@@ -21,6 +21,47 @@ logger = logging.getLogger(__name__)
 WATCHLIST_IMPORT_KEY = "watchlist_import"
 
 
+def _is_future_date(value: datetime.date | None, now_date: datetime.date) -> bool:
+    return value is not None and value > now_date
+
+
+def determine_movie_watchlist_status(
+    media_item: MediaItem,
+    *,
+    has_watched: bool,
+    now_date: datetime.date,
+) -> str:
+    if has_watched:
+        return "watched"
+    if media_item.release_date is None or _is_future_date(media_item.release_date, now_date):
+        return "not_released"
+    return "added"
+
+
+def determine_show_watchlist_status(
+    *,
+    total_released: int,
+    watched_count: int,
+    first_air_date: datetime.date | None,
+    earliest_air_date: datetime.date | None,
+    now_date: datetime.date,
+) -> str:
+    if total_released <= 0:
+        if (
+            first_air_date is None
+            and earliest_air_date is None
+            or _is_future_date(first_air_date, now_date)
+            or _is_future_date(earliest_air_date, now_date)
+        ):
+            return "not_released"
+        return "added"
+    if watched_count <= 0:
+        return "added"
+    if watched_count < total_released:
+        return "in_progress"
+    return "watched"
+
+
 @dataclass(frozen=True)
 class WatchlistImportConfig:
     enabled: bool
@@ -259,45 +300,35 @@ async def evaluate_show_watchlist_status(
         )
     )
     released_episodes = result.scalars().all()
+    total_released = len(released_episodes)
 
-    if not released_episodes:
-        # If no released episodes found, check if we have any episodes at all
-        all_eps = await db.execute(
-            select(func.count(EpisodeItem.id)).where(
+    earliest_air_date = None
+    if total_released == 0:
+        earliest_result = await db.execute(
+            select(func.min(EpisodeItem.air_date)).where(
                 EpisodeItem.show_media_item_id == media_item.id
             )
         )
-        count = all_eps.scalar() or 0
-        if count == 0:
-            return
+        earliest_air_date = earliest_result.scalar()
 
-    # Get watched episode IDs
-    result = await db.execute(
-        select(WatchedItem.episode_item_id).where(
-            WatchedItem.user_id == user_id,
-            WatchedItem.media_item_id == None,
-            WatchedItem.episode_item_id.in_([e.id for e in released_episodes]),
+    watched_count = 0
+    if total_released > 0:
+        result = await db.execute(
+            select(func.count(func.distinct(WatchedItem.episode_item_id))).where(
+                WatchedItem.user_id == user_id,
+                WatchedItem.media_item_id == None,
+                WatchedItem.episode_item_id.in_([e.id for e in released_episodes]),
+            )
         )
+        watched_count = result.scalar() or 0
+
+    new_status = determine_show_watchlist_status(
+        total_released=total_released,
+        watched_count=watched_count,
+        first_air_date=media_item.first_air_date,
+        earliest_air_date=earliest_air_date,
+        now_date=now_date,
     )
-    watched_episode_ids = set(result.scalars().all())
-
-    has_unwatched = False
-    for ep in released_episodes:
-        if ep.id not in watched_episode_ids:
-            has_unwatched = True
-            break
-
-    new_status = "active"
-    if not has_unwatched:
-        # All released episodes watched.
-        # Check if show status implies more episodes coming
-        # If unknown, assume waiting.
-        # "waiting" corresponds to "Caught up / Hidden"
-        new_status = "waiting"
-        # Ideally we check media_item.status if we had it (e.g. "Ended", "Canceled")
-        # For now, "waiting" is safe default for caught up.
-        # If we knew it ended, we could set "watched".
-        # Let's use "waiting" for now as it hides it from "Active" list.
 
     if watchlist_item.status != new_status:
         watchlist_item.status = new_status
@@ -467,7 +498,8 @@ async def upsert_watchlist_item(
     existing = result.scalars().first()
     if existing:
         if existing.status == "removed":
-            initial_status = "active"
+            initial_status = "added"
+            now_date = now.date()
             if media_type == "movie":
                 w_result = await db.execute(
                     select(WatchedItem)
@@ -477,8 +509,15 @@ async def upsert_watchlist_item(
                     )
                     .limit(1)
                 )
-                if w_result.scalars().first():
-                    initial_status = "watched"
+                has_watched = bool(w_result.scalars().first())
+                initial_status = determine_movie_watchlist_status(
+                    media_item,
+                    has_watched=has_watched,
+                    now_date=now_date,
+                )
+            elif media_type == "tv":
+                if _is_future_date(media_item.first_air_date, now_date):
+                    initial_status = "not_released"
             existing.status = initial_status
             existing.updated_at = now
             if existing.source != source and existing.source != "manual":
@@ -496,7 +535,7 @@ async def upsert_watchlist_item(
             return existing, "restored"
         return existing, "already_exists"
 
-    initial_status = "active"
+    initial_status = "added"
     if media_type == "movie":
         w_result = await db.execute(
             select(WatchedItem)
@@ -506,8 +545,15 @@ async def upsert_watchlist_item(
             )
             .limit(1)
         )
-        if w_result.scalars().first():
-            initial_status = "watched"
+        has_watched = bool(w_result.scalars().first())
+        initial_status = determine_movie_watchlist_status(
+            media_item,
+            has_watched=has_watched,
+            now_date=now.date(),
+        )
+    elif media_type == "tv":
+        if _is_future_date(media_item.first_air_date, now.date()):
+            initial_status = "not_released"
 
     watchlist_item = WatchlistItem(
         user_id=user_id,
