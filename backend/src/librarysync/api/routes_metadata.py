@@ -1,4 +1,6 @@
+import logging
 import re
+from datetime import datetime
 from typing import Literal
 
 import httpx
@@ -26,12 +28,19 @@ from librarysync.core.metadata_providers import (
     TvdbProviderSettings,
     TvmazeProviderSettings,
 )
-from librarysync.db.models import MediaItem, MetadataLookupCandidate, MetadataLookupRequest, User
+from librarysync.db.models import (
+    EpisodeItem,
+    MediaItem,
+    MetadataLookupCandidate,
+    MetadataLookupRequest,
+    User,
+)
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
 
 IMDB_ID_RE = re.compile(r"^tt\d+$", re.IGNORECASE)
 TMDB_ID_RE = re.compile(r"^\d+$")
+logger = logging.getLogger(__name__)
 
 
 class ProviderOut(BaseModel):
@@ -974,6 +983,9 @@ async def list_tv_episodes(
             detail="Episode lookup is not supported for this provider",
         )
     episodes = await provider_instance.list_episodes(provider_item_id, season_number)
+    await _persist_episode_list(
+        db, normalized, provider_item_id, season_number, episodes, provider_instance
+    )
     return [
         EpisodeOut(
             episode_number=episode.episode_number,
@@ -984,6 +996,141 @@ async def list_tv_episodes(
         )
         for episode in episodes
     ]
+
+
+def _parse_air_date(value: str | None) -> datetime.date | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+async def _find_media_item_for_provider(
+    db: AsyncSession, provider: str, provider_item_id: str
+) -> MediaItem | None:
+    if provider == "tmdb":
+        result = await db.execute(
+            select(MediaItem).where(
+                MediaItem.tmdb_id == provider_item_id,
+                MediaItem.media_type == "tv",
+            )
+        )
+        return result.scalars().first()
+    if provider == "tvdb":
+        result = await db.execute(
+            select(MediaItem).where(
+                MediaItem.tvdb_id == provider_item_id,
+                MediaItem.media_type == "tv",
+            )
+        )
+        return result.scalars().first()
+    if provider == "tvmaze":
+        result = await db.execute(
+            select(MediaItem).where(
+                MediaItem.tvmaze_id == provider_item_id,
+                MediaItem.media_type == "tv",
+            )
+        )
+        return result.scalars().first()
+    if provider == "imdb":
+        result = await db.execute(
+            select(MediaItem).where(
+                MediaItem.imdb_id == provider_item_id,
+                MediaItem.media_type == "tv",
+            )
+        )
+        return result.scalars().first()
+    return None
+
+
+async def _persist_episode_list(
+    db: AsyncSession,
+    provider: str,
+    provider_item_id: str,
+    season_number: int,
+    episodes: list,
+    provider_instance: EpisodeMetadataProvider,
+) -> None:
+    if not episodes:
+        return
+    try:
+        media_item = await _find_media_item_for_provider(db, provider, provider_item_id)
+        if not media_item:
+            details = await provider_instance.get_details(provider_item_id, "tv")
+            media_item = await _upsert_media_item(db, details)
+
+        result = await db.execute(
+            select(EpisodeItem).where(
+                EpisodeItem.show_media_item_id == media_item.id,
+                EpisodeItem.season_number == season_number,
+            )
+        )
+        existing = result.scalars().all()
+        by_number = {item.episode_number: item for item in existing}
+        by_tmdb = {item.tmdb_id: item for item in existing if item.tmdb_id}
+
+        dirty = False
+        for episode in episodes:
+            episode_number = episode.episode_number
+            if episode_number is None:
+                continue
+            tmdb_id = episode.provider_id if provider == "tmdb" else None
+            episode_item = None
+            if tmdb_id:
+                episode_item = by_tmdb.get(tmdb_id)
+            if not episode_item:
+                episode_item = by_number.get(episode_number)
+
+            air_date = _parse_air_date(episode.air_date)
+            raw = {
+                "source": "metadata",
+                "provider": provider,
+                "provider_item_id": provider_item_id,
+            }
+            if episode.still_url:
+                raw["still_url"] = episode.still_url
+
+            if not episode_item:
+                episode_item = EpisodeItem(
+                    show_media_item_id=media_item.id,
+                    season_number=season_number,
+                    episode_number=episode_number,
+                    title=episode.title,
+                    air_date=air_date,
+                    tmdb_id=tmdb_id,
+                    raw=raw,
+                )
+                db.add(episode_item)
+                dirty = True
+                continue
+
+            if episode.title and not episode_item.title:
+                episode_item.title = episode.title
+                dirty = True
+            if air_date and not episode_item.air_date:
+                episode_item.air_date = air_date
+                dirty = True
+            if tmdb_id and not episode_item.tmdb_id:
+                episode_item.tmdb_id = tmdb_id
+                dirty = True
+            if episode.still_url:
+                existing_raw = episode_item.raw if isinstance(episode_item.raw, dict) else {}
+                if "still_url" not in existing_raw:
+                    existing_raw["still_url"] = episode.still_url
+                    episode_item.raw = existing_raw
+                    dirty = True
+
+        if dirty:
+            await db.commit()
+    except Exception:
+        logger.exception(
+            "Failed to persist episodes for %s %s season %s",
+            provider,
+            provider_item_id,
+            season_number,
+        )
 
 
 def _classify_query(query: str) -> tuple[str, str]:

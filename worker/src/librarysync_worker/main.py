@@ -26,7 +26,7 @@ MODE_CONFIGS: dict[str, ModeConfig] = {
     "metadata": ModeConfig("metadata", process_metadata_lookups_once, 1.0, 0.2),
     "quick_import": ModeConfig("quick_import", process_quick_import_once, 2.0, 0.5),
     "import_all": ModeConfig("import_all", process_import_all_once, 2.0, 0.5),
-    "watchlist": ModeConfig("watchlist", process_watchlist_refresh_once, 86400.0, 3600.0),
+    "watchlist": ModeConfig("watchlist", process_watchlist_refresh_once, 60.0, 10.0),
 }
 
 

@@ -34,3 +34,9 @@ services:
       context: .
       dockerfile: worker/Dockerfile
     image: librarysync-worker:local
+
+  worker-watchlist:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: librarysync-worker:local

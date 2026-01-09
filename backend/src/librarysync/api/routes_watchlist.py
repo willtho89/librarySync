@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
-from librarysync.core.watchlist import evaluate_show_watchlist_status
+from librarysync.core.watchlist import backfill_show_episodes, evaluate_show_watchlist_status
 from librarysync.db.models import (
     MediaItem,
     User,
@@ -144,6 +144,7 @@ async def add_watchlist_item(
 
             # Evaluate for TV
             if payload.media_type == "tv":
+                await backfill_show_episodes(db, current_user.id, media_item)
                 await evaluate_show_watchlist_status(db, current_user.id, existing, media_item)
                 await db.commit()
 
@@ -180,6 +181,7 @@ async def add_watchlist_item(
     # Evaluate for TV
     if payload.media_type == "tv":
         await db.refresh(watchlist_item)
+        await backfill_show_episodes(db, current_user.id, media_item)
         await evaluate_show_watchlist_status(db, current_user.id, watchlist_item, media_item)
         await db.commit()
 
@@ -221,12 +223,28 @@ async def list_watchlist_items(
     result = await db.execute(query)
 
     items = []
+    status_changed = False
     for item, media in result.all():
         progress = None
         if media.media_type == "tv":
             # For v1, this N+1 query is acceptable for small page size (25-100)
             # In future, use group by subquery or CTE
             progress = await _get_show_progress(db, current_user.id, media.id)
+            if progress and progress["total"] > 0 and item.status != "removed":
+                desired_status = (
+                    "waiting" if progress["watched"] >= progress["total"] else "active"
+                )
+                if item.status != desired_status:
+                    item.status = desired_status
+                    item.updated_at = datetime.now(timezone.utc)
+                    await _log_watchlist_event(
+                        db,
+                        current_user.id,
+                        media.id,
+                        "watchlist_status_changed",
+                        {"status": desired_status, "reason": "auto_evaluation"},
+                    )
+                    status_changed = True
 
         items.append(
             WatchlistItemOut(
@@ -249,6 +267,9 @@ async def list_watchlist_items(
                 progress=progress,
             ).model_dump()
         )
+
+    if status_changed:
+        await db.commit()
 
     return {
         "items": items,

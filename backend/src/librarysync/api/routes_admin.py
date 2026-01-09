@@ -6,7 +6,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_admin_api_key, get_db
-from librarysync.db.models import OutboxJob
+from librarysync.db.models import OutboxJob, ScheduledJob
+from librarysync.jobs.watchlist_refresh import WATCHLIST_REFRESH_JOB
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -142,5 +143,36 @@ async def purge_jobs(
                 "older_than_hours": older_than_hours,
                 "limit": limit,
             },
+        }
+    )
+
+
+@router.post(
+    "/watchlist-refresh",
+    summary="Schedule watchlist refresh",
+    description="Schedule a watchlist refresh run for the worker to execute.",
+)
+async def schedule_watchlist_refresh(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_admin_api_key),
+) -> JSONResponse:
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(ScheduledJob).where(ScheduledJob.name == WATCHLIST_REFRESH_JOB)
+    )
+    job = result.scalars().first()
+    if not job:
+        job = ScheduledJob(name=WATCHLIST_REFRESH_JOB, next_run_at=now)
+        db.add(job)
+    else:
+        job.next_run_at = now
+        job.lease_until = None
+        job.lease_owner = None
+        job.updated_at = now
+    await db.commit()
+    return JSONResponse(
+        {
+            "message": "Watchlist refresh scheduled",
+            "next_run_at": job.next_run_at.isoformat() if job.next_run_at else None,
         }
     )

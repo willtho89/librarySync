@@ -174,9 +174,14 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             },
         )
         seasons = payload.get("seasons") or []
-        if not seasons and self._language:
-            payload = await self._get(f"/tv/{provider_id}", {})
-            seasons = payload.get("seasons") or []
+        if self._language:
+            fallback_payload = await self._get(f"/tv/{provider_id}", {})
+            fallback_seasons = fallback_payload.get("seasons") or []
+            if fallback_seasons:
+                seen = {entry.get("season_number") for entry in seasons}
+                seasons.extend(
+                    entry for entry in fallback_seasons if entry.get("season_number") not in seen
+                )
         summaries: list[SeasonSummary] = []
         for entry in seasons:
             season_number = entry.get("season_number")
@@ -201,9 +206,16 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             },
         )
         episodes = payload.get("episodes") or []
-        if not episodes and self._language:
-            payload = await self._get(f"/tv/{provider_id}/season/{season_number}", {})
-            episodes = payload.get("episodes") or []
+        if self._language:
+            fallback_payload = await self._get(f"/tv/{provider_id}/season/{season_number}", {})
+            fallback_episodes = fallback_payload.get("episodes") or []
+            if fallback_episodes:
+                seen = {entry.get("episode_number") for entry in episodes}
+                episodes.extend(
+                    entry
+                    for entry in fallback_episodes
+                    if entry.get("episode_number") not in seen
+                )
         summaries: list[EpisodeSummary] = []
         for entry in episodes:
             episode_number = entry.get("episode_number")
