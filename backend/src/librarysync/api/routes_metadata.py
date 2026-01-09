@@ -461,7 +461,7 @@ async def list_providers(
     _current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    service = MetadataProviderService(db, _current_user.id, METADATA_PROVIDER_REGISTRY)
     states = await service.list_provider_states()
     providers = [
         ProviderOut(

@@ -68,6 +68,20 @@
         type="button"
         role="tab"
         aria-selected="false"
+        aria-controls="panel-watchlists"
+        id="tab-watchlists"
+        data-tab-button
+        data-tab="watchlists"
+        tabindex="-1"
+      >
+        <span class="tab-title">Watchlists</span>
+        <span class="tab-meta">External list sync</span>
+      </button>
+      <button
+        class="tab-button"
+        type="button"
+        role="tab"
+        aria-selected="false"
         aria-controls="panel-metadata"
         id="tab-metadata"
         data-tab-button
@@ -472,6 +486,74 @@
               </div>
               <p id="import-queue-message" class="form-message" role="status" hidden></p>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        id="panel-watchlists"
+        class="tab-panel"
+        role="tabpanel"
+        aria-labelledby="tab-watchlists"
+        data-tab-panel
+        data-tab="watchlists"
+        hidden
+      >
+        <div class="card card-muted space-y-2">
+          <p class="eyebrow">Watchlist imports</p>
+          <h2 class="section-title">Pull watchlists during quick and full imports.</h2>
+          <p class="section-subtitle">
+            Adds external watchlists into librarySync only. Personal watchlists are enabled when
+            the integration is connected.
+          </p>
+        </div>
+        <div class="grid gap-4 lg:grid-cols-2">
+          <div class="card space-y-4">
+            <div class="card-header">
+              <div>
+                <h3 class="section-title">Watchlist sources</h3>
+                <p class="section-subtitle">
+                  Manage which external lists sync into your watchlist.
+                </p>
+              </div>
+            </div>
+            <p class="helper-text">
+              Personal watchlists from connected integrations are enabled by default and cannot
+              be removed.
+            </p>
+            <p id="watchlist-sources-empty" class="empty-state" hidden>
+              Connect Trakt or Letterboxd to start syncing watchlists.
+            </p>
+            <ul id="watchlist-sources-list" class="space-y-3" role="list"></ul>
+            <p id="watchlist-sources-message" class="form-message" role="status" hidden></p>
+          </div>
+
+          <div class="card space-y-4">
+            <div class="card-header">
+              <div>
+                <h3 class="section-title">Add a watchlist</h3>
+                <p class="section-subtitle">Paste a public Trakt or Letterboxd list URL.</p>
+              </div>
+            </div>
+            <form id="watchlist-source-form" class="space-y-4">
+              <label class="field">
+                <span>Watchlist URL</span>
+                <input
+                  class="input"
+                  type="url"
+                  name="url"
+                  placeholder="https://app.trakt.tv/users/garycrawfordgc/lists/latest-releases"
+                  required
+                />
+              </label>
+              <p class="helper-text">
+                Supported formats: Trakt user lists and public lists, Letterboxd public lists.
+              </p>
+              <div class="flex flex-wrap gap-2">
+                <button class="btn btn-primary" type="submit">Add watchlist</button>
+              </div>
+              <p id="watchlist-source-message" class="form-message" role="status" hidden></p>
+            </form>
           </div>
         </div>
       </div>

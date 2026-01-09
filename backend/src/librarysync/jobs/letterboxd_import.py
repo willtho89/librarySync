@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +27,15 @@ from librarysync.connectors.services.letterboxd import (
 from librarysync.connectors.services.letterboxd import (
     token_to_secret_payload as letterboxd_token_to_secret_payload,
 )
+from librarysync.core.watchlist_links import parse_letterboxd_list_urls
+from librarysync.core.watchlist_sources import (
+    LEGACY_LIST_SOURCE_TYPE,
+    PERSONAL_SOURCE_TYPE,
+    URL_SOURCE_TYPE,
+    ensure_personal_watchlist_source,
+    list_watchlist_sources,
+    reconcile_watchlist_source,
+)
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.security import encrypt_value
@@ -43,6 +51,10 @@ from librarysync.jobs.import_pipeline import (
     process_import_candidates,
 )
 from librarysync.jobs.import_utils import chunked
+from librarysync.jobs.watchlist_pipeline import (
+    WatchlistCandidate,
+    process_watchlist_candidates,
+)
 
 LOOKBACK_DAYS = settings.history_lookback_days
 MAX_PAGES = 6
@@ -52,6 +64,8 @@ FULL_HISTORY_EMPTY_MONTHS = 3
 IMDB_ID_RE = re.compile(r"(tt\d{3,10})", re.IGNORECASE)
 TMDB_URL_RE = re.compile(r"/(?:movie|film|tv)/(\d+)", re.IGNORECASE)
 ENTRY_KEY_BATCH_SIZE = 200
+WATCHLIST_PER_PAGE = 50
+WATCHLIST_MAX_PAGES = 10
 logger = logging.getLogger(__name__)
 
 
@@ -194,7 +208,129 @@ async def _import_for_integration(
             imported,
             integration.user_id,
         )
-    return ImportResult(imported=imported, attempted=True)
+    watchlist_imported = await _import_watchlist_for_integration(
+        db,
+        integration,
+        client,
+        access_token,
+        member_id,
+        now,
+    )
+    if watchlist_imported:
+        logger.info(
+            "Imported %s Letterboxd watchlist items for user %s",
+            watchlist_imported,
+            integration.user_id,
+        )
+    return ImportResult(imported=imported + watchlist_imported, attempted=True)
+
+
+async def _import_watchlist_for_integration(
+    db: AsyncSession,
+    integration: Integration,
+    client: LetterboxdClient,
+    access_token: str,
+    member_id: str | None,
+    now: datetime,
+) -> int:
+    await ensure_personal_watchlist_source(
+        db,
+        user_id=integration.user_id,
+        provider="letterboxd",
+        name="Letterboxd watchlist",
+    )
+    sources = await list_watchlist_sources(db, integration.user_id, provider="letterboxd")
+    if not sources:
+        return 0
+    imported = 0
+    candidates: list[WatchlistCandidate] = []
+    for source in sources:
+        if source.source_type == PERSONAL_SOURCE_TYPE:
+            if not member_id:
+                logger.warning(
+                    "Letterboxd watchlist skipped (missing member id) for user %s",
+                    integration.user_id,
+                )
+                continue
+            entries = await client.get_watchlist(
+                access_token,
+                member_id=member_id,
+                per_page=WATCHLIST_PER_PAGE,
+                max_pages=WATCHLIST_MAX_PAGES,
+            )
+            for entry in entries:
+                candidate = _build_watchlist_candidate(entry)
+                if candidate:
+                    candidates.append(candidate)
+            if candidates:
+                imported += await process_watchlist_candidates(
+                    db,
+                    integration.user_id,
+                    "letterboxd",
+                    source,
+                    candidates,
+                    now=now,
+                )
+                candidates = []
+            elif not entries:
+                await reconcile_watchlist_source(
+                    db,
+                    source,
+                    now=now,
+                    seen_item_ids=[],
+                )
+            continue
+        if source.source_type not in {URL_SOURCE_TYPE, LEGACY_LIST_SOURCE_TYPE} or not source.url:
+            continue
+        list_refs = parse_letterboxd_list_urls([source.url])
+        if not list_refs:
+            logger.warning(
+                "Letterboxd watchlist URL skipped (invalid) for user %s: %s",
+                integration.user_id,
+                source.url,
+            )
+            continue
+        list_ref = list_refs[0]
+        try:
+            list_entries = await client.get_list_entries(
+                access_token,
+                list_ref.username,
+                list_ref.slug,
+                per_page=WATCHLIST_PER_PAGE,
+                max_pages=WATCHLIST_MAX_PAGES,
+            )
+        except LetterboxdError as exc:
+            logger.warning(
+                "Letterboxd list fetch failed for user %s (%s): %s",
+                integration.user_id,
+                list_ref.url,
+                exc,
+            )
+            continue
+        if not list_entries:
+            await reconcile_watchlist_source(
+                db,
+                source,
+                now=now,
+                seen_item_ids=[],
+            )
+            continue
+        list_context = {"name": list_ref.name, "url": list_ref.url, "type": "list"}
+        for entry in list_entries:
+            candidate = _build_watchlist_candidate(entry, list_context=list_context)
+            if candidate:
+                candidates.append(candidate)
+        if candidates:
+            imported += await process_watchlist_candidates(
+                db,
+                integration.user_id,
+                "letterboxd",
+                source,
+                candidates,
+                now=now,
+            )
+            candidates = []
+    return imported
 
 
 async def _ensure_letterboxd_access_token(
@@ -270,6 +406,43 @@ def _build_candidate(entry: dict[str, Any], now: datetime) -> ImportCandidate | 
         blacklist_enabled=False,
         is_rewatch=is_rewatch,
         build_items=_build_items,
+    )
+
+
+def _build_watchlist_candidate(
+    entry: dict[str, Any],
+    *,
+    list_context: dict[str, Any] | None = None,
+) -> WatchlistCandidate | None:
+    entry_id = _extract_watchlist_entry_id(entry)
+    film = _extract_film_summary(entry)
+    if not film:
+        return None
+    entry_key = _build_watchlist_entry_key(entry_id, film)
+    ids: dict[str, str] = {}
+    if film.imdb_id:
+        ids["imdb_id"] = film.imdb_id
+    if film.tmdb_id:
+        ids["tmdb_id"] = film.tmdb_id
+    if film.film_id:
+        ids["letterboxd_film_id"] = film.film_id
+    raw: dict[str, Any] = {"source": "letterboxd"}
+    if entry_id:
+        raw["entry_id"] = entry_id
+    if film.raw:
+        raw["film"] = film.raw
+    if list_context:
+        raw["list"] = list_context
+    return WatchlistCandidate(
+        entry_key=entry_key,
+        media_type="movie",
+        ids=ids,
+        title=film.title,
+        year=film.year,
+        poster_url=film.poster_url,
+        raw=raw,
+        source="letterboxd",
+        external_item_id=entry_id,
     )
 
 
@@ -372,6 +545,18 @@ def _build_entry_key(
     return None
 
 
+def _build_watchlist_entry_key(entry_id: str | None, film: FilmSummary) -> str | None:
+    if entry_id:
+        return f"watchlist:{entry_id}"
+    if film.film_id:
+        return f"watchlist:film:{film.film_id}"
+    if film.imdb_id:
+        return f"watchlist:imdb:{film.imdb_id}"
+    if film.tmdb_id:
+        return f"watchlist:tmdb:{film.tmdb_id}"
+    return None
+
+
 def _build_event_raw(
     entry: dict[str, Any],
     entry_key: str,
@@ -424,6 +609,17 @@ def _extract_entry_id(entry: dict[str, Any]) -> str | None:
             value = nested.get(key)
             if isinstance(value, (str, int)):
                 return str(value)
+    return None
+
+
+def _extract_watchlist_entry_id(entry: dict[str, Any]) -> str | None:
+    entry_id = _extract_entry_id(entry)
+    if entry_id:
+        return entry_id
+    for key in ("watchlistId", "listItemId", "list_item_id", "itemId"):
+        value = entry.get(key)
+        if isinstance(value, (str, int)):
+            return str(value)
     return None
 
 
@@ -489,6 +685,8 @@ def _extract_film_payload(entry: dict[str, Any]) -> dict[str, Any]:
         value = entry.get(key)
         if isinstance(value, dict):
             return value
+    if isinstance(entry, dict) and (entry.get("name") or entry.get("title")):
+        return entry
     return {}
 
 

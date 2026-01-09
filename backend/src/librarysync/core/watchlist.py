@@ -1,7 +1,9 @@
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import EpisodeMetadataProvider
@@ -15,6 +17,27 @@ from librarysync.db.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+WATCHLIST_IMPORT_KEY = "watchlist_import"
+
+
+@dataclass(frozen=True)
+class WatchlistImportConfig:
+    enabled: bool
+    include_personal: bool
+    list_urls: list[str]
+
+
+def parse_watchlist_import_config(config: dict | None) -> WatchlistImportConfig:
+    raw = config.get(WATCHLIST_IMPORT_KEY) if isinstance(config, dict) else None
+    enabled = _coerce_bool(raw, "enabled", default=False)
+    include_personal = _coerce_bool(raw, "include_personal", default=True)
+    list_urls = _coerce_list(raw, ("lists", "list_urls"))
+    return WatchlistImportConfig(
+        enabled=enabled,
+        include_personal=include_personal,
+        list_urls=list_urls,
+    )
 
 
 def _parse_air_date(value: str | None) -> datetime.date | None:
@@ -171,7 +194,7 @@ async def backfill_show_episodes(
             episodes_dirty = True
 
     if media_dirty or episodes_dirty:
-        await db.commit()
+        await db.flush()
 
 
 async def check_and_update_watchlist(
@@ -299,3 +322,250 @@ async def log_watchlist_event(
         raw=raw,
     )
     db.add(event)
+
+
+def normalize_media_ids(ids: dict[str, str] | None) -> dict[str, str]:
+    if not isinstance(ids, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in ids.items():
+        if not value:
+            continue
+        cleaned = str(value).strip()
+        if not cleaned:
+            continue
+        if key == "imdb_id":
+            cleaned = cleaned.lower()
+        normalized[key] = cleaned
+    return normalized
+
+
+def fallback_title(ids: dict[str, str]) -> str:
+    for provider, value in ids.items():
+        return f"{provider.upper()} {value}"
+    return "Unknown title"
+
+
+async def find_media_item_by_ids(
+    db: AsyncSession, media_type: str, ids: dict[str, str]
+) -> MediaItem | None:
+    clauses = []
+    if ids.get("imdb_id"):
+        clauses.append(MediaItem.imdb_id == ids["imdb_id"])
+    if ids.get("tmdb_id"):
+        clauses.append(
+            (MediaItem.tmdb_id == ids["tmdb_id"]) & (MediaItem.media_type == media_type)
+        )
+    if ids.get("tvdb_id"):
+        clauses.append(
+            (MediaItem.tvdb_id == ids["tvdb_id"]) & (MediaItem.media_type == media_type)
+        )
+    if ids.get("tvmaze_id"):
+        clauses.append(
+            (MediaItem.tvmaze_id == ids["tvmaze_id"]) & (MediaItem.media_type == media_type)
+        )
+    if ids.get("kitsu_id"):
+        clauses.append(
+            (MediaItem.kitsu_id == ids["kitsu_id"]) & (MediaItem.media_type == media_type)
+        )
+    if ids.get("myanimelist_id"):
+        clauses.append(
+            (MediaItem.myanimelist_id == ids["myanimelist_id"])
+            & (MediaItem.media_type == media_type)
+        )
+    if ids.get("anilist_id"):
+        clauses.append(
+            (MediaItem.anilist_id == ids["anilist_id"]) & (MediaItem.media_type == media_type)
+        )
+    if ids.get("letterboxd_film_id"):
+        clauses.append(
+            (MediaItem.raw["letterboxd_film_id"].as_string() == ids["letterboxd_film_id"])
+            & (MediaItem.media_type == media_type)
+        )
+    if not clauses:
+        return None
+    result = await db.execute(select(MediaItem).where(or_(*clauses)).limit(1))
+    return result.scalars().first()
+
+
+def apply_media_id_update(item: MediaItem, field: str, value: str | None) -> None:
+    if not value:
+        return
+    current = getattr(item, field)
+    if not current:
+        setattr(item, field, value)
+
+
+async def upsert_watchlist_item(
+    db: AsyncSession,
+    user_id: str,
+    media_type: str,
+    ids: dict[str, str],
+    title: str | None,
+    year: int | None,
+    poster_url: str | None,
+    source: str,
+    *,
+    now: datetime | None = None,
+    event_raw: dict[str, Any] | None = None,
+) -> tuple[WatchlistItem | None, str]:
+    normalized_ids = normalize_media_ids(ids)
+    if not normalized_ids:
+        return None, "skipped"
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    media_item = await find_media_item_by_ids(db, media_type, normalized_ids)
+    if media_item and media_item.media_type != media_type:
+        return None, "conflict"
+
+    if not media_item:
+        resolved_title = title or fallback_title(normalized_ids)
+        raw = {"source": source, "ids": normalized_ids}
+        if normalized_ids.get("letterboxd_film_id"):
+            raw["letterboxd_film_id"] = normalized_ids["letterboxd_film_id"]
+        media_item = MediaItem(
+            media_type=media_type,
+            title=resolved_title,
+            year=year,
+            poster_url=poster_url,
+            imdb_id=normalized_ids.get("imdb_id"),
+            tmdb_id=normalized_ids.get("tmdb_id"),
+            tvdb_id=normalized_ids.get("tvdb_id"),
+            tvmaze_id=normalized_ids.get("tvmaze_id"),
+            kitsu_id=normalized_ids.get("kitsu_id"),
+            myanimelist_id=normalized_ids.get("myanimelist_id"),
+            anilist_id=normalized_ids.get("anilist_id"),
+            raw=raw,
+        )
+        db.add(media_item)
+        await db.flush()
+    else:
+        apply_media_id_update(media_item, "imdb_id", normalized_ids.get("imdb_id"))
+        apply_media_id_update(media_item, "tmdb_id", normalized_ids.get("tmdb_id"))
+        apply_media_id_update(media_item, "tvdb_id", normalized_ids.get("tvdb_id"))
+        apply_media_id_update(media_item, "tvmaze_id", normalized_ids.get("tvmaze_id"))
+        apply_media_id_update(media_item, "kitsu_id", normalized_ids.get("kitsu_id"))
+        apply_media_id_update(media_item, "myanimelist_id", normalized_ids.get("myanimelist_id"))
+        apply_media_id_update(media_item, "anilist_id", normalized_ids.get("anilist_id"))
+        if year is not None and media_item.year is None:
+            media_item.year = year
+        if poster_url and not media_item.poster_url:
+            media_item.poster_url = poster_url
+        if normalized_ids.get("letterboxd_film_id"):
+            existing_raw = media_item.raw if isinstance(media_item.raw, dict) else {}
+            if not existing_raw.get("letterboxd_film_id"):
+                existing_raw["letterboxd_film_id"] = normalized_ids["letterboxd_film_id"]
+                media_item.raw = existing_raw
+
+    result = await db.execute(
+        select(WatchlistItem).where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.media_item_id == media_item.id,
+        )
+    )
+    existing = result.scalars().first()
+    if existing:
+        if existing.status == "removed":
+            initial_status = "active"
+            if media_type == "movie":
+                w_result = await db.execute(
+                    select(WatchedItem)
+                    .where(
+                        WatchedItem.user_id == user_id,
+                        WatchedItem.media_item_id == media_item.id,
+                    )
+                    .limit(1)
+                )
+                if w_result.scalars().first():
+                    initial_status = "watched"
+            existing.status = initial_status
+            existing.updated_at = now
+            if existing.source != source and existing.source != "manual":
+                existing.source = source
+            await log_watchlist_event(
+                db,
+                user_id,
+                media_item.id,
+                "watchlist_added",
+                {"restored": True, "source": source, **(event_raw or {})},
+            )
+            if media_type == "tv":
+                await backfill_show_episodes(db, user_id, media_item)
+                await evaluate_show_watchlist_status(db, user_id, existing, media_item)
+            return existing, "restored"
+        return existing, "already_exists"
+
+    initial_status = "active"
+    if media_type == "movie":
+        w_result = await db.execute(
+            select(WatchedItem)
+            .where(
+                WatchedItem.user_id == user_id,
+                WatchedItem.media_item_id == media_item.id,
+            )
+            .limit(1)
+        )
+        if w_result.scalars().first():
+            initial_status = "watched"
+
+    watchlist_item = WatchlistItem(
+        user_id=user_id,
+        media_item_id=media_item.id,
+        type=media_type,
+        status=initial_status,
+        source=source,
+    )
+    db.add(watchlist_item)
+    await log_watchlist_event(
+        db,
+        user_id,
+        media_item.id,
+        "watchlist_added",
+        {"source": source, **(event_raw or {})},
+    )
+    await db.flush()
+    if media_type == "tv":
+        await backfill_show_episodes(db, user_id, media_item)
+        await evaluate_show_watchlist_status(db, user_id, watchlist_item, media_item)
+    return watchlist_item, "created"
+
+
+def _coerce_bool(raw: dict | None, key: str, default: bool) -> bool:
+    if not isinstance(raw, dict):
+        return default
+    value = raw.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"true", "1", "yes", "on"}:
+            return True
+        if cleaned in {"false", "0", "no", "off"}:
+            return False
+    return default
+
+
+def _coerce_list(raw: dict | None, keys: tuple[str, ...]) -> list[str]:
+    if not isinstance(raw, dict):
+        return []
+    value: object = None
+    for key in keys:
+        if key in raw:
+            value = raw.get(key)
+            break
+    items: list[str] = []
+    if isinstance(value, list):
+        for entry in value:
+            if isinstance(entry, str):
+                cleaned = entry.strip()
+                if cleaned:
+                    items.append(cleaned)
+    elif isinstance(value, str):
+        for entry in value.splitlines():
+            cleaned = entry.strip()
+            if cleaned:
+                items.append(cleaned)
+    return items

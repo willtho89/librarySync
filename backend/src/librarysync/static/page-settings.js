@@ -2,6 +2,7 @@ const settingsState = {
   hasAnyImports: false,
   status: null,
   importQueue: [],
+  watchlistSources: [],
 };
 const DEFAULT_IMPORT_QUEUE_ORDER = [
   "trakt",
@@ -11,6 +12,10 @@ const DEFAULT_IMPORT_QUEUE_ORDER = [
   "stremio",
   "aiostreams",
 ];
+const WATCHLIST_PROVIDER_LABELS = {
+  trakt: "Trakt",
+  letterboxd: "Letterboxd",
+};
 
 function applyQuickImportControls(statusData) {
   const form = document.getElementById("quick-import-form");
@@ -51,6 +56,25 @@ function setIntegrationStatusBadge(id, connected) {
   }
   badge.textContent = connected ? "Connected" : "Not connected";
   badge.dataset.state = connected ? "connected" : "disconnected";
+}
+
+function formatWatchlistSourceLabel(source) {
+  const providerLabel =
+    WATCHLIST_PROVIDER_LABELS[source.provider] || source.provider || "Unknown";
+  const name = source.name ? source.name.replace(/-/g, " ") : "Watchlist";
+  if (name.toLowerCase().includes(providerLabel.toLowerCase())) {
+    return name;
+  }
+  return `${providerLabel}: ${name}`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function loadStatusData() {
@@ -340,7 +364,6 @@ async function loadIntegrations() {
       }
     }
   }
-
   const trakt = integrations.find((item) => item.provider === "trakt");
   const traktMessage = document.getElementById("trakt-message");
   const traktConnect = document.getElementById("trakt-connect");
@@ -371,7 +394,6 @@ async function loadIntegrations() {
       traktDisconnect.hidden = true;
     }
   }
-
   const simkl = integrations.find((item) => item.provider === "simkl");
   const simklMessage = document.getElementById("simkl-message");
   const simklConnect = document.getElementById("simkl-connect");
@@ -499,6 +521,7 @@ async function loadIntegrations() {
     importAllButton.disabled = !settingsState.hasAnyImports;
   }
   applyQuickImportControls(settingsState.status);
+  await loadWatchlistSources();
   await loadImportQueue();
 }
 
@@ -708,6 +731,151 @@ function handleLetterboxdParse() {
       `Parsed: ${fields.join(", ")}. Review and save.`
     );
   }
+}
+
+function renderWatchlistSources(sources) {
+  const list = document.getElementById("watchlist-sources-list");
+  const empty = document.getElementById("watchlist-sources-empty");
+  if (!list) {
+    return;
+  }
+  if (!Array.isArray(sources) || !sources.length) {
+    list.innerHTML = "";
+    if (empty) {
+      empty.hidden = false;
+    }
+    return;
+  }
+  if (empty) {
+    empty.hidden = true;
+  }
+  list.innerHTML = sources
+    .map((source) => {
+      const label = escapeHtml(formatWatchlistSourceLabel(source));
+      const urlLine = source.url ? escapeHtml(source.url) : "Personal watchlist";
+      const provider = escapeHtml(source.provider || "unknown");
+      const checked = source.is_enabled ? "checked" : "";
+      const disableLabel = source.is_enabled ? "Enabled" : "Disabled";
+      const deleteButton = source.is_deletable
+        ? `<button class="btn btn-ghost" type="button" data-action="delete" data-id="${escapeHtml(
+            source.id
+          )}">Remove</button>`
+        : "";
+      return `
+        <li class="card card-muted">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p class="section-title">${label}</p>
+              <p class="helper-text">${provider} · ${urlLine}</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="inline-control">
+                <input type="checkbox" data-action="toggle" data-id="${escapeHtml(
+                  source.id
+                )}" ${checked} />
+                <span>${disableLabel}</span>
+              </label>
+              ${deleteButton}
+            </div>
+          </div>
+        </li>
+      `;
+    })
+    .join("");
+}
+
+async function loadWatchlistSources() {
+  try {
+    const data = await requestJSON("/api/watchlist/sources");
+    const sources = data && Array.isArray(data.sources) ? data.sources : [];
+    settingsState.watchlistSources = sources;
+    renderWatchlistSources(sources);
+  } catch (error) {
+    console.error("watchlist sources load failed", error);
+  }
+}
+
+async function handleWatchlistSourceAdd(data) {
+  setMessage("watchlist-source-message", "");
+  const url = data.get("url");
+  if (!url) {
+    setMessage("watchlist-source-message", "Enter a watchlist URL.", true);
+    return;
+  }
+  try {
+    await requestJSON("/api/watchlist/sources", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+    setMessage("watchlist-source-message", "Watchlist added.");
+    await loadWatchlistSources();
+  } catch (error) {
+    setMessage("watchlist-source-message", error.message, true);
+  }
+}
+
+async function handleWatchlistSourceToggle(sourceId, isEnabled) {
+  setMessage("watchlist-sources-message", "");
+  try {
+    await requestJSON(`/api/watchlist/sources/${sourceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_enabled: isEnabled }),
+    });
+    await loadWatchlistSources();
+  } catch (error) {
+    setMessage("watchlist-sources-message", error.message, true);
+  }
+}
+
+async function handleWatchlistSourceDelete(sourceId) {
+  const confirmed = window.confirm("Remove this watchlist source?");
+  if (!confirmed) {
+    return;
+  }
+  setMessage("watchlist-sources-message", "");
+  try {
+    await requestJSON(`/api/watchlist/sources/${sourceId}`, {
+      method: "DELETE",
+    });
+    await loadWatchlistSources();
+  } catch (error) {
+    setMessage("watchlist-sources-message", error.message, true);
+  }
+}
+
+function bindWatchlistSourceActions() {
+  const list = document.getElementById("watchlist-sources-list");
+  if (!list) {
+    return;
+  }
+  list.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    const action = target.dataset.action;
+    const sourceId = target.dataset.id;
+    if (!action || !sourceId) {
+      return;
+    }
+    if (action === "delete") {
+      handleWatchlistSourceDelete(sourceId);
+    }
+  });
+  list.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) {
+      return;
+    }
+    if (target.dataset.action !== "toggle") {
+      return;
+    }
+    const sourceId = target.dataset.id;
+    if (!sourceId) {
+      return;
+    }
+    handleWatchlistSourceToggle(sourceId, target.checked);
+  });
 }
 
 async function handleLetterboxdSave(data, form) {
@@ -1449,6 +1617,7 @@ window.librarysyncPageInit = async ({ user }) => {
     return;
   }
   bindForm("letterboxd-form", handleLetterboxdSave);
+  bindForm("watchlist-source-form", handleWatchlistSourceAdd);
   bindForm("quick-import-form", handleQuickImportScheduleSave);
   bindForm("stremio-form", handleStremioConnect);
   bindForm("aiostreams-form", handleAIOStreamsSave);
@@ -1461,6 +1630,7 @@ window.librarysyncPageInit = async ({ user }) => {
   bindForm("myanimelist-form", handleMyAnimeListSave);
   bindForm("anilist-provider-form", handleAniListProviderSave);
   bindHistoryClear();
+  bindWatchlistSourceActions();
 
   const letterboxdTest = document.getElementById("letterboxd-test");
   if (letterboxdTest) {

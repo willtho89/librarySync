@@ -3,18 +3,42 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
-from librarysync.core.watchlist import backfill_show_episodes, evaluate_show_watchlist_status
+from librarysync.core.watchlist_links import (
+    parse_letterboxd_list_urls,
+    parse_trakt_list_urls,
+)
+from librarysync.core.watchlist import (
+    log_watchlist_event,
+    normalize_media_ids,
+    upsert_watchlist_item,
+)
+from librarysync.core.watchlist_sync import (
+    enqueue_personal_watchlist_removal,
+    enqueue_personal_watchlist_sync,
+)
+from librarysync.core.watchlist_sources import (
+    LEGACY_LIST_SOURCE_TYPE,
+    URL_SOURCE_TYPE,
+    ensure_manual_watchlist_source,
+    ensure_personal_watchlist_source,
+    ensure_watchlist_source,
+    list_watchlist_sources,
+    remove_watchlist_source,
+    upsert_watchlist_source_item,
+)
 from librarysync.db.models import (
+    Integration,
     MediaItem,
     User,
     WatchedItem,
-    WatchEvent,
     WatchlistItem,
+    WatchlistSource,
+    WatchlistSourceItem,
 )
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
@@ -32,6 +56,15 @@ class WatchlistItemCreateIn(BaseModel):
     title: str | None = None
     year: int | None = None
     poster_url: str | None = None
+
+
+class WatchlistItemSourceOut(BaseModel):
+    id: str
+    provider: str
+    source_type: str
+    name: str | None
+    url: str | None
+    is_enabled: bool
 
 
 class WatchlistItemOut(BaseModel):
@@ -52,6 +85,26 @@ class WatchlistItemOut(BaseModel):
     release_date: str | None = None
     first_air_date: str | None = None
     progress: dict | None = None
+    sources: list[WatchlistItemSourceOut] = []
+
+
+class WatchlistSourceCreateIn(BaseModel):
+    url: str
+
+
+class WatchlistSourceUpdateIn(BaseModel):
+    is_enabled: bool
+
+
+class WatchlistSourceOut(BaseModel):
+    id: str
+    provider: str
+    source_type: str
+    url: str | None
+    name: str | None
+    is_enabled: bool
+    is_deletable: bool
+    last_synced_at: datetime | None
 
 
 @router.post(
@@ -65,128 +118,232 @@ async def add_watchlist_item(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    media_ids = _extract_media_ids(payload)
+    now = datetime.now(timezone.utc)
+    media_ids = normalize_media_ids(
+        {
+            "imdb_id": payload.imdb_id,
+            "tmdb_id": payload.tmdb_id,
+            "tvdb_id": payload.tvdb_id,
+            "tvmaze_id": payload.tvmaze_id,
+            "kitsu_id": payload.kitsu_id,
+            "myanimelist_id": payload.myanimelist_id,
+            "anilist_id": payload.anilist_id,
+        }
+    )
     if not media_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Provide at least one external ID",
         )
-
-    media_item = await _find_media_item_by_ids(db, payload.media_type, media_ids)
-    if media_item and media_item.media_type != payload.media_type:
+    watchlist_item, status_value = await upsert_watchlist_item(
+        db,
+        current_user.id,
+        payload.media_type,
+        media_ids,
+        payload.title,
+        payload.year,
+        payload.poster_url,
+        "manual",
+        now=now,
+        event_raw={},
+    )
+    if status_value == "conflict":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Media type does not match existing item",
         )
-
-    if not media_item:
-        title = payload.title or _fallback_title(media_ids)
-        media_item = MediaItem(
-            media_type=payload.media_type,
-            title=title,
-            year=payload.year,
-            poster_url=payload.poster_url,
-            imdb_id=media_ids.get("imdb_id"),
-            tmdb_id=media_ids.get("tmdb_id"),
-            tvdb_id=media_ids.get("tvdb_id"),
-            tvmaze_id=media_ids.get("tvmaze_id"),
-            kitsu_id=media_ids.get("kitsu_id"),
-            myanimelist_id=media_ids.get("myanimelist_id"),
-            anilist_id=media_ids.get("anilist_id"),
-            raw={"source": "api", "ids": media_ids},
+    if not watchlist_item:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to add watchlist item",
         )
-        db.add(media_item)
-        await db.flush()
-    else:
-        _apply_id_update(media_item, "imdb_id", media_ids.get("imdb_id"))
-        _apply_id_update(media_item, "tmdb_id", media_ids.get("tmdb_id"))
-        _apply_id_update(media_item, "tvdb_id", media_ids.get("tvdb_id"))
-        _apply_id_update(media_item, "tvmaze_id", media_ids.get("tvmaze_id"))
-        _apply_id_update(media_item, "kitsu_id", media_ids.get("kitsu_id"))
-        _apply_id_update(media_item, "myanimelist_id", media_ids.get("myanimelist_id"))
-        _apply_id_update(media_item, "anilist_id", media_ids.get("anilist_id"))
-        if payload.year is not None and media_item.year is None:
-            media_item.year = payload.year
-        if payload.poster_url and not media_item.poster_url:
-            media_item.poster_url = payload.poster_url
-
-    # Check existing watchlist item
-    result = await db.execute(
-        select(WatchlistItem).where(
-            WatchlistItem.user_id == current_user.id,
-            WatchlistItem.media_item_id == media_item.id,
-        )
-    )
-    existing = result.scalars().first()
-    if existing:
-        if existing.status == "removed":
-            initial_status = "active"
-            if payload.media_type == "movie":
-                # Check history
-                w_result = await db.execute(
-                    select(WatchedItem)
-                    .where(
-                        WatchedItem.user_id == current_user.id,
-                        WatchedItem.media_item_id == media_item.id,
-                    )
-                    .limit(1)
-                )
-                if w_result.scalars().first():
-                    initial_status = "watched"
-
-            existing.status = initial_status
-            existing.updated_at = datetime.now(timezone.utc)
-            # Log event
-            await _log_watchlist_event(
-                db, current_user.id, media_item.id, "watchlist_added", {"restored": True}
-            )
-            await db.commit()
-
-            # Evaluate for TV
-            if payload.media_type == "tv":
-                await backfill_show_episodes(db, current_user.id, media_item)
-                await evaluate_show_watchlist_status(db, current_user.id, existing, media_item)
-                await db.commit()
-
-            await db.refresh(existing)
-            return {"id": existing.id, "status": "restored"}
-        return {"id": existing.id, "status": "already_exists"}
-
-    initial_status = "active"
-    if payload.media_type == "movie":
-        # Check history
-        w_result = await db.execute(
-            select(WatchedItem)
-            .where(
-                WatchedItem.user_id == current_user.id,
-                WatchedItem.media_item_id == media_item.id,
-            )
-            .limit(1)
-        )
-        if w_result.scalars().first():
-            initial_status = "watched"
-
-    watchlist_item = WatchlistItem(
-        user_id=current_user.id,
-        media_item_id=media_item.id,
-        type=payload.media_type,
-        status=initial_status,
-        source="manual",
-    )
-    db.add(watchlist_item)
-
-    await _log_watchlist_event(db, current_user.id, media_item.id, "watchlist_added", {})
-    await db.commit()
-
-    # Evaluate for TV
-    if payload.media_type == "tv":
-        await db.refresh(watchlist_item)
-        await backfill_show_episodes(db, current_user.id, media_item)
-        await evaluate_show_watchlist_status(db, current_user.id, watchlist_item, media_item)
+    if status_value in {"created", "restored"}:
         await db.commit()
+        await db.refresh(watchlist_item)
+    if watchlist_item:
+        source = await ensure_manual_watchlist_source(db, current_user.id)
+        await upsert_watchlist_source_item(
+            db,
+            source,
+            watchlist_item,
+            external_item_id=None,
+            now=now,
+        )
+        media_result = await db.execute(
+            select(MediaItem).where(MediaItem.id == watchlist_item.media_item_id)
+        )
+        media_item = media_result.scalars().first()
+        await enqueue_personal_watchlist_sync(db, watchlist_item, media_item)
+        await db.commit()
+    return {"id": watchlist_item.id, "status": status_value}
 
-    await db.refresh(watchlist_item)
-    return {"id": watchlist_item.id, "status": "created"}
+
+@router.get(
+    "/sources",
+    summary="List watchlist sources",
+    description="Return the current user's configured watchlist sources.",
+)
+async def list_watchlist_sources_route(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    integrations_result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider.in_(["trakt", "letterboxd"]),
+            Integration.status != "disconnected",
+        )
+    )
+    for integration in integrations_result.scalars().all():
+        if integration.provider == "trakt":
+            await ensure_personal_watchlist_source(
+                db,
+                user_id=current_user.id,
+                provider="trakt",
+                name="Trakt watchlist",
+            )
+        elif integration.provider == "letterboxd":
+            await ensure_personal_watchlist_source(
+                db,
+                user_id=current_user.id,
+                provider="letterboxd",
+                name="Letterboxd watchlist",
+            )
+    sources = await list_watchlist_sources(
+        db, current_user.id, include_disabled=True
+    )
+    items = [
+        WatchlistSourceOut(
+            id=source.id,
+            provider=source.provider,
+            source_type=source.source_type,
+            url=source.url,
+            name=source.name,
+            is_enabled=source.is_enabled,
+            is_deletable=source.source_type in {URL_SOURCE_TYPE, LEGACY_LIST_SOURCE_TYPE},
+            last_synced_at=source.last_synced_at,
+        ).model_dump()
+        for source in sources
+    ]
+    return {"sources": items}
+
+
+@router.post(
+    "/sources",
+    status_code=status.HTTP_201_CREATED,
+    summary="Add watchlist source",
+    description="Add an external watchlist source by URL.",
+)
+async def add_watchlist_source(
+    payload: WatchlistSourceCreateIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    url = payload.url.strip()
+    trakt_refs = parse_trakt_list_urls([url])
+    letterboxd_refs = parse_letterboxd_list_urls([url]) if not trakt_refs else []
+    ref = trakt_refs[0] if trakt_refs else (letterboxd_refs[0] if letterboxd_refs else None)
+    if not ref:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported watchlist URL",
+        )
+    provider = "trakt" if trakt_refs else "letterboxd"
+    integration_result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == provider,
+            Integration.status != "disconnected",
+        )
+    )
+    if not integration_result.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Connect the integration before adding watchlists",
+        )
+    source = await ensure_watchlist_source(
+        db,
+        user_id=current_user.id,
+        provider=provider,
+        source_type=URL_SOURCE_TYPE,
+        external_id=ref.external_id,
+        url=ref.url,
+        name=ref.name,
+        is_enabled=True,
+    )
+    await db.commit()
+    return WatchlistSourceOut(
+        id=source.id,
+        provider=source.provider,
+        source_type=source.source_type,
+        url=source.url,
+        name=source.name,
+        is_enabled=source.is_enabled,
+        is_deletable=source.source_type in {URL_SOURCE_TYPE, LEGACY_LIST_SOURCE_TYPE},
+        last_synced_at=source.last_synced_at,
+    ).model_dump()
+
+
+@router.patch(
+    "/sources/{source_id}",
+    summary="Update watchlist source",
+    description="Enable or disable a watchlist source.",
+)
+async def update_watchlist_source(
+    source_id: str,
+    payload: WatchlistSourceUpdateIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(WatchlistSource).where(
+            WatchlistSource.id == source_id,
+            WatchlistSource.user_id == current_user.id,
+        )
+    )
+    source = result.scalars().first()
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist source not found"
+        )
+    source.is_enabled = bool(payload.is_enabled)
+    source.updated_at = datetime.now(timezone.utc)
+    db.add(source)
+    await db.commit()
+    return {
+        "id": source.id,
+        "is_enabled": source.is_enabled,
+    }
+
+
+@router.delete(
+    "/sources/{source_id}",
+    summary="Delete watchlist source",
+    description="Delete a watchlist source.",
+)
+async def delete_watchlist_source(
+    source_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(WatchlistSource).where(
+            WatchlistSource.id == source_id,
+            WatchlistSource.user_id == current_user.id,
+        )
+    )
+    source = result.scalars().first()
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist source not found"
+        )
+    if source.source_type not in {URL_SOURCE_TYPE, LEGACY_LIST_SOURCE_TYPE}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This watchlist source cannot be deleted",
+        )
+    removed_count = await remove_watchlist_source(db, source)
+    return {"status": "deleted", "removed": removed_count}
 
 
 @router.get(
@@ -221,10 +378,34 @@ async def list_watchlist_items(
 
     query = query.order_by(WatchlistItem.updated_at.desc()).offset(offset).limit(limit)
     result = await db.execute(query)
+    rows = result.all()
+    source_map: dict[str, list[WatchlistItemSourceOut]] = {}
+    item_ids = [item.id for item, _ in rows]
+    if item_ids:
+        source_result = await db.execute(
+            select(WatchlistSourceItem.watchlist_item_id, WatchlistSource)
+            .join(WatchlistSource, WatchlistSource.id == WatchlistSourceItem.source_id)
+            .where(
+                WatchlistSourceItem.watchlist_item_id.in_(item_ids),
+                WatchlistSourceItem.user_id == current_user.id,
+            )
+            .order_by(WatchlistSource.provider, WatchlistSource.name)
+        )
+        for watchlist_item_id, source in source_result.all():
+            source_map.setdefault(watchlist_item_id, []).append(
+                WatchlistItemSourceOut(
+                    id=source.id,
+                    provider=source.provider,
+                    source_type=source.source_type,
+                    name=source.name,
+                    url=source.url,
+                    is_enabled=source.is_enabled,
+                )
+            )
 
     items = []
     status_changed = False
-    for item, media in result.all():
+    for item, media in rows:
         progress = None
         if media.media_type == "tv":
             # For v1, this N+1 query is acceptable for small page size (25-100)
@@ -237,7 +418,7 @@ async def list_watchlist_items(
                 if item.status != desired_status:
                     item.status = desired_status
                     item.updated_at = datetime.now(timezone.utc)
-                    await _log_watchlist_event(
+                    await log_watchlist_event(
                         db,
                         current_user.id,
                         media.id,
@@ -265,6 +446,7 @@ async def list_watchlist_items(
                 release_date=media.release_date.isoformat() if media.release_date else None,
                 first_air_date=media.first_air_date.isoformat() if media.first_air_date else None,
                 progress=progress,
+                sources=[source.model_dump() for source in source_map.get(item.id, [])],
             ).model_dump()
         )
 
@@ -305,72 +487,20 @@ async def remove_watchlist_item(
     # But for "filter - remove from watchlist when watched", we might want soft delete or just delete.
     # The checklist item "Hard delete on remove" implies DELETE endpoint does hard delete.
 
-    await _log_watchlist_event(db, current_user.id, item.media_item_id, "watchlist_removed", {})
+    await log_watchlist_event(
+        db, current_user.id, item.media_item_id, "watchlist_removed", {}
+    )
+    media_item = None
+    if item.media_item_id:
+        media_result = await db.execute(
+            select(MediaItem).where(MediaItem.id == item.media_item_id)
+        )
+        media_item = media_result.scalars().first()
+    if media_item:
+        await enqueue_personal_watchlist_removal(db, item, media_item)
     await db.delete(item)
     await db.commit()
     return {"status": "deleted"}
-
-
-# --- Helpers ---
-
-
-async def _log_watchlist_event(
-    db: AsyncSession, user_id: str, media_item_id: str, event_type: str, raw: dict
-) -> None:
-    event = WatchEvent(
-        user_id=user_id,
-        media_item_id=media_item_id,
-        event_type=event_type,
-        occurred_at=datetime.now(timezone.utc),
-        raw=raw,
-    )
-    db.add(event)
-
-
-def _extract_media_ids(payload: WatchlistItemCreateIn) -> dict[str, str]:
-    ids: dict[str, str] = {}
-    if payload.imdb_id:
-        ids["imdb_id"] = payload.imdb_id.strip().lower()
-    if payload.tmdb_id:
-        ids["tmdb_id"] = payload.tmdb_id.strip()
-    if payload.tvdb_id:
-        ids["tvdb_id"] = payload.tvdb_id.strip()
-    if payload.tvmaze_id:
-        ids["tvmaze_id"] = payload.tvmaze_id.strip()
-    if payload.kitsu_id:
-        ids["kitsu_id"] = payload.kitsu_id.strip()
-    if payload.myanimelist_id:
-        ids["myanimelist_id"] = payload.myanimelist_id.strip()
-    if payload.anilist_id:
-        ids["anilist_id"] = payload.anilist_id.strip()
-    return ids
-
-
-def _fallback_title(ids: dict[str, str]) -> str:
-    for provider, val in ids.items():
-        return f"{provider.upper()} {val}"
-    return "Unknown title"
-
-
-async def _find_media_item_by_ids(
-    db: AsyncSession, media_type: str, ids: dict[str, str]
-) -> MediaItem | None:
-    # Simplified lookup
-    clauses = []
-    if ids.get("imdb_id"):
-        clauses.append(MediaItem.imdb_id == ids["imdb_id"])
-    if ids.get("tmdb_id"):
-        clauses.append((MediaItem.tmdb_id == ids["tmdb_id"]) & (MediaItem.media_type == media_type))
-    if ids.get("tvdb_id"):
-        clauses.append((MediaItem.tvdb_id == ids["tvdb_id"]) & (MediaItem.media_type == media_type))
-
-    if not clauses:
-        return None
-
-    # This is a bit loose, normally we check one by one to merge or avoid conflict
-    # But for now let's just find the first match
-    result = await db.execute(select(MediaItem).where(or_(*clauses)).limit(1))
-    return result.scalars().first()
 
 
 async def _get_show_progress(db: AsyncSession, user_id: str, media_item_id: str) -> dict:
@@ -401,11 +531,3 @@ async def _get_show_progress(db: AsyncSession, user_id: str, media_item_id: str)
     )
     watched_count = result.scalar() or 0
     return {"watched": watched_count, "total": total_released}
-
-
-def _apply_id_update(item: MediaItem, field: str, value: str | None) -> None:
-    if not value:
-        return
-    current = getattr(item, field)
-    if not current:
-        setattr(item, field, value)

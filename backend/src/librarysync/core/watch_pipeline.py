@@ -58,6 +58,9 @@ def _build_outbox_dedupe_key(
     watched_item_id = payload.get("watched_item_id")
     if watched_item_id:
         return f"{user_id}:{provider}:{job_type}:{watched_item_id}"
+    watchlist_item_id = payload.get("watchlist_item_id")
+    if watchlist_item_id:
+        return f"{user_id}:{provider}:{job_type}:{watchlist_item_id}"
     return None
 
 

@@ -412,6 +412,72 @@ class WatchlistItem(Base):
     )
 
 
+class WatchlistSource(Base):
+    __tablename__ = "watchlist_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "provider",
+            "source_type",
+            "external_id",
+            name="uq_watchlist_sources_user_provider_type_external",
+        ),
+        Index("ix_watchlist_sources_user_provider", "user_id", "provider"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    source_type: Mapped[str] = mapped_column(String(32))
+    external_id: Mapped[str] = mapped_column(String(255))
+    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class WatchlistSourceItem(Base):
+    __tablename__ = "watchlist_source_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "watchlist_item_id",
+            name="uq_watchlist_source_items_source_item",
+        ),
+        Index("ix_watchlist_source_items_user_media", "user_id", "media_item_id"),
+        Index("ix_watchlist_source_items_source_seen", "source_id", "last_seen_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("watchlist_sources.id", ondelete="CASCADE"), index=True
+    )
+    watchlist_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("watchlist_items.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    media_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("media_items.id", ondelete="CASCADE"), index=True
+    )
+    external_item_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ProgressEvent(Base):
     __tablename__ = "progress_events"
 

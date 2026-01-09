@@ -1,6 +1,7 @@
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
@@ -37,6 +38,7 @@ from librarysync.connectors.services.letterboxd import (
     LetterboxdError,
     extract_member_id,
     extract_member_name,
+    extract_watchlist_list_id,
     has_required_letterboxd_fields,
 )
 from librarysync.connectors.services.simkl import (
@@ -79,6 +81,7 @@ from librarysync.core.import_control import (
 from librarysync.core.import_schedule import normalize_interval_seconds
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.security import decrypt_value, encrypt_value
+from librarysync.core.watchlist import WATCHLIST_IMPORT_KEY, parse_watchlist_import_config
 from librarysync.db.models import Integration, IntegrationSecret, User
 
 router = APIRouter(
@@ -131,6 +134,12 @@ class ImportQueueOrderIn(BaseModel):
     order: list[str]
 
 
+class WatchlistImportConfigIn(BaseModel):
+    enabled: bool | None = None
+    include_personal: bool | None = None
+    list_urls: list[str] | None = None
+
+
 def _normalize_optional(value: str | None) -> str | None:
     if value is None:
         return None
@@ -148,6 +157,27 @@ def _normalize_cookies(cookies: dict[str, str] | None) -> dict[str, str] | None:
         if key_str and value_str:
             cleaned[key_str] = value_str
     return cleaned
+
+
+def _merge_watchlist_import_config(
+    config: dict | None,
+    payload: WatchlistImportConfigIn,
+) -> dict:
+    current = parse_watchlist_import_config(config)
+    updated = {
+        "enabled": current.enabled,
+        "include_personal": current.include_personal,
+        "lists": list(current.list_urls),
+    }
+    fields = payload.model_fields_set
+    if "enabled" in fields:
+        updated["enabled"] = bool(payload.enabled)
+    if "include_personal" in fields:
+        updated["include_personal"] = bool(payload.include_personal)
+    if "list_urls" in fields:
+        raw = payload.list_urls or []
+        updated["lists"] = [str(entry).strip() for entry in raw if str(entry).strip()]
+    return updated
 
 
 async def _load_letterboxd_integration(
@@ -261,6 +291,39 @@ async def list_integrations(
             for integration in integrations
         ]
     }
+
+
+@router.post(
+    "/{provider}/watchlist",
+    summary="Update watchlist import settings",
+    description="Update watchlist import settings for a provider.",
+)
+async def update_watchlist_import_settings(
+    provider: Literal["trakt", "letterboxd"],
+    payload: WatchlistImportConfigIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == current_user.id,
+            Integration.provider == provider,
+        )
+    )
+    integration = result.scalars().first()
+    if not integration:
+        integration = Integration(
+            user_id=current_user.id,
+            provider=provider,
+            status="configured",
+            config={},
+        )
+    config = dict(integration.config or {})
+    config[WATCHLIST_IMPORT_KEY] = _merge_watchlist_import_config(config, payload)
+    integration.config = config
+    db.add(integration)
+    await db.commit()
+    return {"provider": provider, "watchlist_import": config[WATCHLIST_IMPORT_KEY]}
 
 
 @router.post(
@@ -426,12 +489,15 @@ async def test_letterboxd(
 
     member_id = extract_member_id(me_payload)
     member_name = extract_member_name(me_payload)
+    watchlist_list_id = extract_watchlist_list_id(me_payload)
     if member_id:
         config = dict(integration.config or {})
         if config.get("member_id") != member_id:
             config["member_id"] = member_id
         if member_name and config.get("member_name") != member_name:
             config["member_name"] = member_name
+        if watchlist_list_id and config.get("watchlist_list_id") != watchlist_list_id:
+            config["watchlist_list_id"] = watchlist_list_id
         integration.config = config
         db.add(integration)
         await db.commit()

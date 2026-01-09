@@ -5,7 +5,6 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +20,15 @@ from librarysync.connectors.services.trakt import (
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
+from librarysync.core.watchlist_links import TraktListRef, parse_trakt_list_urls
+from librarysync.core.watchlist_sources import (
+    LEGACY_LIST_SOURCE_TYPE,
+    PERSONAL_SOURCE_TYPE,
+    URL_SOURCE_TYPE,
+    ensure_personal_watchlist_source,
+    list_watchlist_sources,
+    reconcile_watchlist_source,
+)
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
@@ -35,11 +43,17 @@ from librarysync.jobs.import_pipeline import (
     process_import_candidates,
 )
 from librarysync.jobs.import_utils import chunked
+from librarysync.jobs.watchlist_pipeline import (
+    WatchlistCandidate,
+    process_watchlist_candidates,
+)
 
 LOOKBACK_DAYS = settings.history_lookback_days
 MAX_PAGES = 8
 PER_PAGE = 50
 ENTRY_KEY_BATCH_SIZE = 200
+WATCHLIST_PER_PAGE = 50
+WATCHLIST_MAX_PAGES = 10
 logger = logging.getLogger(__name__)
 
 
@@ -182,7 +196,149 @@ async def _import_for_integration(
             imported,
             integration.user_id,
         )
-    return ImportResult(imported=imported, attempted=True)
+    watchlist_imported = await _import_watchlist_for_integration(
+        db,
+        integration,
+        client,
+        access_token,
+        now,
+        lookback_days,
+    )
+    if watchlist_imported:
+        logger.info(
+            "Imported %s Trakt watchlist items for user %s",
+            watchlist_imported,
+            integration.user_id,
+        )
+    return ImportResult(imported=imported + watchlist_imported, attempted=True)
+
+
+async def _import_watchlist_for_integration(
+    db: AsyncSession,
+    integration: Integration,
+    client: TraktClient,
+    access_token: str,
+    now: datetime,
+    lookback_days: int,
+) -> int:
+    await ensure_personal_watchlist_source(
+        db,
+        user_id=integration.user_id,
+        provider="trakt",
+        name="Trakt watchlist",
+    )
+    sources = await list_watchlist_sources(db, integration.user_id, provider="trakt")
+    if not sources:
+        return 0
+    candidates: list[WatchlistCandidate] = []
+    imported = 0
+    max_pages = None if lookback_days < 0 else WATCHLIST_MAX_PAGES
+    for source in sources:
+        if source.source_type == PERSONAL_SOURCE_TYPE:
+            total_entries = 0
+            for watchlist_type in ("movies", "shows"):
+                try:
+                    entries = await client.get_watchlist(
+                        access_token,
+                        watchlist_type=watchlist_type,
+                        per_page=WATCHLIST_PER_PAGE,
+                        max_pages=max_pages,
+                    )
+                except TraktError as exc:
+                    logger.warning(
+                        "Trakt watchlist fetch failed for user %s: %s",
+                        integration.user_id,
+                        exc,
+                    )
+                    entries = []
+                total_entries += len(entries)
+                for entry in entries:
+                    candidate = _build_watchlist_candidate(
+                        entry,
+                        source="trakt",
+                        list_context={"name": "Trakt watchlist", "type": "personal"},
+                    )
+                    if candidate:
+                        candidates.append(candidate)
+            if candidates:
+                imported += await process_watchlist_candidates(
+                    db,
+                    integration.user_id,
+                    "trakt",
+                    source,
+                    candidates,
+                    now=now,
+                )
+                candidates = []
+            elif total_entries == 0:
+                await reconcile_watchlist_source(
+                    db,
+                    source,
+                    now=now,
+                    seen_item_ids=[],
+                )
+            continue
+        if source.source_type not in {URL_SOURCE_TYPE, LEGACY_LIST_SOURCE_TYPE} or not source.url:
+            continue
+        list_refs = parse_trakt_list_urls([source.url])
+        if not list_refs:
+            logger.warning(
+                "Trakt watchlist URL skipped (invalid) for user %s: %s",
+                integration.user_id,
+                source.url,
+            )
+            continue
+        list_ref = list_refs[0]
+        try:
+            entries = await _load_trakt_list_items(
+                client,
+                access_token,
+                list_ref,
+                per_page=WATCHLIST_PER_PAGE,
+                max_pages=WATCHLIST_MAX_PAGES,
+            )
+        except TraktError as exc:
+            logger.warning(
+                "Trakt list fetch failed for user %s (%s): %s",
+                integration.user_id,
+                list_ref.url,
+                exc,
+            )
+            continue
+        if not entries:
+            await reconcile_watchlist_source(
+                db,
+                source,
+                now=now,
+                seen_item_ids=[],
+            )
+            continue
+        list_context = {
+            "name": list_ref.name,
+            "url": list_ref.url,
+            "type": "list",
+        }
+        if list_ref.username:
+            list_context["user"] = list_ref.username
+        for entry in entries:
+            candidate = _build_watchlist_candidate(
+                entry,
+                source="trakt",
+                list_context=list_context,
+            )
+            if candidate:
+                candidates.append(candidate)
+        if candidates:
+            imported += await process_watchlist_candidates(
+                db,
+                integration.user_id,
+                "trakt",
+                source,
+                candidates,
+                now=now,
+            )
+            candidates = []
+    return imported
 
 
 def _select_trakt_start_at(now: datetime, lookback_days: int) -> datetime | None:
@@ -358,6 +514,77 @@ def _build_episode_candidate(
         blacklist_enabled=True,
         is_rewatch=False,
         build_items=_build_items,
+    )
+
+
+def _build_watchlist_candidate(
+    entry: dict[str, Any],
+    *,
+    source: str,
+    list_context: dict[str, Any] | None = None,
+) -> WatchlistCandidate | None:
+    movie = _extract_movie_summary(entry)
+    if movie:
+        return _build_watchlist_movie_candidate(entry, movie, source, list_context)
+    show = _extract_show_summary(entry)
+    if show:
+        return _build_watchlist_show_candidate(entry, show, source, list_context)
+    return None
+
+
+def _build_watchlist_movie_candidate(
+    entry: dict[str, Any],
+    movie: MovieSummary,
+    source: str,
+    list_context: dict[str, Any] | None,
+) -> WatchlistCandidate | None:
+    entry_id = _coerce_str(entry.get("id"))
+    entry_key = _build_watchlist_entry_key(entry_id, movie.imdb_id, movie.tmdb_id, movie.trakt_id)
+    ids: dict[str, str] = {}
+    if movie.imdb_id:
+        ids["imdb_id"] = movie.imdb_id
+    if movie.tmdb_id:
+        ids["tmdb_id"] = movie.tmdb_id
+    raw = _build_watchlist_raw(movie.raw, list_context, entry_id)
+    return WatchlistCandidate(
+        entry_key=entry_key,
+        media_type="movie",
+        ids=ids,
+        title=movie.title,
+        year=movie.year,
+        poster_url=None,
+        raw=raw,
+        source=source,
+        external_item_id=entry_id,
+    )
+
+
+def _build_watchlist_show_candidate(
+    entry: dict[str, Any],
+    show: ShowSummary,
+    source: str,
+    list_context: dict[str, Any] | None,
+) -> WatchlistCandidate | None:
+    entry_id = _coerce_str(entry.get("id"))
+    entry_key = _build_watchlist_entry_key(entry_id, show.imdb_id, show.tmdb_id, show.trakt_id)
+    ids: dict[str, str] = {}
+    if show.imdb_id:
+        ids["imdb_id"] = show.imdb_id
+    if show.tmdb_id:
+        ids["tmdb_id"] = show.tmdb_id
+    if show.tvdb_id:
+        ids["tvdb_id"] = show.tvdb_id
+    raw = _build_watchlist_raw(show.raw, list_context, entry_id)
+    return WatchlistCandidate(
+        entry_key=entry_key,
+        media_type="tv",
+        ids=ids,
+        title=show.title,
+        year=show.year,
+        poster_url=None,
+        raw=raw,
+        source=source,
+        external_item_id=entry_id,
     )
 
 
@@ -647,6 +874,68 @@ def _build_event_raw(
     if rating is not None:
         raw["rating"] = rating
     return raw
+
+
+def _build_watchlist_entry_key(
+    entry_id: str | None,
+    imdb_id: str | None,
+    tmdb_id: str | None,
+    trakt_id: str | None,
+) -> str | None:
+    if entry_id:
+        return f"watchlist:{entry_id}"
+    if trakt_id:
+        return f"watchlist:trakt:{trakt_id}"
+    if imdb_id:
+        return f"watchlist:imdb:{imdb_id}"
+    if tmdb_id:
+        return f"watchlist:tmdb:{tmdb_id}"
+    return None
+
+
+def _build_watchlist_raw(
+    item_raw: dict[str, Any],
+    list_context: dict[str, Any] | None,
+    entry_id: str | None,
+) -> dict[str, Any]:
+    raw: dict[str, Any] = {"source": "trakt"}
+    if entry_id:
+        raw["entry_id"] = entry_id
+    if item_raw:
+        raw["item"] = item_raw
+    if list_context:
+        raw["list"] = list_context
+    return raw
+
+
+async def _load_trakt_list_items(
+    client: TraktClient,
+    access_token: str,
+    list_ref: TraktListRef,
+    *,
+    per_page: int,
+    max_pages: int,
+) -> list[dict[str, Any]]:
+    if list_ref.username:
+        return await client.get_user_list_items(
+            username=list_ref.username,
+            list_id=list_ref.list_id,
+            access_token=access_token,
+            item_type="movie,show",
+            sort_by="rank",
+            sort_how="asc",
+            per_page=per_page,
+            max_pages=max_pages,
+        )
+    return await client.get_list_items(
+        list_id=list_ref.list_id,
+        access_token=access_token,
+        item_type="movie,show",
+        sort_by="rank",
+        sort_how="asc",
+        per_page=per_page,
+        max_pages=max_pages,
+    )
 
 
 def _extract_movie_summary(entry: dict[str, Any]) -> MovieSummary | None:

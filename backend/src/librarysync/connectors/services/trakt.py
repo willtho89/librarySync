@@ -318,6 +318,222 @@ class TraktClient:
             page += 1
         return entries
 
+    async def fetch_watchlist(
+        self,
+        access_token: str,
+        watchlist_type: str,
+        page: int = 1,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        path = f"/sync/watchlist/{watchlist_type}"
+        params: dict[str, str] = {"page": str(page), "limit": str(limit)}
+        response = await self._request("GET", path, access_token=access_token, params=params)
+        payload = self._parse_json(response)
+        items = _coerce_items(payload)
+        return items, dict(response.headers)
+
+    async def get_watchlist(
+        self,
+        access_token: str,
+        watchlist_type: str,
+        per_page: int = 50,
+        max_pages: int | None = 10,
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        page = 1
+        while max_pages is None or page <= max_pages:
+            items, headers = await self.fetch_watchlist(
+                access_token,
+                watchlist_type=watchlist_type,
+                page=page,
+                limit=per_page,
+            )
+            if not items:
+                break
+            entries.extend(item for item in items if isinstance(item, dict))
+            page_count = _parse_page_count(headers)
+            if page_count and page >= page_count:
+                break
+            if len(items) < per_page:
+                break
+            page += 1
+        return entries
+
+    async def add_to_watchlist(
+        self, payload: dict[str, Any], access_token: str
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "POST",
+            "/sync/watchlist",
+            access_token=access_token,
+            json_body=payload,
+        )
+        return self._parse_json(response), response.status_code
+
+    async def remove_from_watchlist(
+        self, payload: dict[str, Any], access_token: str
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "POST",
+            "/sync/watchlist/remove",
+            access_token=access_token,
+            json_body=payload,
+        )
+        return self._parse_json(response), response.status_code
+
+    async def fetch_trending_lists(
+        self,
+        access_token: str,
+        list_type: str = "personal",
+        page: int = 1,
+        limit: int = 10,
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        path = f"/lists/trending/{list_type}"
+        params: dict[str, str] = {"page": str(page), "limit": str(limit)}
+        response = await self._request("GET", path, access_token=access_token, params=params)
+        payload = self._parse_json(response)
+        items = _coerce_items(payload)
+        return items, dict(response.headers)
+
+    async def get_trending_lists(
+        self,
+        access_token: str,
+        list_type: str = "personal",
+        per_page: int = 10,
+        max_pages: int | None = 1,
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        page = 1
+        while max_pages is None or page <= max_pages:
+            items, headers = await self.fetch_trending_lists(
+                access_token=access_token,
+                list_type=list_type,
+                page=page,
+                limit=per_page,
+            )
+            if not items:
+                break
+            entries.extend(item for item in items if isinstance(item, dict))
+            page_count = _parse_page_count(headers)
+            if page_count and page >= page_count:
+                break
+            if len(items) < per_page:
+                break
+            page += 1
+        return entries
+
+    async def fetch_list_items(
+        self,
+        list_id: str,
+        access_token: str,
+        item_type: str | None = None,
+        sort_by: str | None = None,
+        sort_how: str | None = None,
+        page: int = 1,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        type_segment = item_type or ""
+        sort_by_segment = sort_by or ""
+        sort_how_segment = sort_how or ""
+        path = f"/lists/{list_id}/items/{type_segment}/{sort_by_segment}/{sort_how_segment}"
+        params: dict[str, str] = {"page": str(page), "limit": str(limit)}
+        response = await self._request("GET", path, access_token=access_token, params=params)
+        payload = self._parse_json(response)
+        items = _coerce_items(payload)
+        return items, dict(response.headers)
+
+    async def get_list_items(
+        self,
+        list_id: str,
+        access_token: str,
+        item_type: str | None = None,
+        sort_by: str | None = None,
+        sort_how: str | None = None,
+        per_page: int = 50,
+        max_pages: int | None = 1,
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        page = 1
+        while max_pages is None or page <= max_pages:
+            items, headers = await self.fetch_list_items(
+                list_id=list_id,
+                access_token=access_token,
+                item_type=item_type,
+                sort_by=sort_by,
+                sort_how=sort_how,
+                page=page,
+                limit=per_page,
+            )
+            if not items:
+                break
+            entries.extend(item for item in items if isinstance(item, dict))
+            page_count = _parse_page_count(headers)
+            if page_count and page >= page_count:
+                break
+            if len(items) < per_page:
+                break
+            page += 1
+        return entries
+
+    async def fetch_user_list_items(
+        self,
+        username: str,
+        list_id: str,
+        access_token: str,
+        item_type: str | None = None,
+        sort_by: str | None = None,
+        sort_how: str | None = None,
+        page: int = 1,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        type_segment = item_type or ""
+        sort_by_segment = sort_by or ""
+        sort_how_segment = sort_how or ""
+        path = (
+            f"/users/{username}/lists/{list_id}/items/{type_segment}/{sort_by_segment}/"
+            f"{sort_how_segment}"
+        )
+        params: dict[str, str] = {"page": str(page), "limit": str(limit)}
+        response = await self._request("GET", path, access_token=access_token, params=params)
+        payload = self._parse_json(response)
+        items = _coerce_items(payload)
+        return items, dict(response.headers)
+
+    async def get_user_list_items(
+        self,
+        username: str,
+        list_id: str,
+        access_token: str,
+        item_type: str | None = None,
+        sort_by: str | None = None,
+        sort_how: str | None = None,
+        per_page: int = 50,
+        max_pages: int | None = 1,
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        page = 1
+        while max_pages is None or page <= max_pages:
+            items, headers = await self.fetch_user_list_items(
+                username=username,
+                list_id=list_id,
+                access_token=access_token,
+                item_type=item_type,
+                sort_by=sort_by,
+                sort_how=sort_how,
+                page=page,
+                limit=per_page,
+            )
+            if not items:
+                break
+            entries.extend(item for item in items if isinstance(item, dict))
+            page_count = _parse_page_count(headers)
+            if page_count and page >= page_count:
+                break
+            if len(items) < per_page:
+                break
+            page += 1
+        return entries
+
     async def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         try:
@@ -407,3 +623,13 @@ def _parse_page_count(headers: dict[str, str]) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def _coerce_items(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        items = payload.get("items")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    return []

@@ -14,6 +14,29 @@ const watchlistSelectionState = {
   selectedIds: new Set(),
 };
 
+const WATCHLIST_PROVIDER_LABELS = {
+  trakt: "Trakt",
+  letterboxd: "Letterboxd",
+  manual: "Manual",
+};
+
+function formatWatchlistSourceLabel(source) {
+  if (!source) return "Unknown";
+  const provider =
+    WATCHLIST_PROVIDER_LABELS[source.provider] || source.provider || "Unknown";
+  if (source.provider === "manual") return provider;
+  if (source.name) {
+    const name = source.name.replace(/-/g, " ");
+    return `${provider}: ${name}`;
+  }
+  return `${provider} watchlist`;
+}
+
+function formatWatchlistSources(sources) {
+  if (!Array.isArray(sources) || sources.length === 0) return [];
+  return sources.map((source) => formatWatchlistSourceLabel(source)).filter(Boolean);
+}
+
 function buildWatchlistQueryParams() {
   const params = new URLSearchParams();
   params.set("limit", String(watchlistState.pageSize));
@@ -233,6 +256,11 @@ async function loadWatchlist() {
     } else if (item.media_type === "movie") {
         if (item.status === "active") detailParts.push("Unwatched");
         if (item.status === "watched") detailParts.push("Watched");
+    }
+
+    const sourceLabels = formatWatchlistSources(item.sources);
+    if (sourceLabels.length) {
+        detailParts.push(`Sources: ${sourceLabels.join(", ")}`);
     }
     
     detail.textContent = detailParts.join(" · ");
