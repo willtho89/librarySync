@@ -588,6 +588,36 @@ async function loadHistory() {
     editButton.textContent = "Edit watch";
     editButton.setAttribute("role", "menuitem");
 
+    const addToWatchlistButton = document.createElement("button");
+    addToWatchlistButton.type = "button";
+    addToWatchlistButton.textContent = "Add show to watchlist";
+    addToWatchlistButton.setAttribute("role", "menuitem");
+    addToWatchlistButton.addEventListener("click", async () => {
+      closeHistoryMenus();
+      try {
+        setMessage("history-message", "Adding to watchlist...");
+        await requestJSON("/api/watchlist/items", {
+          method: "POST",
+          body: JSON.stringify({
+            media_type: item.media_type,
+            title: item.title,
+            year: item.year,
+            poster_url: item.poster_url,
+            imdb_id: item.imdb_id,
+            tmdb_id: item.tmdb_id,
+            tvdb_id: item.tvdb_id,
+            tvmaze_id: item.tvmaze_id,
+            kitsu_id: item.kitsu_id,
+            myanimelist_id: item.myanimelist_id,
+            anilist_id: item.anilist_id,
+          }),
+        });
+        setMessage("history-message", "Added to watchlist.");
+      } catch (error) {
+        setMessage("history-message", error.message, true);
+      }
+    });
+
     const metadataButton = document.createElement("button");
     metadataButton.type = "button";
     metadataButton.textContent = "View metadata";
@@ -600,6 +630,9 @@ async function loadHistory() {
     deleteButton.setAttribute("role", "menuitem");
 
     menuPanel.appendChild(editButton);
+    if (item.media_type === "tv" || item.media_type === "anime") {
+      menuPanel.appendChild(addToWatchlistButton);
+    }
     menuPanel.appendChild(metadataButton);
     menuPanel.appendChild(deleteButton);
 

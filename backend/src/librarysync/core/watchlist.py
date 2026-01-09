@@ -298,6 +298,7 @@ async def evaluate_show_watchlist_status(
             EpisodeItem.show_media_item_id == media_item.id,
             EpisodeItem.air_date != None,
             EpisodeItem.air_date <= now_date,
+            EpisodeItem.season_number > 0,  # Exclude specials (season 0)
         )
     )
     released_episodes = result.scalars().all()
@@ -307,7 +308,8 @@ async def evaluate_show_watchlist_status(
     if total_released == 0:
         earliest_result = await db.execute(
             select(func.min(EpisodeItem.air_date)).where(
-                EpisodeItem.show_media_item_id == media_item.id
+                EpisodeItem.show_media_item_id == media_item.id,
+                EpisodeItem.season_number > 0,  # Exclude specials (season 0)
             )
         )
         earliest_air_date = earliest_result.scalar()

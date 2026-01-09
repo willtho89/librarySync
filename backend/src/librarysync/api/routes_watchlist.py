@@ -722,6 +722,7 @@ async def mark_watchlist_item_watched(
                 EpisodeItem.show_media_item_id == media_item.id,
                 EpisodeItem.air_date != None,
                 EpisodeItem.air_date <= now_date,
+                EpisodeItem.season_number > 0,  # Exclude specials (season 0)
             )
             .order_by(EpisodeItem.season_number, EpisodeItem.episode_number)
         )
@@ -837,13 +838,14 @@ async def mark_watchlist_item_watched(
 async def _get_show_progress(db: AsyncSession, user_id: str, media_item_id: str) -> dict:
     from librarysync.db.models import EpisodeItem, WatchedItem
 
-    # Count released episodes
+    # Count released episodes (excluding specials)
     now = datetime.now(timezone.utc).date()
     result = await db.execute(
         select(EpisodeItem.id).where(
             EpisodeItem.show_media_item_id == media_item_id,
             EpisodeItem.air_date != None,
             EpisodeItem.air_date <= now,
+            EpisodeItem.season_number > 0,  # Exclude specials (season 0)
         )
     )
     released_ids = result.scalars().all()
@@ -851,7 +853,8 @@ async def _get_show_progress(db: AsyncSession, user_id: str, media_item_id: str)
 
     earliest_result = await db.execute(
         select(func.min(EpisodeItem.air_date)).where(
-            EpisodeItem.show_media_item_id == media_item_id
+            EpisodeItem.show_media_item_id == media_item_id,
+            EpisodeItem.season_number > 0,  # Exclude specials (season 0)
         )
     )
     earliest_air_date = earliest_result.scalar()
