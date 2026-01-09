@@ -8,7 +8,11 @@ from datetime import date, datetime, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.core.import_all import IMPORT_ALL_PROVIDER, get_import_queue_order
+from librarysync.core.import_all import (
+    DEFAULT_IMPORT_QUEUE_ORDER,
+    IMPORT_ALL_PROVIDER,
+    get_import_queue_order,
+)
 from librarysync.db.models import (
     Integration,
     MediaItem,
@@ -35,6 +39,8 @@ async def merge_history_for_user(db: AsyncSession, user_id: str) -> int:
     )
     system_config = system_result.scalar_one_or_none()
     queue_order = get_import_queue_order(system_config)
+    if not queue_order:
+        queue_order = list(DEFAULT_IMPORT_QUEUE_ORDER)
     priority_map = {provider: index for index, provider in enumerate(queue_order)}
     result = await db.execute(
         select(WatchedItem, MediaItem)

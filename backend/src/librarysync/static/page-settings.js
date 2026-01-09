@@ -3,6 +3,14 @@ const settingsState = {
   status: null,
   importQueue: [],
 };
+const DEFAULT_IMPORT_QUEUE_ORDER = [
+  "trakt",
+  "letterboxd",
+  "simkl",
+  "anilist",
+  "stremio",
+  "aiostreams",
+];
 
 function applyQuickImportControls(statusData) {
   const form = document.getElementById("quick-import-form");
@@ -94,6 +102,22 @@ function updateImportQueueIndices(list) {
       indexEl.textContent = `#${index + 1}`;
     }
   });
+}
+
+function buildDefaultImportQueueOrder(queue) {
+  const current = Array.isArray(queue) ? queue.map((entry) => String(entry)) : [];
+  const ordered = [];
+  DEFAULT_IMPORT_QUEUE_ORDER.forEach((provider) => {
+    if (current.includes(provider) && !ordered.includes(provider)) {
+      ordered.push(provider);
+    }
+  });
+  current.forEach((provider) => {
+    if (!ordered.includes(provider)) {
+      ordered.push(provider);
+    }
+  });
+  return ordered;
 }
 
 function bindImportQueueDrag(list) {
@@ -262,6 +286,23 @@ async function saveImportQueueOrder(order) {
     renderImportQueue(previousOrder);
     setMessage("import-queue-message", error.message, true);
   }
+}
+
+async function handleImportQueueRestore() {
+  const order = buildDefaultImportQueueOrder(settingsState.importQueue);
+  if (!order.length) {
+    setMessage(
+      "import-queue-message",
+      "Connect an integration to create an import queue.",
+      true
+    );
+    return;
+  }
+  if (arraysEqual(order, settingsState.importQueue)) {
+    setMessage("import-queue-message", "Import queue already matches the default.");
+    return;
+  }
+  await saveImportQueueOrder(order);
 }
 
 async function loadIntegrations() {
@@ -1428,6 +1469,10 @@ window.librarysyncPageInit = async ({ user }) => {
   const importAllButton = document.getElementById("import-all-button");
   if (importAllButton) {
     importAllButton.addEventListener("click", handleImportAll);
+  }
+  const importQueueRestore = document.getElementById("import-queue-restore");
+  if (importQueueRestore) {
+    importQueueRestore.addEventListener("click", handleImportQueueRestore);
   }
   const quickImportNow = document.getElementById("quick-import-now");
   if (quickImportNow) {

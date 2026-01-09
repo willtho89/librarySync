@@ -27,6 +27,14 @@ IMPORT_ALL_PRIORITY = (
     "stremio",
     "aiostreams",
 )
+DEFAULT_IMPORT_QUEUE_ORDER = (
+    "trakt",
+    "letterboxd",
+    "simkl",
+    "anilist",
+    "stremio",
+    "aiostreams",
+)
 
 IMPORT_ALL_STATUS_PENDING = "pending"
 IMPORT_ALL_STATUS_IN_PROGRESS = "in_progress"
@@ -194,6 +202,8 @@ async def load_import_ready_providers(db: AsyncSession, user_id: str) -> list[st
 async def build_import_all_queue(db: AsyncSession, user_id: str) -> list[str]:
     available = await load_import_ready_providers(db, user_id)
     preferred = await load_import_queue_preferences(db, user_id)
+    if not preferred:
+        preferred = list(DEFAULT_IMPORT_QUEUE_ORDER)
     return apply_import_queue_order(available, preferred)
 
 
