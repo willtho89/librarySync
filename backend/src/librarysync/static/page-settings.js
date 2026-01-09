@@ -649,7 +649,7 @@ async function handleAIOStreamsSave(data, form) {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    const input = form.querySelector("input[name='auth']");
+    const input = form ? form.querySelector("input[name='auth']") : null;
     if (input) {
       input.value = "";
     }
