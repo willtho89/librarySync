@@ -22,8 +22,11 @@ PREFERRED_POSTER_HOSTS = (
     "image.tmdb.org",
     "thetvdb.com",
     "artworks.thetvdb.com",
+    "m.media-amazon.com",
+    "images-na.ssl-images-amazon.com",
 )
 ANIME_PROVIDERS = ("myanimelist", "kitsu", "anilist")
+POSTER_PROVIDER_ORDER = ("tvdb", "tmdb", "imdb")
 
 
 async def enrich_watched_metadata(
@@ -48,20 +51,45 @@ async def enrich_watched_metadata(
     service = MetadataProviderService(db, user_id)
     tmdb = await service.load_provider("tmdb")
     tvdb = await service.load_provider("tvdb")
-    if not tmdb and not tvdb:
+    imdb = await service.load_provider("imdb")
+    if not tmdb and not tvdb and not imdb:
         return
 
+    candidate_map: dict[str, MediaCandidate] = {}
     if tmdb:
         candidate = await _fetch_provider_candidate(tmdb, media_item, "tmdb_id")
         if candidate:
-            await _apply_candidate_to_media_item(db, media_item, candidate)
+            candidate_map["tmdb"] = candidate
+            await _apply_candidate_to_media_item(
+                db,
+                media_item,
+                candidate,
+                update_poster=False,
+            )
         if episode_item and isinstance(tmdb, EpisodeMetadataProvider):
             await _apply_episode_metadata(tmdb, media_item, episode_item)
 
     if tvdb:
         candidate = await _fetch_provider_candidate(tvdb, media_item, "tvdb_id")
         if candidate:
-            await _apply_candidate_to_media_item(db, media_item, candidate)
+            candidate_map["tvdb"] = candidate
+            await _apply_candidate_to_media_item(
+                db,
+                media_item,
+                candidate,
+                update_poster=False,
+            )
+
+    if imdb:
+        candidate = await _fetch_provider_candidate(imdb, media_item, "imdb_id")
+        if candidate:
+            candidate_map["imdb"] = candidate
+            await _apply_candidate_to_media_item(db, media_item, candidate, update_poster=False)
+
+    if media_item.media_type in {"movie", "tv"}:
+        poster_url = _select_media_poster(candidate_map, media_item.poster_url)
+        if poster_url:
+            media_item.poster_url = poster_url
 
 
 def _needs_media_enrichment(media_item: MediaItem, episode_item: EpisodeItem | None) -> bool:
@@ -295,13 +323,20 @@ async def _fetch_provider_candidate(
 
 
 async def _apply_candidate_to_media_item(
-    db: AsyncSession, media_item: MediaItem, candidate: MediaCandidate
+    db: AsyncSession,
+    media_item: MediaItem,
+    candidate: MediaCandidate,
+    update_poster: bool = True,
 ) -> None:
     ids = _extract_candidate_ids(candidate)
     await _set_media_id(db, media_item, "imdb_id", ids.get("imdb_id"), normalize=True)
     await _set_media_id(db, media_item, "tmdb_id", ids.get("tmdb_id"))
     await _set_media_id(db, media_item, "tvdb_id", ids.get("tvdb_id"))
-    if candidate.poster_url and _should_update_poster(media_item.poster_url, candidate.provider):
+    if (
+        update_poster
+        and candidate.poster_url
+        and _should_update_poster(media_item.poster_url, candidate.provider)
+    ):
         media_item.poster_url = candidate.poster_url
     if media_item.year is None and candidate.year is not None:
         media_item.year = candidate.year
@@ -450,7 +485,7 @@ def _should_update_poster(current: str | None, provider: str) -> bool:
         return True
     if _is_preferred_poster(current):
         return False
-    return provider in {"tmdb", "tvdb"}
+    return provider in {"tmdb", "tvdb", "imdb"}
 
 
 def _is_preferred_poster(url: str | None) -> bool:
@@ -458,6 +493,17 @@ def _is_preferred_poster(url: str | None) -> bool:
         return False
     lowered = url.lower()
     return any(host in lowered for host in PREFERRED_POSTER_HOSTS)
+
+
+def _select_media_poster(
+    candidates: dict[str, MediaCandidate],
+    current: str | None,
+) -> str | None:
+    for provider in POSTER_PROVIDER_ORDER:
+        candidate = candidates.get(provider)
+        if candidate and candidate.poster_url:
+            return candidate.poster_url
+    return current
 
 
 def _extract_anime_candidate_ids(candidate: MediaCandidate) -> dict[str, str]:

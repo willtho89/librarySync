@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -31,6 +32,9 @@ from librarysync.core.watchlist_sources import (
     remove_watchlist_source,
     upsert_watchlist_source_item,
 )
+from librarysync.connectors.services.letterboxd import LetterboxdError
+from librarysync.connectors.services.simkl import SimklError
+from librarysync.connectors.services.trakt import TraktError
 from librarysync.db.models import (
     Integration,
     MediaItem,
@@ -40,7 +44,17 @@ from librarysync.db.models import (
     WatchlistSource,
     WatchlistSourceItem,
 )
+from librarysync.jobs.letterboxd_import import (
+    import_watchlist_source as import_letterboxd_watchlist_source,
+)
+from librarysync.jobs.simkl_import import (
+    import_watchlist_source as import_simkl_watchlist_source,
+)
+from librarysync.jobs.trakt_import import (
+    import_watchlist_source as import_trakt_watchlist_source,
+)
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
 
@@ -190,17 +204,25 @@ async def list_watchlist_sources_route(
     integrations_result = await db.execute(
         select(Integration).where(
             Integration.user_id == current_user.id,
-            Integration.provider.in_(["trakt", "letterboxd"]),
+            Integration.provider.in_(["trakt", "simkl", "letterboxd"]),
             Integration.status != "disconnected",
         )
     )
-    for integration in integrations_result.scalars().all():
+    integrations = integrations_result.scalars().all()
+    for integration in integrations:
         if integration.provider == "trakt":
             await ensure_personal_watchlist_source(
                 db,
                 user_id=current_user.id,
                 provider="trakt",
                 name="Trakt watchlist",
+            )
+        elif integration.provider == "simkl":
+            await ensure_personal_watchlist_source(
+                db,
+                user_id=current_user.id,
+                provider="simkl",
+                name="SIMKL watchlist",
             )
         elif integration.provider == "letterboxd":
             await ensure_personal_watchlist_source(
@@ -209,6 +231,8 @@ async def list_watchlist_sources_route(
                 provider="letterboxd",
                 name="Letterboxd watchlist",
             )
+    if integrations:
+        await db.commit()
     sources = await list_watchlist_sources(
         db, current_user.id, include_disabled=True
     )
@@ -242,7 +266,9 @@ async def add_watchlist_source(
     url = payload.url.strip()
     trakt_refs = parse_trakt_list_urls([url])
     letterboxd_refs = parse_letterboxd_list_urls([url]) if not trakt_refs else []
-    ref = trakt_refs[0] if trakt_refs else (letterboxd_refs[0] if letterboxd_refs else None)
+    ref = trakt_refs[0] if trakt_refs else (
+        letterboxd_refs[0] if letterboxd_refs else None
+    )
     if not ref:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -261,6 +287,15 @@ async def add_watchlist_source(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Connect the integration before adding watchlists",
         )
+    existing_result = await db.execute(
+        select(WatchlistSource).where(
+            WatchlistSource.user_id == current_user.id,
+            WatchlistSource.provider == provider,
+            WatchlistSource.source_type == URL_SOURCE_TYPE,
+            WatchlistSource.external_id == ref.external_id,
+        )
+    )
+    existing_source = existing_result.scalars().first()
     source = await ensure_watchlist_source(
         db,
         user_id=current_user.id,
@@ -272,7 +307,17 @@ async def add_watchlist_source(
         is_enabled=True,
     )
     await db.commit()
-    return WatchlistSourceOut(
+    sync_error = None
+    imported = 0
+    if existing_source is None:
+        try:
+            imported = await _sync_watchlist_source(db, source)
+        except HTTPException as exc:
+            sync_error = exc.detail
+        except Exception:
+            logger.exception("Watchlist sync failed for source %s", source.id)
+            sync_error = "Watchlist sync failed"
+    payload = WatchlistSourceOut(
         id=source.id,
         provider=source.provider,
         source_type=source.source_type,
@@ -282,6 +327,83 @@ async def add_watchlist_source(
         is_deletable=source.source_type in {URL_SOURCE_TYPE, LEGACY_LIST_SOURCE_TYPE},
         last_synced_at=source.last_synced_at,
     ).model_dump()
+    return payload | {"imported": imported, "sync_error": sync_error}
+
+
+async def _sync_watchlist_source(db: AsyncSession, source: WatchlistSource) -> int:
+    if not source.is_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Watchlist source is disabled",
+        )
+    if source.provider == "trakt":
+        try:
+            return await import_trakt_watchlist_source(db, source)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        except TraktError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+    if source.provider == "letterboxd":
+        try:
+            return await import_letterboxd_watchlist_source(db, source)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        except LetterboxdError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+    if source.provider == "simkl":
+        try:
+            return await import_simkl_watchlist_source(db, source)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        except SimklError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Unsupported watchlist provider",
+    )
+
+
+@router.post(
+    "/sources/{source_id}/sync",
+    summary="Sync watchlist source",
+    description="Sync a watchlist source immediately.",
+)
+async def sync_watchlist_source(
+    source_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(WatchlistSource).where(
+            WatchlistSource.id == source_id,
+            WatchlistSource.user_id == current_user.id,
+        )
+    )
+    source = result.scalars().first()
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist source not found"
+        )
+    imported = await _sync_watchlist_source(db, source)
+    return {"status": "synced", "imported": imported}
 
 
 @router.patch(

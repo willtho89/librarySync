@@ -756,6 +756,12 @@ function renderWatchlistSources(sources) {
       const provider = escapeHtml(source.provider || "unknown");
       const checked = source.is_enabled ? "checked" : "";
       const disableLabel = source.is_enabled ? "Enabled" : "Disabled";
+      const syncDisabled = source.is_enabled ? "" : "disabled";
+      const syncButton = `
+        <button class="btn btn-ghost" type="button" data-action="sync" data-id="${escapeHtml(
+          source.id
+        )}" ${syncDisabled}>Sync now</button>
+      `;
       const deleteButton = source.is_deletable
         ? `<button class="btn btn-ghost" type="button" data-action="delete" data-id="${escapeHtml(
             source.id
@@ -775,6 +781,7 @@ function renderWatchlistSources(sources) {
                 )}" ${checked} />
                 <span>${disableLabel}</span>
               </label>
+              ${syncButton}
               ${deleteButton}
             </div>
           </div>
@@ -803,11 +810,26 @@ async function handleWatchlistSourceAdd(data) {
     return;
   }
   try {
-    await requestJSON("/api/watchlist/sources", {
+    const response = await requestJSON("/api/watchlist/sources", {
       method: "POST",
       body: JSON.stringify({ url }),
     });
-    setMessage("watchlist-source-message", "Watchlist added.");
+    const imported =
+      response && typeof response.imported === "number" ? response.imported : null;
+    if (response && response.sync_error) {
+      setMessage(
+        "watchlist-source-message",
+        `Watchlist added, but sync failed: ${response.sync_error}`,
+        true
+      );
+    } else if (imported !== null) {
+      setMessage(
+        "watchlist-source-message",
+        `Watchlist added. Imported ${imported} items.`
+      );
+    } else {
+      setMessage("watchlist-source-message", "Watchlist added.");
+    }
     await loadWatchlistSources();
   } catch (error) {
     setMessage("watchlist-source-message", error.message, true);
@@ -843,6 +865,27 @@ async function handleWatchlistSourceDelete(sourceId) {
   }
 }
 
+async function handleWatchlistSourceSync(sourceId) {
+  setMessage("watchlist-sources-message", "");
+  try {
+    const response = await requestJSON(
+      `/api/watchlist/sources/${sourceId}/sync`,
+      {
+        method: "POST",
+      }
+    );
+    const imported =
+      response && typeof response.imported === "number" ? response.imported : 0;
+    setMessage(
+      "watchlist-sources-message",
+      `Watchlist synced. Imported ${imported} items.`
+    );
+    await loadWatchlistSources();
+  } catch (error) {
+    setMessage("watchlist-sources-message", error.message, true);
+  }
+}
+
 function bindWatchlistSourceActions() {
   const list = document.getElementById("watchlist-sources-list");
   if (!list) {
@@ -860,6 +903,9 @@ function bindWatchlistSourceActions() {
     }
     if (action === "delete") {
       handleWatchlistSourceDelete(sourceId);
+    }
+    if (action === "sync") {
+      handleWatchlistSourceSync(sourceId);
     }
   });
   list.addEventListener("change", (event) => {

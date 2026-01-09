@@ -210,6 +210,24 @@ class SimklClient:
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
+    async def add_to_watchlist(
+        self, payload: dict[str, Any], access_token: str
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "POST", "/sync/watchlist", access_token=access_token, json_body=payload
+        )
+        parsed = self._parse_json(response)
+        return parsed if isinstance(parsed, dict) else {}, response.status_code
+
+    async def remove_from_watchlist(
+        self, payload: dict[str, Any], access_token: str
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "POST", "/sync/watchlist/remove", access_token=access_token, json_body=payload
+        )
+        parsed = self._parse_json(response)
+        return parsed if isinstance(parsed, dict) else {}, response.status_code
+
     async def fetch_history(
         self,
         access_token: str,

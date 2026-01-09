@@ -43,6 +43,7 @@ from librarysync.db.models import (
     Integration,
     IntegrationSecret,
     MediaItem,
+    WatchlistSource,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 from librarysync.jobs.import_pipeline import (
@@ -124,46 +125,10 @@ async def _import_for_integration(
         return ImportResult(imported=0, attempted=False)
     if not has_required_letterboxd_fields(secret_data):
         return ImportResult(imported=0, attempted=False)
-    api_base_url = DEFAULT_LETTERBOXD_API_BASE_URL
-    if integration.config and integration.config.get("api_base_url"):
-        api_base_url = str(integration.config["api_base_url"])
-    cookies = _parse_cookies(secret_data.get("cookies"))
-    member_id: str | None = None
-    if integration.config:
-        raw_member_id = integration.config.get("member_id")
-        if raw_member_id is not None:
-            member_id = str(raw_member_id).strip() or None
-    client = LetterboxdClient(
-        api_base_url=api_base_url,
-        client_id=str(secret_data.get("client_id")),
-        client_secret=str(secret_data.get("client_secret")),
-        refresh_token=str(secret_data.get("refresh_token")),
-        cookies=cookies,
-    )
     try:
-        access_token = await _ensure_letterboxd_access_token(
-            db, integration.id, secret_data, client
+        client, access_token, member_id = await _build_letterboxd_context(
+            db, integration, secret_data
         )
-        if not member_id:
-            try:
-                me_payload = await client.fetch_me(access_token=access_token)
-            except LetterboxdError as exc:
-                logger.info(
-                    "Letterboxd /me lookup failed for user %s: %s",
-                    integration.user_id,
-                    exc,
-                )
-            else:
-                member_id = extract_member_id(me_payload)
-                member_name = extract_member_name(me_payload)
-                if member_id:
-                    config = dict(integration.config or {})
-                    config["member_id"] = member_id
-                    if member_name:
-                        config["member_name"] = member_name
-                    integration.config = config
-                    db.add(integration)
-                    await db.commit()
         full_history = lookback_days < 0
         since = _select_letterboxd_since(now, lookback_days)
         entries = await client.get_history(
@@ -232,6 +197,7 @@ async def _import_watchlist_for_integration(
     access_token: str,
     member_id: str | None,
     now: datetime,
+    sources: list[WatchlistSource] | None = None,
 ) -> int:
     await ensure_personal_watchlist_source(
         db,
@@ -239,7 +205,10 @@ async def _import_watchlist_for_integration(
         provider="letterboxd",
         name="Letterboxd watchlist",
     )
-    sources = await list_watchlist_sources(db, integration.user_id, provider="letterboxd")
+    if sources is None:
+        sources = await list_watchlist_sources(
+            db, integration.user_id, provider="letterboxd"
+        )
     if not sources:
         return 0
     imported = 0
@@ -331,6 +300,84 @@ async def _import_watchlist_for_integration(
             )
             candidates = []
     return imported
+
+
+async def import_watchlist_source(
+    db: AsyncSession,
+    source: WatchlistSource,
+    *,
+    now: datetime | None = None,
+) -> int:
+    if source.provider != "letterboxd":
+        raise ValueError("Watchlist source is not a Letterboxd list")
+    integration, secret_data = await load_integration_with_secrets(
+        db, source.user_id, "letterboxd"
+    )
+    if not integration or integration.status == "disconnected":
+        raise ValueError("Letterboxd integration is not connected")
+    if not secret_data or not has_required_letterboxd_fields(secret_data):
+        raise ValueError("Letterboxd credentials are incomplete")
+    if now is None:
+        now = datetime.now(timezone.utc)
+    client, access_token, member_id = await _build_letterboxd_context(
+        db, integration, secret_data
+    )
+    return await _import_watchlist_for_integration(
+        db,
+        integration,
+        client,
+        access_token,
+        member_id,
+        now,
+        sources=[source],
+    )
+
+
+async def _build_letterboxd_context(
+    db: AsyncSession,
+    integration: Integration,
+    secret_data: dict[str, object],
+) -> tuple[LetterboxdClient, str, str | None]:
+    api_base_url = DEFAULT_LETTERBOXD_API_BASE_URL
+    if integration.config and integration.config.get("api_base_url"):
+        api_base_url = str(integration.config["api_base_url"])
+    cookies = _parse_cookies(secret_data.get("cookies"))
+    member_id: str | None = None
+    if integration.config:
+        raw_member_id = integration.config.get("member_id")
+        if raw_member_id is not None:
+            member_id = str(raw_member_id).strip() or None
+    client = LetterboxdClient(
+        api_base_url=api_base_url,
+        client_id=str(secret_data.get("client_id")),
+        client_secret=str(secret_data.get("client_secret")),
+        refresh_token=str(secret_data.get("refresh_token")),
+        cookies=cookies,
+    )
+    access_token = await _ensure_letterboxd_access_token(
+        db, integration.id, secret_data, client
+    )
+    if not member_id:
+        try:
+            me_payload = await client.fetch_me(access_token=access_token)
+        except LetterboxdError as exc:
+            logger.info(
+                "Letterboxd /me lookup failed for user %s: %s",
+                integration.user_id,
+                exc,
+            )
+        else:
+            member_id = extract_member_id(me_payload)
+            member_name = extract_member_name(me_payload)
+            if member_id:
+                config = dict(integration.config or {})
+                config["member_id"] = member_id
+                if member_name:
+                    config["member_name"] = member_name
+                integration.config = config
+                db.add(integration)
+                await db.commit()
+    return client, access_token, member_id
 
 
 async def _ensure_letterboxd_access_token(

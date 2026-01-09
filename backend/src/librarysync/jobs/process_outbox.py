@@ -204,6 +204,12 @@ class SimklOutboxHandler(OutboxHandler):
         if job.job_type == "push_rating":
             response_code, external_id = await _deliver_simkl_rating(db, job)
             return DeliveryResult(response_code, external_id)
+        if job.job_type == "push_watchlist":
+            response_code, external_id = await _deliver_simkl_watchlist(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "remove_watchlist":
+            response_code, external_id = await _deliver_simkl_watchlist_remove(db, job)
+            return DeliveryResult(response_code, external_id)
         if job.job_type == "update_history":
             response_code, external_id = await _deliver_simkl_update(db, job)
             return DeliveryResult(response_code, external_id)
@@ -1395,6 +1401,50 @@ async def _deliver_simkl_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
     return response_code, external_id
 
 
+async def _deliver_simkl_watchlist(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
+    if not integration or not secret_data:
+        raise SimklError("SIMKL credentials are missing", status_code=401)
+    if not has_required_simkl_fields(secret_data):
+        raise SimklError("SIMKL credentials are incomplete", status_code=401)
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise ValueError("SIMKL client ID/secret are not configured")
+
+    client = SimklClient(
+        client_id=settings.simkl_client_id,
+        client_secret=settings.simkl_client_secret,
+    )
+    access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
+    watchlist_payload = _build_simkl_watchlist_payload(payload)
+    _, response_code = await client.add_to_watchlist(watchlist_payload, access_token)
+    return response_code, None
+
+
+async def _deliver_simkl_watchlist_remove(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
+    if not integration or not secret_data:
+        raise SimklError("SIMKL credentials are missing", status_code=401)
+    if not has_required_simkl_fields(secret_data):
+        raise SimklError("SIMKL credentials are incomplete", status_code=401)
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise ValueError("SIMKL client ID/secret are not configured")
+
+    client = SimklClient(
+        client_id=settings.simkl_client_id,
+        client_secret=settings.simkl_client_secret,
+    )
+    access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
+    watchlist_payload = _build_simkl_watchlist_payload(payload)
+    _, response_code = await client.remove_from_watchlist(watchlist_payload, access_token)
+    return response_code, None
+
+
 async def _deliver_simkl_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     return await _deliver_simkl_watch(db, job)
 
@@ -1899,6 +1949,38 @@ def _build_trakt_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]
         )
     if not show_ids:
         raise ValueError("Trakt watchlist sync requires show ids")
+    return {"shows": [{"ids": show_ids}]}
+
+
+def _build_simkl_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    if media_type in {"movie", "anime"}:
+        movie_ids = _normalize_simkl_ids(payload.get("movie_ids"))
+        if not movie_ids:
+            movie_ids = _normalize_simkl_ids(
+                {
+                    "imdb": payload.get("imdb_id"),
+                    "tmdb": payload.get("tmdb_id"),
+                    "tvdb": payload.get("tvdb_id"),
+                    "simkl": payload.get("simkl_id"),
+                }
+            )
+        if not movie_ids:
+            raise ValueError("SIMKL watchlist sync requires movie ids")
+        return {"movies": [{"ids": movie_ids}]}
+
+    show_ids = _normalize_simkl_ids(payload.get("show_ids"))
+    if not show_ids:
+        show_ids = _normalize_simkl_ids(
+            {
+                "imdb": payload.get("imdb_id"),
+                "tmdb": payload.get("tmdb_id"),
+                "tvdb": payload.get("tvdb_id"),
+                "simkl": payload.get("simkl_id"),
+            }
+        )
+    if not show_ids:
+        raise ValueError("SIMKL watchlist sync requires show ids")
     return {"shows": [{"ids": show_ids}]}
 
 

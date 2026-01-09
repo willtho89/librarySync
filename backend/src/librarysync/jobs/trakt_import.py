@@ -34,6 +34,7 @@ from librarysync.db.models import (
     Integration,
     IntegrationSecret,
     MediaItem,
+    WatchlistSource,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 from librarysync.jobs.import_pipeline import (
@@ -220,6 +221,7 @@ async def _import_watchlist_for_integration(
     access_token: str,
     now: datetime,
     lookback_days: int,
+    sources: list[WatchlistSource] | None = None,
 ) -> int:
     await ensure_personal_watchlist_source(
         db,
@@ -227,7 +229,8 @@ async def _import_watchlist_for_integration(
         provider="trakt",
         name="Trakt watchlist",
     )
-    sources = await list_watchlist_sources(db, integration.user_id, provider="trakt")
+    if sources is None:
+        sources = await list_watchlist_sources(db, integration.user_id, provider="trakt")
     if not sources:
         return 0
     candidates: list[WatchlistCandidate] = []
@@ -339,6 +342,44 @@ async def _import_watchlist_for_integration(
             )
             candidates = []
     return imported
+
+
+async def import_watchlist_source(
+    db: AsyncSession,
+    source: WatchlistSource,
+    *,
+    now: datetime | None = None,
+) -> int:
+    if source.provider != "trakt":
+        raise ValueError("Watchlist source is not a Trakt list")
+    if not settings.trakt_client_id or not settings.trakt_client_secret:
+        raise ValueError("Trakt credentials are not configured")
+    integration, secret_data = await load_integration_with_secrets(
+        db, source.user_id, "trakt"
+    )
+    if not integration or integration.status == "disconnected":
+        raise ValueError("Trakt integration is not connected")
+    if not secret_data or not has_required_trakt_fields(secret_data):
+        raise ValueError("Trakt credentials are incomplete")
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    client = TraktClient(
+        client_id=settings.trakt_client_id,
+        client_secret=settings.trakt_client_secret,
+    )
+    access_token = await _ensure_trakt_access_token(
+        db, integration.id, secret_data, client
+    )
+    return await _import_watchlist_for_integration(
+        db,
+        integration,
+        client,
+        access_token,
+        now,
+        lookback_days=0,
+        sources=[source],
+    )
 
 
 def _select_trakt_start_at(now: datetime, lookback_days: int) -> datetime | None:

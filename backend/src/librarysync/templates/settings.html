@@ -506,6 +506,10 @@
             Adds external watchlists into librarySync only. Personal watchlists are enabled when
             the integration is connected.
           </p>
+          <p class="helper-text">
+            Watchlists do not sync between services (unlike history), so an item in Trakt will not
+            appear in SIMKL.
+          </p>
         </div>
         <div class="grid gap-4 lg:grid-cols-2">
           <div class="card space-y-4">
@@ -522,7 +526,7 @@
               be removed.
             </p>
             <p id="watchlist-sources-empty" class="empty-state" hidden>
-              Connect Trakt or Letterboxd to start syncing watchlists.
+              Connect Trakt, SIMKL, or Letterboxd to start syncing watchlists.
             </p>
             <ul id="watchlist-sources-list" class="space-y-3" role="list"></ul>
             <p id="watchlist-sources-message" class="form-message" role="status" hidden></p>

@@ -299,7 +299,7 @@ async def list_integrations(
     description="Update watchlist import settings for a provider.",
 )
 async def update_watchlist_import_settings(
-    provider: Literal["trakt", "letterboxd"],
+    provider: Literal["trakt", "simkl", "letterboxd"],
     payload: WatchlistImportConfigIn,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

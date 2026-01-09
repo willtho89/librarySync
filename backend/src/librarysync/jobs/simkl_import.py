@@ -23,12 +23,19 @@ from librarysync.core.import_schedule import parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
+from librarysync.core.watchlist_sources import (
+    PERSONAL_SOURCE_TYPE,
+    ensure_personal_watchlist_source,
+    list_watchlist_sources,
+    reconcile_watchlist_source,
+)
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
     IntegrationSecret,
     MediaItem,
     WatchEvent,
+    WatchlistSource,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 from librarysync.jobs.import_pipeline import (
@@ -38,6 +45,10 @@ from librarysync.jobs.import_pipeline import (
     process_import_candidates,
 )
 from librarysync.jobs.import_utils import chunked
+from librarysync.jobs.watchlist_pipeline import (
+    WatchlistCandidate,
+    process_watchlist_candidates,
+)
 
 LOOKBACK_DAYS = settings.history_lookback_days
 logger = logging.getLogger(__name__)
@@ -47,6 +58,13 @@ SIMKL_ACTIVITY_KEYS = {
     "anime": "anime",
 }
 ENTRY_KEY_BATCH_SIZE = 200
+WATCHLIST_STATUSES = {
+    "plantowatch",
+    "plan_to_watch",
+    "planning",
+    "planned",
+    "watchlist",
+}
 
 
 @dataclass(frozen=True)
@@ -159,9 +177,22 @@ async def _import_for_integration(
 
     categories = _select_simkl_categories(integration.config, activities, has_history)
     if not categories:
+        watchlist_imported = await _import_watchlist_for_integration(
+            db,
+            integration,
+            client,
+            access_token,
+            now,
+        )
+        if watchlist_imported:
+            logger.info(
+                "Imported %s SIMKL watchlist items for user %s",
+                watchlist_imported,
+                integration.user_id,
+            )
         _update_simkl_activity_config(integration, activities, now)
         await db.commit()
-        return ImportResult(imported=0, attempted=True)
+        return ImportResult(imported=watchlist_imported, attempted=True)
 
     history_payload: dict[str, dict[str, Any]] = {}
     if "movies" in categories:
@@ -208,6 +239,20 @@ async def _import_for_integration(
             now=now,
         )
 
+    watchlist_imported = await _import_watchlist_for_integration(
+        db,
+        integration,
+        client,
+        access_token,
+        now,
+    )
+    if watchlist_imported:
+        logger.info(
+            "Imported %s SIMKL watchlist items for user %s",
+            watchlist_imported,
+            integration.user_id,
+        )
+
     _update_simkl_activity_config(integration, activities, now)
     await db.commit()
 
@@ -217,7 +262,7 @@ async def _import_for_integration(
             imported,
             integration.user_id,
         )
-    return ImportResult(imported=imported, attempted=True)
+    return ImportResult(imported=imported + watchlist_imported, attempted=True)
 
 
 async def _fetch_simkl_activities(
@@ -435,6 +480,237 @@ async def _import_shows_payload(
             now=now,
         )
     return imported
+
+
+async def _import_watchlist_for_integration(
+    db: AsyncSession,
+    integration: Integration,
+    client: SimklClient,
+    access_token: str,
+    now: datetime,
+    sources: list[WatchlistSource] | None = None,
+) -> int:
+    await ensure_personal_watchlist_source(
+        db,
+        user_id=integration.user_id,
+        provider="simkl",
+        name="SIMKL watchlist",
+    )
+    if sources is None:
+        sources = await list_watchlist_sources(db, integration.user_id, provider="simkl")
+    if not sources:
+        return 0
+    imported = 0
+    for source in sources:
+        if source.source_type != PERSONAL_SOURCE_TYPE:
+            continue
+        candidates: list[WatchlistCandidate] = []
+        total_entries = 0
+        for category in ("movies", "shows", "anime"):
+            try:
+                payload = await client.fetch_all_items(
+                    access_token,
+                    category=category,
+                    extended="full" if category in {"shows", "anime"} else None,
+                )
+            except SimklError as exc:
+                logger.warning(
+                    "SIMKL watchlist fetch failed for user %s (%s): %s",
+                    integration.user_id,
+                    category,
+                    exc,
+                )
+                continue
+            entries = _extract_all_items_entries(payload, category, WATCHLIST_STATUSES)
+            total_entries += len(entries)
+            for entry in entries:
+                candidate = _build_watchlist_candidate(
+                    entry,
+                    source="simkl",
+                    list_context={"name": "SIMKL watchlist", "type": "personal"},
+                )
+                if candidate:
+                    candidates.append(candidate)
+        if candidates:
+            imported += await process_watchlist_candidates(
+                db,
+                integration.user_id,
+                "simkl",
+                source,
+                candidates,
+                now=now,
+            )
+        elif total_entries == 0:
+            await reconcile_watchlist_source(
+                db,
+                source,
+                now=now,
+                seen_item_ids=[],
+            )
+    return imported
+
+
+async def import_watchlist_source(
+    db: AsyncSession,
+    source: WatchlistSource,
+    *,
+    now: datetime | None = None,
+) -> int:
+    if source.provider != "simkl":
+        raise ValueError("Watchlist source is not a SIMKL list")
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise ValueError("SIMKL credentials are not configured")
+    integration, secret_data = await load_integration_with_secrets(
+        db, source.user_id, "simkl"
+    )
+    if not integration or integration.status == "disconnected":
+        raise ValueError("SIMKL integration is not connected")
+    if not secret_data or not has_required_simkl_fields(secret_data):
+        raise ValueError("SIMKL credentials are incomplete")
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    client = SimklClient(
+        client_id=settings.simkl_client_id,
+        client_secret=settings.simkl_client_secret,
+    )
+    access_token = await _ensure_simkl_access_token(
+        db, integration.id, secret_data, client
+    )
+    return await _import_watchlist_for_integration(
+        db,
+        integration,
+        client,
+        access_token,
+        now,
+        sources=[source],
+    )
+
+
+def _build_watchlist_candidate(
+    entry: dict[str, Any],
+    *,
+    source: str,
+    list_context: dict[str, Any] | None = None,
+) -> WatchlistCandidate | None:
+    movie = _extract_movie_summary(entry)
+    if movie:
+        return _build_watchlist_movie_candidate(entry, movie, source, list_context)
+    show = _extract_show_summary(entry)
+    if show:
+        return _build_watchlist_show_candidate(entry, show, source, list_context)
+    return None
+
+
+def _build_watchlist_movie_candidate(
+    entry: dict[str, Any],
+    movie: MovieSummary,
+    source: str,
+    list_context: dict[str, Any] | None,
+) -> WatchlistCandidate | None:
+    entry_id = _extract_watchlist_entry_id(entry)
+    entry_key = _build_watchlist_entry_key(
+        entry_id,
+        movie.imdb_id,
+        movie.tmdb_id,
+        movie.simkl_id,
+        None,
+    )
+    ids: dict[str, str] = {}
+    if movie.imdb_id:
+        ids["imdb_id"] = movie.imdb_id
+    if movie.tmdb_id:
+        ids["tmdb_id"] = movie.tmdb_id
+    raw = _build_watchlist_raw(movie.raw, list_context, entry_id)
+    return WatchlistCandidate(
+        entry_key=entry_key,
+        media_type="movie",
+        ids=ids,
+        title=movie.title,
+        year=movie.year,
+        poster_url=None,
+        raw=raw,
+        source=source,
+        external_item_id=entry_id,
+    )
+
+
+def _build_watchlist_show_candidate(
+    entry: dict[str, Any],
+    show: ShowSummary,
+    source: str,
+    list_context: dict[str, Any] | None,
+) -> WatchlistCandidate | None:
+    entry_id = _extract_watchlist_entry_id(entry)
+    entry_key = _build_watchlist_entry_key(
+        entry_id,
+        show.imdb_id,
+        show.tmdb_id,
+        show.simkl_id,
+        show.tvdb_id,
+    )
+    ids: dict[str, str] = {}
+    if show.imdb_id:
+        ids["imdb_id"] = show.imdb_id
+    if show.tmdb_id:
+        ids["tmdb_id"] = show.tmdb_id
+    if show.tvdb_id:
+        ids["tvdb_id"] = show.tvdb_id
+    raw = _build_watchlist_raw(show.raw, list_context, entry_id)
+    return WatchlistCandidate(
+        entry_key=entry_key,
+        media_type="tv",
+        ids=ids,
+        title=show.title,
+        year=show.year,
+        poster_url=None,
+        raw=raw,
+        source=source,
+        external_item_id=entry_id,
+    )
+
+
+def _extract_watchlist_entry_id(entry: dict[str, Any]) -> str | None:
+    for key in ("id", "item_id", "entry_id", "list_item_id"):
+        value = _coerce_str(entry.get(key))
+        if value:
+            return value
+    return None
+
+
+def _build_watchlist_entry_key(
+    entry_id: str | None,
+    imdb_id: str | None,
+    tmdb_id: str | None,
+    simkl_id: str | None,
+    tvdb_id: str | None,
+) -> str | None:
+    if entry_id:
+        return f"watchlist:{entry_id}"
+    if simkl_id:
+        return f"watchlist:simkl:{simkl_id}"
+    if imdb_id:
+        return f"watchlist:imdb:{imdb_id}"
+    if tmdb_id:
+        return f"watchlist:tmdb:{tmdb_id}"
+    if tvdb_id:
+        return f"watchlist:tvdb:{tvdb_id}"
+    return None
+
+
+def _build_watchlist_raw(
+    item_raw: dict[str, Any],
+    list_context: dict[str, Any] | None,
+    entry_id: str | None,
+) -> dict[str, Any]:
+    raw: dict[str, Any] = {"source": "simkl"}
+    if entry_id:
+        raw["entry_id"] = entry_id
+    if item_raw:
+        raw["item"] = item_raw
+    if list_context:
+        raw["list"] = list_context
+    return raw
 
 
 def _extract_all_items_entries(
