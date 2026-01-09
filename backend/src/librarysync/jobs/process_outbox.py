@@ -97,8 +97,8 @@ logger = logging.getLogger(__name__)
 def _get_provider_batch_sizes() -> dict[str, int]:
     """Get provider batch sizes from settings.
     
-    This function is called once per batch grouping operation to retrieve
-    the current settings values.
+    Returns a dictionary mapping provider names to their configured maximum
+    batch sizes. Called during batch processing to retrieve current settings.
     """
     return {
         "trakt": settings.trakt_max_batch_size,
