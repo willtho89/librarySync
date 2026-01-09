@@ -25,5 +25,8 @@ function formatIntegrationName(value) {
   if (normalized === "aiostreams") {
     return "AIOStreams Proxy";
   }
+  if (normalized === "anilist") {
+    return "AniList";
+  }
   return normalized.toUpperCase();
 }

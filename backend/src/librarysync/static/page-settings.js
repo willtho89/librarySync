@@ -1,6 +1,7 @@
 const settingsState = {
   hasAnyImports: false,
   status: null,
+  importQueue: [],
 };
 
 function applyQuickImportControls(statusData) {
@@ -55,6 +56,211 @@ async function loadStatusData() {
     applyQuickImportControls(statusData);
   } catch (error) {
     console.error("status load failed", error);
+  }
+}
+
+function arraysEqual(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right)) {
+    return false;
+  }
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function readImportQueueOrder(list) {
+  if (!list) {
+    return [];
+  }
+  return Array.from(list.querySelectorAll(".import-queue-item"))
+    .map((item) => item.dataset.provider)
+    .filter(Boolean);
+}
+
+function updateImportQueueIndices(list) {
+  if (!list) {
+    return;
+  }
+  const items = Array.from(list.querySelectorAll(".import-queue-item"));
+  items.forEach((item, index) => {
+    const indexEl = item.querySelector("[data-queue-index]");
+    if (indexEl) {
+      indexEl.textContent = `#${index + 1}`;
+    }
+  });
+}
+
+function bindImportQueueDrag(list) {
+  if (!list || list.dataset.dragBound === "true") {
+    return;
+  }
+  list.dataset.dragBound = "true";
+  let draggedItem = null;
+  let overItem = null;
+
+  list.addEventListener("dragstart", (event) => {
+    const item = event.target.closest(".import-queue-item");
+    if (!item) {
+      return;
+    }
+    draggedItem = item;
+    item.classList.add("is-dragging");
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", item.dataset.provider || "");
+    }
+  });
+
+  list.addEventListener("dragover", (event) => {
+    if (!draggedItem) {
+      return;
+    }
+    event.preventDefault();
+    const target = event.target.closest(".import-queue-item");
+    if (!target || target === draggedItem) {
+      return;
+    }
+    const rect = target.getBoundingClientRect();
+    const shouldInsertBefore = event.clientY < rect.top + rect.height / 2;
+    const referenceNode = shouldInsertBefore ? target : target.nextElementSibling;
+    if (referenceNode !== draggedItem) {
+      list.insertBefore(draggedItem, referenceNode);
+    }
+    if (overItem && overItem !== target) {
+      overItem.classList.remove("is-over");
+    }
+    overItem = target;
+    overItem.classList.add("is-over");
+  });
+
+  list.addEventListener("dragleave", (event) => {
+    const target = event.target.closest(".import-queue-item");
+    if (target && target === overItem) {
+      target.classList.remove("is-over");
+      overItem = null;
+    }
+  });
+
+  list.addEventListener("drop", (event) => {
+    if (!draggedItem) {
+      return;
+    }
+    event.preventDefault();
+    if (overItem) {
+      overItem.classList.remove("is-over");
+      overItem = null;
+    }
+  });
+
+  list.addEventListener("dragend", () => {
+    if (!draggedItem) {
+      return;
+    }
+    draggedItem.classList.remove("is-dragging");
+    draggedItem = null;
+    if (overItem) {
+      overItem.classList.remove("is-over");
+      overItem = null;
+    }
+    updateImportQueueIndices(list);
+    const order = readImportQueueOrder(list);
+    if (!arraysEqual(order, settingsState.importQueue)) {
+      void saveImportQueueOrder(order);
+    }
+  });
+}
+
+function renderImportQueue(queue) {
+  const list = document.getElementById("import-queue-list");
+  const empty = document.getElementById("import-queue-empty");
+  if (!list || !empty) {
+    return;
+  }
+  list.innerHTML = "";
+  const providers = Array.isArray(queue) ? queue.map((entry) => String(entry)) : [];
+  settingsState.importQueue = providers;
+  if (!providers.length) {
+    list.hidden = true;
+    empty.hidden = false;
+    return;
+  }
+  list.hidden = false;
+  empty.hidden = true;
+  providers.forEach((provider) => {
+    const label = formatIntegrationName(provider);
+    const item = document.createElement("li");
+    item.className = "import-queue-item";
+    item.draggable = true;
+    item.dataset.provider = provider;
+
+    const main = document.createElement("div");
+    main.className = "import-queue-main";
+
+    const handle = document.createElement("button");
+    handle.type = "button";
+    handle.className = "import-queue-handle";
+    handle.draggable = true;
+    handle.textContent = "Drag";
+    handle.setAttribute("aria-label", `Drag to reorder ${label}`);
+
+    const name = document.createElement("span");
+    name.className = "import-queue-name";
+    name.textContent = label;
+
+    main.appendChild(handle);
+    main.appendChild(name);
+
+    const indexEl = document.createElement("span");
+    indexEl.className = "import-queue-index";
+    indexEl.dataset.queueIndex = "true";
+
+    item.appendChild(main);
+    item.appendChild(indexEl);
+    list.appendChild(item);
+  });
+  updateImportQueueIndices(list);
+  bindImportQueueDrag(list);
+}
+
+async function loadImportQueue() {
+  const list = document.getElementById("import-queue-list");
+  if (!list) {
+    return;
+  }
+  try {
+    const data = await requestJSON("/api/integrations/import/queue");
+    const queue = data && Array.isArray(data.queue) ? data.queue : [];
+    renderImportQueue(queue);
+    setMessage("import-queue-message", "");
+  } catch (error) {
+    console.error("import queue load failed", error);
+    setMessage("import-queue-message", error.message, true);
+  }
+}
+
+async function saveImportQueueOrder(order) {
+  const previousOrder = settingsState.importQueue.slice();
+  setMessage("import-queue-message", "Saving order...");
+  try {
+    const response = await requestJSON("/api/integrations/import/queue", {
+      method: "POST",
+      body: JSON.stringify({ order }),
+    });
+    const queue =
+      response && Array.isArray(response.queue) ? response.queue : order;
+    settingsState.importQueue = queue.map((entry) => String(entry));
+    setMessage("import-queue-message", "Import queue updated.");
+    renderImportQueue(settingsState.importQueue);
+  } catch (error) {
+    settingsState.importQueue = previousOrder;
+    renderImportQueue(previousOrder);
+    setMessage("import-queue-message", error.message, true);
   }
 }
 
@@ -252,6 +458,7 @@ async function loadIntegrations() {
     importAllButton.disabled = !settingsState.hasAnyImports;
   }
   applyQuickImportControls(settingsState.status);
+  await loadImportQueue();
 }
 
 function parseCookieString(cookieHeader) {
@@ -684,8 +891,9 @@ async function handleAIOStreamsDisconnect() {
 
 async function handleQuickImportScheduleSave(data) {
   setMessage("quick-import-message", "");
-  const intervalSeconds = parseIntervalSeconds(data.get("quick_import_interval"));
-  if (intervalSeconds === null) {
+  const rawValue = data.get("quick_import_interval");
+  const intervalSeconds = parseIntervalSeconds(rawValue);
+  if (intervalSeconds === null && rawValue !== "" && rawValue !== null) {
     setMessage("quick-import-message", "Choose a valid interval.", true);
     return;
   }

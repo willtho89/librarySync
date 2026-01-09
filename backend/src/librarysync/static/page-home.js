@@ -32,11 +32,23 @@ function renderHomeStatus(statusData) {
   const counts = outbox.counts || {};
   const pending = (counts.pending || 0) + (counts.failed_retryable || 0);
   const inProgress = counts.in_progress || 0;
-  const quick = statusData.imports ? statusData.imports.quick : null;
-  const queue =
-    quick && Array.isArray(quick.queue) && quick.queue.length
-      ? quick.queue.map((entry) => formatProvider(entry)).join(" → ")
-      : "Idle";
+  const imports = statusData.imports || {};
+  const quick = imports.quick || null;
+  const importAll = imports.import_all || null;
+  const queueOrder = Array.isArray(imports.queue_order) ? imports.queue_order : [];
+  const isActive = (state) =>
+    state && (state.status === "pending" || state.status === "in_progress");
+  let activeQueue = [];
+  if (isActive(importAll) && Array.isArray(importAll.queue) && importAll.queue.length) {
+    activeQueue = importAll.queue;
+  } else if (isActive(quick) && Array.isArray(quick.queue) && quick.queue.length) {
+    activeQueue = quick.queue;
+  } else if (queueOrder.length) {
+    activeQueue = queueOrder;
+  }
+  const queue = activeQueue.length
+    ? activeQueue.map((entry) => formatProvider(entry)).join(" → ")
+    : "Idle";
   const metadataCounts = statusData.metadata ? statusData.metadata.counts : {};
   const metadataPending = metadataCounts && metadataCounts.pending ? metadataCounts.pending : 0;
 

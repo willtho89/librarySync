@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
-from librarysync.core.import_all import IMPORT_ALL_PROVIDER, parse_import_all_state
+from librarysync.core.import_all import (
+    IMPORT_ALL_PROVIDER,
+    build_import_all_queue,
+    parse_import_all_state,
+)
 from librarysync.core.import_control import (
     MERGE_COMPLETED_AT_KEY,
     MERGE_ERROR_KEY,
@@ -346,6 +350,7 @@ async def status(
     merge_required_at = parse_datetime(system_config.get(MERGE_REQUIRED_AT_KEY))
     merge_completed_at = parse_datetime(system_config.get(MERGE_COMPLETED_AT_KEY))
     merge_error = system_config.get(MERGE_ERROR_KEY)
+    queue_order = await build_import_all_queue(db, current_user.id)
 
     scheduled_result = await db.execute(select(ScheduledJob))
     scheduled_jobs = [
@@ -402,6 +407,7 @@ async def status(
     return {
         "server_time": now,
         "imports": {
+            "queue_order": queue_order,
             "quick": {
                 "status": quick_state.status,
                 "interval_seconds": quick_state.interval_seconds,

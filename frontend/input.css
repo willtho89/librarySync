@@ -624,6 +624,47 @@
     @apply flex flex-col items-end gap-1 text-xs text-muted;
   }
 
+  .import-queue-list {
+    @apply space-y-2;
+  }
+
+  .import-queue-item {
+    @apply flex items-center justify-between gap-3 rounded-xl border border-line/60 bg-elevated/70 px-3 py-2 text-sm text-ink transition;
+  }
+
+  .import-queue-item.is-dragging {
+    @apply opacity-60;
+  }
+
+  .import-queue-item.is-over {
+    @apply border-primary/60 bg-surface shadow-glow;
+  }
+
+  .import-queue-main {
+    @apply flex items-center gap-3;
+  }
+
+  .import-queue-name {
+    @apply text-sm font-semibold text-ink;
+  }
+
+  .import-queue-index {
+    @apply text-xs text-muted;
+  }
+
+  .import-queue-handle {
+    @apply inline-flex items-center rounded-lg border border-line/60 bg-surface px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted transition;
+    @apply cursor-grab;
+  }
+
+  .import-queue-handle:focus-visible {
+    @apply outline-none ring-2 ring-primary/40;
+  }
+
+  .import-queue-item.is-dragging .import-queue-handle {
+    @apply cursor-grabbing;
+  }
+
   .activity-list {
     @apply mt-4 grid gap-3;
   }

@@ -1957,27 +1957,6 @@ h1,
   padding: 1rem;
 }
 
-.metadata-grid {
-  display: grid;
-  gap: 0.5rem;
-  font-size: 0.75rem;
-  line-height: 1rem;
-  --tw-text-opacity: 1;
-  color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
-}
-
-@media (min-width: 768px) {
-  .metadata-grid {
-    grid-template-columns: 160px 1fr;
-  }
-}
-
-.metadata-grid dt {
-  font-weight: 600;
-  --tw-text-opacity: 1;
-  color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
-}
-
 .activity-summary {
   margin-top: 1rem;
   display: grid;
@@ -2081,6 +2060,109 @@ h1,
   line-height: 1rem;
   --tw-text-opacity: 1;
   color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+}
+
+.import-queue-list > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(0.5rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(0.5rem * var(--tw-space-y-reverse));
+}
+
+.import-queue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 1rem;
+  border-width: 1px;
+  border-color: rgb(var(--color-line) / 0.6);
+  background-color: rgb(var(--color-elevated) / 0.7);
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, -webkit-backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter, -webkit-backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+.import-queue-item.is-dragging {
+  opacity: 0.6;
+}
+
+.import-queue-item.is-over {
+  border-color: rgb(var(--color-primary) / 0.6);
+  --tw-bg-opacity: 1;
+  background-color: rgb(var(--color-surface) / var(--tw-bg-opacity, 1));
+  --tw-shadow: 0 0 0 1px rgba(13, 120, 211, 0.12), 0 12px 30px -24px rgba(13, 120, 211, 0.6);
+  --tw-shadow-colored: 0 0 0 1px var(--tw-shadow-color), 0 12px 30px -24px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
+.import-queue-main {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.import-queue-name {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-ink) / var(--tw-text-opacity, 1));
+}
+
+.import-queue-index {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+}
+
+.import-queue-handle {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 0.5rem;
+  border-width: 1px;
+  border-color: rgb(var(--color-line) / 0.6);
+  --tw-bg-opacity: 1;
+  background-color: rgb(var(--color-surface) / var(--tw-bg-opacity, 1));
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  --tw-text-opacity: 1;
+  color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, -webkit-backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter, -webkit-backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+  cursor: grab;
+}
+
+.import-queue-handle:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000);
+  --tw-ring-color: rgb(var(--color-primary) / 0.4);
+}
+
+.import-queue-item.is-dragging .import-queue-handle {
+  cursor: grabbing;
 }
 
 .activity-list {
@@ -2545,10 +2627,6 @@ h1,
   transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 
-.resize {
-  resize: both;
-}
-
 .flex-col {
   flex-direction: column;
 }
@@ -2934,6 +3012,10 @@ h1,
     top: 6rem;
   }
 
+  .lg\:col-span-2 {
+    grid-column: span 2 / span 2;
+  }
+
   .lg\:grid-cols-2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2952,10 +3034,6 @@ h1,
 
   .lg\:grid-cols-\[240px\2c 1fr\] {
     grid-template-columns: 240px 1fr;
-  }
-
-  .lg\:grid-cols-\[minmax\(0\2c 1fr\)_280px\] {
-    grid-template-columns: minmax(0,1fr) 280px;
   }
 
   .lg\:flex-col {
