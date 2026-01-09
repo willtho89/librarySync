@@ -397,8 +397,7 @@
           <p class="eyebrow">History imports</p>
           <h2 class="section-title">Pull recent history or run a full backfill.</h2>
           <p class="section-subtitle">
-            Imports run in priority order (Trakt → Letterboxd → SIMKL → AniList → Stremio →
-            AIOStreams).
+            Drag providers to set the import queue order for quick and full imports.
           </p>
         </div>
         <div class="grid gap-4 lg:grid-cols-2">
@@ -444,6 +443,34 @@
               </button>
               <p id="import-all-message" class="form-message" role="status" hidden></p>
               <p class="helper-text">Outbox delivery resumes after the merge completes.</p>
+            </div>
+          </div>
+          <div class="card lg:col-span-2">
+            <div class="card-header">
+              <div>
+                <h3 class="section-title">Import queue order</h3>
+                <p class="section-subtitle">Drag to reorder provider priority.</p>
+              </div>
+            </div>
+            <div class="space-y-3">
+              <p class="helper-text">
+                Only connected integrations appear here. New integrations are appended to the end
+                of the queue.
+              </p>
+              <p id="import-queue-empty" class="empty-state" hidden>
+                Connect an integration to create an import queue.
+              </p>
+              <ul id="import-queue-list" class="import-queue-list" role="list"></ul>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  id="import-queue-restore"
+                  class="btn btn-ghost"
+                >
+                  Restore default order
+                </button>
+              </div>
+              <p id="import-queue-message" class="form-message" role="status" hidden></p>
             </div>
           </div>
         </div>

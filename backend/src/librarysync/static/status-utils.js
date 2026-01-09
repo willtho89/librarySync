@@ -20,6 +20,7 @@ function formatProvider(value) {
     stremio: "Stremio",
     letterboxd: "Letterboxd",
     aiostreams: "AIOStreams",
+    anilist: "AniList",
     manual: "Manual",
     internal: "Internal",
   };

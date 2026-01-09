@@ -27,6 +27,14 @@ IMPORT_ALL_PRIORITY = (
     "stremio",
     "aiostreams",
 )
+DEFAULT_IMPORT_QUEUE_ORDER = (
+    "trakt",
+    "letterboxd",
+    "simkl",
+    "anilist",
+    "stremio",
+    "aiostreams",
+)
 
 IMPORT_ALL_STATUS_PENDING = "pending"
 IMPORT_ALL_STATUS_IN_PROGRESS = "in_progress"
@@ -36,6 +44,7 @@ IMPORT_ALL_STATUS_FAILED = "failed"
 IMPORT_ALL_STATUS_KEY = "import_all_status"
 IMPORT_ALL_QUEUE_KEY = "import_all_queue"
 IMPORT_ALL_INDEX_KEY = "import_all_index"
+IMPORT_QUEUE_ORDER_KEY = "import_queue_order"
 IMPORT_ALL_REQUESTED_KEY = "import_all_requested_at"
 IMPORT_ALL_STARTED_KEY = "import_all_started_at"
 IMPORT_ALL_COMPLETED_KEY = "import_all_completed_at"
@@ -141,7 +150,18 @@ async def get_or_create_system_integration(
     return integration
 
 
-async def build_import_all_queue(db: AsyncSession, user_id: str) -> list[str]:
+async def load_import_queue_preferences(db: AsyncSession, user_id: str) -> list[str]:
+    result = await db.execute(
+        select(Integration.config).where(
+            Integration.user_id == user_id,
+            Integration.provider == IMPORT_ALL_PROVIDER,
+        )
+    )
+    config = result.scalar_one_or_none()
+    return get_import_queue_order(config)
+
+
+async def load_import_ready_providers(db: AsyncSession, user_id: str) -> list[str]:
     queue: list[str] = []
     for provider in IMPORT_ALL_PRIORITY:
         integration, secret_data = await load_integration_with_secrets(
@@ -179,6 +199,14 @@ async def build_import_all_queue(db: AsyncSession, user_id: str) -> list[str]:
     return queue
 
 
+async def build_import_all_queue(db: AsyncSession, user_id: str) -> list[str]:
+    available = await load_import_ready_providers(db, user_id)
+    preferred = await load_import_queue_preferences(db, user_id)
+    if not preferred:
+        preferred = list(DEFAULT_IMPORT_QUEUE_ORDER)
+    return apply_import_queue_order(available, preferred)
+
+
 async def load_active_import_all_users(db: AsyncSession) -> set[str]:
     result = await db.execute(
         select(Integration.user_id, Integration.config).where(
@@ -196,6 +224,54 @@ def _normalize_queue(value: object) -> list[str]:
     if isinstance(value, list):
         return [str(entry) for entry in value if entry]
     return []
+
+
+def normalize_import_queue_order(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[str] = []
+    for entry in value:
+        if entry is None:
+            continue
+        normalized = str(entry).strip().lower()
+        if not normalized or normalized in cleaned:
+            continue
+        if normalized not in IMPORT_ALL_PRIORITY:
+            continue
+        cleaned.append(normalized)
+    return cleaned
+
+
+def get_import_queue_order(config: dict | None) -> list[str]:
+    config = config or {}
+    return normalize_import_queue_order(config.get(IMPORT_QUEUE_ORDER_KEY))
+
+
+def set_import_queue_order(config: dict | None, order: Iterable[str]) -> dict:
+    updated = dict(config or {})
+    normalized = normalize_import_queue_order(list(order))
+    if normalized:
+        updated[IMPORT_QUEUE_ORDER_KEY] = normalized
+    else:
+        updated.pop(IMPORT_QUEUE_ORDER_KEY, None)
+    return updated
+
+
+def apply_import_queue_order(
+    available: Iterable[str],
+    preferred: Iterable[str],
+) -> list[str]:
+    available_list = [str(entry).strip().lower() for entry in available if entry]
+    available_set = set(available_list)
+    ordered: list[str] = []
+    for entry in preferred:
+        normalized = str(entry).strip().lower()
+        if normalized and normalized in available_set and normalized not in ordered:
+            ordered.append(normalized)
+    for provider in available_list:
+        if provider not in ordered:
+            ordered.append(provider)
+    return ordered
 
 
 def _coerce_int(value: Any) -> int | None:

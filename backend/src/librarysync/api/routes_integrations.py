@@ -68,6 +68,7 @@ from librarysync.core.import_all import (
     build_import_all_queue,
     get_or_create_system_integration,
     import_all_active,
+    set_import_queue_order,
 )
 from librarysync.core.import_control import (
     build_quick_import_config,
@@ -124,6 +125,10 @@ class AIOStreamsConfig(BaseModel):
 
 class QuickImportScheduleIn(BaseModel):
     interval_seconds: int | None = None
+
+
+class ImportQueueOrderIn(BaseModel):
+    order: list[str]
 
 
 def _normalize_optional(value: str | None) -> str | None:
@@ -492,6 +497,38 @@ async def update_quick_import_schedule(
     db.add(integration)
     await db.commit()
     return {"status": "ok", "interval_seconds": interval_seconds}
+
+
+@router.get(
+    "/import/queue",
+    summary="Get import queue order",
+    description="Return the current import priority order for the user.",
+)
+async def get_import_queue_order(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    queue = await build_import_all_queue(db, current_user.id)
+    return {"queue": queue}
+
+
+@router.post(
+    "/import/queue",
+    summary="Update import queue order",
+    description="Set the provider priority order used for imports.",
+)
+async def update_import_queue_order(
+    payload: ImportQueueOrderIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    integration = await get_or_create_system_integration(db, current_user.id)
+    integration.config = set_import_queue_order(integration.config, payload.order)
+    integration.status = "system"
+    db.add(integration)
+    await db.commit()
+    queue = await build_import_all_queue(db, current_user.id)
+    return {"status": "ok", "queue": queue}
 
 
 @router.post(

@@ -14,11 +14,22 @@ const activityState = {
   },
 };
 
-function renderStatCard(label, value, title) {
+function renderStatCard(label, value, title, options = {}) {
   const card = document.createElement("div");
   card.className = "activity-stat";
   const labelEl = document.createElement("span");
   labelEl.textContent = label;
+  if (options.linkHref && options.linkLabel) {
+    labelEl.appendChild(document.createTextNode(" · "));
+    const link = document.createElement("a");
+    link.href = options.linkHref;
+    link.className = "link-muted";
+    link.textContent = options.linkLabel;
+    if (options.linkTitle) {
+      link.title = options.linkTitle;
+    }
+    labelEl.appendChild(link);
+  }
   const valueEl = document.createElement("strong");
   valueEl.textContent = value;
   if (title) {
@@ -49,12 +60,28 @@ function renderActivitySummary(statusData) {
   const pending = (counts.pending || 0) + (counts.failed_retryable || 0);
   const inProgress = counts.in_progress || 0;
   const nextOutbox = outbox.next_run_at || null;
-  const quickImport = statusData.imports ? statusData.imports.quick : null;
+  const imports = statusData.imports || {};
+  const quickImport = imports.quick || null;
+  const importAll = imports.import_all || null;
+  const queueOrder = Array.isArray(imports.queue_order) ? imports.queue_order : [];
   const nextImport = quickImport ? quickImport.next_run_at : null;
-  const queue =
-    quickImport && Array.isArray(quickImport.queue) && quickImport.queue.length
-      ? quickImport.queue.map((entry) => formatProvider(entry)).join(" → ")
-      : "Idle";
+  const isActive = (state) =>
+    state && (state.status === "pending" || state.status === "in_progress");
+  let activeQueue = [];
+  if (isActive(importAll) && Array.isArray(importAll.queue) && importAll.queue.length) {
+    activeQueue = importAll.queue;
+  } else if (
+    isActive(quickImport) &&
+    Array.isArray(quickImport.queue) &&
+    quickImport.queue.length
+  ) {
+    activeQueue = quickImport.queue;
+  } else if (queueOrder.length) {
+    activeQueue = queueOrder;
+  }
+  const queue = activeQueue.length
+    ? activeQueue.map((entry) => formatProvider(entry)).join(" → ")
+    : "Idle";
 
   const stats = [
     {
@@ -76,8 +103,13 @@ function renderActivitySummary(statusData) {
       title: formatMetadataDate(nextImport),
     },
     {
-      label: "Import queue",
+      label: "Import queue order",
       value: queue,
+      link: {
+        linkHref: "/settings#imports",
+        linkLabel: "Change",
+        linkTitle: "Edit import queue order",
+      },
     },
     {
       label: "Metadata pending",
@@ -86,7 +118,9 @@ function renderActivitySummary(statusData) {
   ];
 
   stats.forEach((stat) => {
-    container.appendChild(renderStatCard(stat.label, stat.value, stat.title));
+    container.appendChild(
+      renderStatCard(stat.label, stat.value, stat.title, stat.link)
+    );
   });
 }
 

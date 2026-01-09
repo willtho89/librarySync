@@ -8,7 +8,18 @@ from datetime import date, datetime, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.db.models import MediaItem, OutboxJob, WatchedItem, WatchSync
+from librarysync.core.import_all import (
+    DEFAULT_IMPORT_QUEUE_ORDER,
+    IMPORT_ALL_PROVIDER,
+    get_import_queue_order,
+)
+from librarysync.db.models import (
+    Integration,
+    MediaItem,
+    OutboxJob,
+    WatchedItem,
+    WatchSync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +31,17 @@ class WatchedRow:
 
 
 async def merge_history_for_user(db: AsyncSession, user_id: str) -> int:
+    system_result = await db.execute(
+        select(Integration.config).where(
+            Integration.user_id == user_id,
+            Integration.provider == IMPORT_ALL_PROVIDER,
+        )
+    )
+    system_config = system_result.scalar_one_or_none()
+    queue_order = get_import_queue_order(system_config)
+    if not queue_order:
+        queue_order = list(DEFAULT_IMPORT_QUEUE_ORDER)
+    priority_map = {provider: index for index, provider in enumerate(queue_order)}
     result = await db.execute(
         select(WatchedItem, MediaItem)
         .join(MediaItem, WatchedItem.media_item_id == MediaItem.id)
@@ -32,14 +54,16 @@ async def merge_history_for_user(db: AsyncSession, user_id: str) -> int:
     rows = [WatchedRow(watched, media) for watched, media in result.all()]
     if not rows:
         return 0
-    merged_count = await _merge_movie_history(db, rows)
+    merged_count = await _merge_movie_history(db, rows, priority_map)
     if merged_count:
         logger.info("Merged %s watched entries for user %s", merged_count, user_id)
     return merged_count
 
 
 async def _merge_movie_history(
-    db: AsyncSession, rows: list[WatchedRow]
+    db: AsyncSession,
+    rows: list[WatchedRow],
+    priority_map: dict[str, int],
 ) -> int:
     grouped: dict[tuple[str, date], list[WatchedRow]] = {}
     for row in rows:
@@ -53,7 +77,13 @@ async def _merge_movie_history(
         for cluster in clusters:
             if len(cluster) < 2:
                 continue
-            merged += await _merge_cluster(db, user_id, watched_date, cluster)
+            merged += await _merge_cluster(
+                db,
+                user_id,
+                watched_date,
+                cluster,
+                priority_map,
+            )
     return merged
 
 
@@ -84,8 +114,9 @@ async def _merge_cluster(
     user_id: str,
     watched_date: date,
     cluster: list[WatchedRow],
+    priority_map: dict[str, int],
 ) -> int:
-    primary = max(cluster, key=_row_score)
+    primary = max(cluster, key=lambda row: _row_sort_key(row, priority_map))
     if primary.watched.source == "letterboxd":
         logger.debug(
             "Merging letterboxd item on %s for user %s", watched_date, user_id
@@ -129,7 +160,7 @@ def _merge_keys(row: WatchedRow) -> list[str]:
     return keys
 
 
-def _row_score(row: WatchedRow) -> int:
+def _row_sort_key(row: WatchedRow, priority_map: dict[str, int]) -> tuple[int, int]:
     score = 0
     media = row.media
     if media.imdb_id:
@@ -148,7 +179,9 @@ def _row_score(row: WatchedRow) -> int:
         score += 1
     if media.title:
         score += 1
-    return score
+    source = row.watched.source or ""
+    rank = priority_map.get(source, len(priority_map) + 1)
+    return (score, -rank)
 
 
 def _merge_media(primary: MediaItem, others: list[MediaItem]) -> None:
