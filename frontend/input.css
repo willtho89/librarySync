@@ -415,6 +415,28 @@
     @apply grid grid-cols-[auto,64px,1fr] items-start gap-4 rounded-xl border border-line/70 bg-surface/70 p-4;
   }
 
+  .history-card.is-watched {
+    @apply border-line/50 bg-elevated/60;
+    position: relative;
+    opacity: 0.65;
+  }
+
+  .history-card.is-watched .candidate-poster {
+    filter: grayscale(0.8);
+  }
+
+  .watchlist-pill {
+    border-radius: 999px;
+    border: 1px solid rgb(var(--color-line) / 0.7);
+    background-color: rgb(var(--color-surface) / 0.8);
+    padding: 0.15rem 0.55rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgb(var(--color-muted));
+  }
+
   .history-select {
     @apply pt-2;
   }

@@ -2,16 +2,22 @@ const lookupState = {
   id: null,
   timer: null,
   candidates: [],
-  cache: new Map(),
+  externalCache: new Map(),
+  localCache: new Map(),
   searchTimer: null,
   requestVersion: 0,
   lastQuery: "",
   lastScope: "all",
+  localOffset: 0,
+  hasMoreLocal: false,
+  externalLoaded: false,
+  externalPending: false,
 };
 const episodeState = {
   tmdbId: null,
   seasonNumber: null,
 };
+const LOCAL_PAGE_LIMIT = 8;
 
 function clearLookupTimer() {
   if (lookupState.timer) {
@@ -36,7 +42,7 @@ function getLookupCacheKey(query, scope) {
 }
 
 function readLookupCache(cacheKey) {
-  const entry = lookupState.cache.get(cacheKey);
+  const entry = lookupState.externalCache.get(cacheKey);
   if (!entry) {
     return null;
   }
@@ -45,7 +51,24 @@ function readLookupCache(cacheKey) {
 }
 
 function writeLookupCache(cacheKey, candidates) {
-  lookupState.cache.set(cacheKey, { candidates, savedAt: Date.now() });
+  lookupState.externalCache.set(cacheKey, { candidates, savedAt: Date.now() });
+}
+
+function getLocalCacheKey(query, scope, offset) {
+  return `${normalizeLookupQuery(query)}::${scope}::${offset}`;
+}
+
+function readLocalCache(cacheKey) {
+  const entry = lookupState.localCache.get(cacheKey);
+  if (!entry) {
+    return null;
+  }
+  const ageMs = Date.now() - entry.savedAt;
+  return { ...entry, ageMs };
+}
+
+function writeLocalCache(cacheKey, data) {
+  lookupState.localCache.set(cacheKey, { ...data, savedAt: Date.now() });
 }
 
 function resetLookupUI() {
@@ -62,9 +85,29 @@ function resetLookupUI() {
   lookupState.candidates = [];
   lookupState.lastQuery = "";
   lookupState.lastScope = "all";
+  lookupState.localOffset = 0;
+  lookupState.hasMoreLocal = false;
+  lookupState.externalLoaded = false;
+  lookupState.externalPending = false;
   resetEpisodePicker();
   setMessage("lookup-message", "");
   setMessage("confirm-message", "");
+  updateLookupActions();
+}
+
+function updateLookupActions() {
+  const actions = document.getElementById("lookup-actions");
+  const loadMoreBtn = document.getElementById("btn-load-more");
+  const externalBtn = document.getElementById("btn-search-external");
+  if (!actions || !loadMoreBtn || !externalBtn) {
+    return;
+  }
+  const hasQuery = Boolean(normalizeLookupQuery(lookupState.lastQuery));
+  actions.hidden = !hasQuery;
+  loadMoreBtn.hidden = !lookupState.hasMoreLocal || lookupState.externalLoaded;
+  loadMoreBtn.disabled = lookupState.externalPending;
+  externalBtn.hidden = lookupState.externalLoaded;
+  externalBtn.disabled = lookupState.externalPending;
 }
 
 function getConfirmPanel() {
@@ -154,7 +197,7 @@ function scheduleLookup(query, searchScope) {
     return;
   }
   lookupState.searchTimer = window.setTimeout(() => {
-    startLookup(query, searchScope, { force: false });
+    startLocalLookup(query, searchScope, { force: false });
   }, 350);
 }
 
@@ -179,7 +222,67 @@ function bindLookupAutoSearch() {
   });
 }
 
-async function startLookup(query, searchScope, options = {}) {
+async function startLocalLookup(query, searchScope, options = {}) {
+  const { force = false } = options;
+  const normalized = normalizeLookupQuery(query);
+  if (!normalized) {
+    resetLookupUI();
+    return;
+  }
+  clearLookupTimer();
+  clearLookupSearchTimer();
+  lookupState.lastQuery = query;
+  lookupState.lastScope = searchScope;
+  lookupState.id = null;
+  lookupState.externalLoaded = false;
+  lookupState.externalPending = false;
+  lookupState.localOffset = 0;
+  lookupState.hasMoreLocal = false;
+  updateLookupActions();
+  const requestVersion = lookupState.requestVersion + 1;
+  lookupState.requestVersion = requestVersion;
+  const cacheKey = getLocalCacheKey(query, searchScope, 0);
+  const cached = readLocalCache(cacheKey);
+  const cacheFresh = cached && cached.ageMs < 2 * 60 * 1000;
+  if (cached) {
+    lookupState.localOffset = cached.offset + cached.candidates.length;
+    lookupState.hasMoreLocal = cached.hasMore;
+    renderCandidates(cached.candidates || []);
+    if (cacheFresh && !force) {
+      setMessage("lookup-message", "");
+      return;
+    }
+  } else {
+    resetLookupUI();
+    lookupState.lastQuery = query;
+    lookupState.lastScope = searchScope;
+    updateLookupActions();
+  }
+  try {
+    setMessage("lookup-message", cached ? "Refreshing library results..." : "Searching library...");
+    const response = await requestJSON(
+      `/api/metadata/lookup/local?query=${encodeURIComponent(
+        query,
+      )}&search_scope=${encodeURIComponent(searchScope)}&offset=0&limit=${LOCAL_PAGE_LIMIT}`,
+    );
+    if (lookupState.requestVersion !== requestVersion) {
+      return;
+    }
+    const candidates = response.candidates || [];
+    lookupState.localOffset = candidates.length;
+    lookupState.hasMoreLocal = Boolean(response.has_more);
+    renderCandidates(candidates);
+    writeLocalCache(cacheKey, {
+      candidates,
+      hasMore: lookupState.hasMoreLocal,
+      offset: 0,
+    });
+  } catch (error) {
+    setMessage("lookup-message", error.message, true);
+  }
+}
+
+async function startExternalLookup(query, searchScope, options = {}) {
   const { force = false } = options;
   const cacheKey = getLookupCacheKey(query, searchScope);
   const cached = readLookupCache(cacheKey);
@@ -189,19 +292,22 @@ async function startLookup(query, searchScope, options = {}) {
   clearLookupSearchTimer();
   lookupState.lastQuery = query;
   lookupState.lastScope = searchScope;
+  lookupState.externalPending = true;
+  updateLookupActions();
 
   if (cached) {
     renderCandidates(cached.candidates || []);
+    lookupState.externalLoaded = true;
     if (cacheFresh && !force) {
+      lookupState.externalPending = false;
+      updateLookupActions();
       setMessage("lookup-message", "");
       return;
     }
-  } else {
-    resetLookupUI();
   }
 
   try {
-    setMessage("lookup-message", cached ? "Refreshing results..." : "Searching...");
+    setMessage("lookup-message", cached ? "Refreshing providers..." : "Searching providers...");
     const requestVersion = lookupState.requestVersion + 1;
     lookupState.requestVersion = requestVersion;
     const response = await requestJSON("/api/metadata/lookup", {
@@ -211,6 +317,8 @@ async function startLookup(query, searchScope, options = {}) {
     lookupState.id = response.lookup_id;
     await pollLookupStatus(response.lookup_id, requestVersion, cacheKey);
   } catch (error) {
+    lookupState.externalPending = false;
+    updateLookupActions();
     setMessage("lookup-message", error.message, true);
   }
 }
@@ -225,7 +333,7 @@ async function handleLookupSubmit(data) {
     setMessage("lookup-message", "Enter a title or ID to search.", true);
     return;
   }
-  await startLookup(query, searchScope, { force: true });
+  await startLocalLookup(query, searchScope, { force: true });
 }
 
 async function pollLookupStatus(lookupId, requestVersion, cacheKey) {
@@ -238,10 +346,15 @@ async function pollLookupStatus(lookupId, requestVersion, cacheKey) {
     if (data.status === "completed") {
       renderCandidates(candidates);
       writeLookupCache(cacheKey, candidates);
+      lookupState.externalPending = false;
+      lookupState.externalLoaded = true;
+      updateLookupActions();
       return;
     }
     if (data.status === "failed") {
       setMessage("lookup-message", data.error || "Lookup failed.", true);
+      lookupState.externalPending = false;
+      updateLookupActions();
       return;
     }
     if (candidates.length) {
@@ -253,6 +366,8 @@ async function pollLookupStatus(lookupId, requestVersion, cacheKey) {
       1200,
     );
   } catch (error) {
+    lookupState.externalPending = false;
+    updateLookupActions();
     setMessage("lookup-message", error.message, true);
   }
 }
@@ -323,6 +438,62 @@ function renderCandidates(candidates) {
   }
   resultsCard.hidden = false;
   setMessage("lookup-message", "");
+  updateLookupActions();
+}
+
+function mergeCandidates(existing, incoming) {
+  const merged = existing.slice();
+  const seen = new Set(existing.map((candidate) => candidate.id));
+  incoming.forEach((candidate) => {
+    if (seen.has(candidate.id)) {
+      return;
+    }
+    seen.add(candidate.id);
+    merged.push(candidate);
+  });
+  return merged;
+}
+
+async function loadMoreLocalResults() {
+  if (!lookupState.lastQuery || !lookupState.hasMoreLocal) {
+    return;
+  }
+  const query = lookupState.lastQuery;
+  const searchScope = lookupState.lastScope;
+  const offset = lookupState.localOffset;
+  lookupState.externalPending = true;
+  updateLookupActions();
+  try {
+    setMessage("lookup-message", "Loading more from library...");
+    const response = await requestJSON(
+      `/api/metadata/lookup/local?query=${encodeURIComponent(
+        query,
+      )}&search_scope=${encodeURIComponent(searchScope)}&offset=${offset}&limit=${LOCAL_PAGE_LIMIT}`,
+    );
+    if (lookupState.lastQuery !== query || lookupState.lastScope !== searchScope) {
+      return;
+    }
+    const newCandidates = response.candidates || [];
+    lookupState.localOffset += newCandidates.length;
+    lookupState.hasMoreLocal = Boolean(response.has_more);
+    const merged = mergeCandidates(lookupState.candidates, newCandidates);
+    renderCandidates(merged);
+  } catch (error) {
+    setMessage("lookup-message", error.message, true);
+  } finally {
+    lookupState.externalPending = false;
+    updateLookupActions();
+  }
+}
+
+async function handleExternalLookup() {
+  const query = lookupState.lastQuery;
+  const searchScope = lookupState.lastScope;
+  if (!query) {
+    setMessage("lookup-message", "Enter a title or ID to search.", true);
+    return;
+  }
+  await startExternalLookup(query, searchScope, { force: true });
 }
 
 function getSelectedCandidate() {
@@ -615,11 +786,49 @@ function bindRatingClearControls() {
   });
 }
 
+function bindWatchlistButton() {
+  const btn = document.getElementById("btn-add-watchlist");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    setMessage("confirm-message", "");
+    const candidate = getSelectedCandidate();
+    if (!candidate) {
+      setMessage("confirm-message", "Select a result to add.", true);
+      return;
+    }
+    const payload = buildHistoryPayload(candidate);
+    if (!hasHistoryIds(payload)) {
+      setMessage("confirm-message", "Selected result is missing external IDs.", true);
+      return;
+    }
+    
+    // Watchlist doesn't support episodes yet, only shows/movies
+    // If it's a TV show, we ignore episode selection for now and just add the show
+    
+    try {
+      setMessage("confirm-message", "Adding to watchlist...");
+      const res = await requestJSON("/api/watchlist/items", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (res.status === "already_exists") {
+        setMessage("confirm-message", "Item is already in your watchlist.");
+      } else {
+        setMessage("confirm-message", "Added to watchlist.");
+      }
+    } catch (error) {
+      setMessage("confirm-message", error.message, true);
+    }
+  });
+}
+
 window.librarysyncPageInit = () => {
   bindForm("lookup-form", handleLookupSubmit);
   bindForm("confirm-form", handleLookupConfirm);
   bindRatingClearControls();
   bindLookupAutoSearch();
+  bindWatchlistButton();
+  updateLookupActions();
 
   const candidateList = document.getElementById("candidate-list");
   if (candidateList) {
@@ -628,6 +837,15 @@ window.librarysyncPageInit = () => {
         handleCandidateSelection();
       }
     });
+  }
+
+  const loadMoreBtn = document.getElementById("btn-load-more");
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener("click", loadMoreLocalResults);
+  }
+  const externalBtn = document.getElementById("btn-search-external");
+  if (externalBtn) {
+    externalBtn.addEventListener("click", handleExternalLookup);
   }
 
   const seasonSelect = document.getElementById("season-select");

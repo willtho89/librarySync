@@ -84,6 +84,13 @@
               Add
             </a>
             <a
+              href="/watchlist"
+              data-auth-only
+              class="nav-link{% if active_page == 'watchlist' %} nav-link-active{% endif %}"
+            >
+              Watchlist
+            </a>
+            <a
               href="/history"
               data-auth-only
               class="nav-link{% if active_page == 'history' %} nav-link-active{% endif %}"
@@ -158,6 +165,13 @@
           class="mobile-nav-link{% if active_page == 'login' %} mobile-nav-link-active{% endif %}"
         >
           Login
+        </a>
+        <a
+          href="/watchlist"
+          data-auth-only
+          class="mobile-nav-link{% if active_page == 'watchlist' %} mobile-nav-link-active{% endif %}"
+        >
+          Watchlist
         </a>
         <a
           href="/activity"

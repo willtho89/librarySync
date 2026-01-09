@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date, datetime
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,8 +22,12 @@ PREFERRED_POSTER_HOSTS = (
     "image.tmdb.org",
     "thetvdb.com",
     "artworks.thetvdb.com",
+    "m.media-amazon.com",
+    "images-na.ssl-images-amazon.com",
 )
 ANIME_PROVIDERS = ("myanimelist", "kitsu", "anilist")
+POSTER_PROVIDER_ORDER = ("tvdb", "tmdb", "imdb")
+TITLE_LOOKUP_PREFIXES = ("AIOStreams ", "Stremio ", "Trakt ", "SIMKL ", "Letterboxd ")
 
 
 async def enrich_watched_metadata(
@@ -47,20 +52,57 @@ async def enrich_watched_metadata(
     service = MetadataProviderService(db, user_id)
     tmdb = await service.load_provider("tmdb")
     tvdb = await service.load_provider("tvdb")
-    if not tmdb and not tvdb:
+    imdb = await service.load_provider("imdb")
+    if not tmdb and not tvdb and not imdb:
         return
+
+    candidate_map: dict[str, MediaCandidate] = {}
+    if _should_lookup_by_title(media_item):
+        candidate = await _lookup_by_title(media_item, tmdb, tvdb, imdb)
+        if candidate:
+            candidate_map[candidate.provider] = candidate
+            await _apply_candidate_to_media_item(db, media_item, candidate, update_poster=True)
+            if (
+                episode_item
+                and candidate.provider == "tmdb"
+                and isinstance(tmdb, EpisodeMetadataProvider)
+            ):
+                await _apply_episode_metadata(tmdb, media_item, episode_item)
 
     if tmdb:
         candidate = await _fetch_provider_candidate(tmdb, media_item, "tmdb_id")
         if candidate:
-            await _apply_candidate_to_media_item(db, media_item, candidate)
+            candidate_map["tmdb"] = candidate
+            await _apply_candidate_to_media_item(
+                db,
+                media_item,
+                candidate,
+                update_poster=False,
+            )
         if episode_item and isinstance(tmdb, EpisodeMetadataProvider):
             await _apply_episode_metadata(tmdb, media_item, episode_item)
 
     if tvdb:
         candidate = await _fetch_provider_candidate(tvdb, media_item, "tvdb_id")
         if candidate:
-            await _apply_candidate_to_media_item(db, media_item, candidate)
+            candidate_map["tvdb"] = candidate
+            await _apply_candidate_to_media_item(
+                db,
+                media_item,
+                candidate,
+                update_poster=False,
+            )
+
+    if imdb:
+        candidate = await _fetch_provider_candidate(imdb, media_item, "imdb_id")
+        if candidate:
+            candidate_map["imdb"] = candidate
+            await _apply_candidate_to_media_item(db, media_item, candidate, update_poster=False)
+
+    if media_item.media_type in {"movie", "tv"}:
+        poster_url = _select_media_poster(candidate_map, media_item.poster_url)
+        if poster_url:
+            media_item.poster_url = poster_url
 
 
 def _needs_media_enrichment(media_item: MediaItem, episode_item: EpisodeItem | None) -> bool:
@@ -76,6 +118,79 @@ def _needs_media_enrichment(media_item: MediaItem, episode_item: EpisodeItem | N
     return missing_ids or poster_missing or missing_year or episode_needs_tmdb
 
 
+def _should_lookup_by_title(media_item: MediaItem) -> bool:
+    if media_item.imdb_id or media_item.tmdb_id or media_item.tvdb_id:
+        return False
+    if not media_item.title:
+        return False
+    return not media_item.title.startswith(TITLE_LOOKUP_PREFIXES)
+
+
+async def _lookup_by_title(
+    media_item: MediaItem,
+    tmdb: MetadataProvider | None,
+    tvdb: MetadataProvider | None,
+    imdb: MetadataProvider | None,
+) -> MediaCandidate | None:
+    scope = _scope_for_media_item(media_item)
+    if scope is None:
+        return None
+    queries = _build_lookup_queries(media_item.title, media_item.year)
+    for provider in (tmdb, tvdb, imdb):
+        if not provider or not provider.capabilities.supports_search:
+            continue
+        if not provider.supports_scope(scope):
+            continue
+        for query in queries:
+            try:
+                candidates = await provider.search(query, scope)
+            except Exception as exc:
+                logger.warning(
+                    "%s title search failed for %s: %s",
+                    provider.provider,
+                    media_item.id,
+                    exc,
+                )
+                continue
+            candidate = _select_title_candidate(candidates, media_item.title, media_item.year)
+            if candidate:
+                return candidate
+    return None
+
+
+def _build_lookup_queries(title: str, year: int | None) -> list[str]:
+    cleaned = title.strip()
+    if not cleaned:
+        return []
+    if year is None:
+        return [cleaned]
+    return [f"{cleaned} {year}", cleaned]
+
+
+def _select_title_candidate(
+    candidates: list[MediaCandidate],
+    title: str | None,
+    year: int | None,
+) -> MediaCandidate | None:
+    if not candidates or not title:
+        return None
+    title_key = _normalize_title_key(title)
+    if not title_key:
+        return None
+    title_matches = [
+        candidate
+        for candidate in candidates
+        if candidate.title and _normalize_title_key(candidate.title) == title_key
+    ]
+    if year is not None:
+        year_matches = [candidate for candidate in title_matches if candidate.year == year]
+        if year_matches:
+            return year_matches[0]
+    if title_matches:
+        return title_matches[0]
+    return None
+
+
 def _needs_anime_enrichment(media_item: MediaItem) -> bool:
     return any(
         value is None
@@ -87,9 +202,7 @@ def _needs_anime_enrichment(media_item: MediaItem) -> bool:
     )
 
 
-async def _enrich_anime_metadata(
-    db: AsyncSession, user_id: str, media_item: MediaItem
-) -> None:
+async def _enrich_anime_metadata(db: AsyncSession, user_id: str, media_item: MediaItem) -> None:
     if not _needs_anime_enrichment(media_item):
         return
     if not media_item.title:
@@ -155,9 +268,7 @@ async def _find_anime_candidate(
     try:
         candidates = await provider.search(media_item.title, scope)
     except Exception as exc:
-        logger.warning(
-            "%s anime search failed for %s: %s", provider.provider, media_item.id, exc
-        )
+        logger.warning("%s anime search failed for %s: %s", provider.provider, media_item.id, exc)
         return None
     return _select_anime_candidate(candidates, media_item)
 
@@ -171,9 +282,7 @@ def _select_anime_candidate(
     if not target_key:
         return None
     matches = [
-        candidate
-        for candidate in candidates
-        if _normalize_title_key(candidate.title) == target_key
+        candidate for candidate in candidates if _normalize_title_key(candidate.title) == target_key
     ]
     if not matches:
         return None
@@ -286,34 +395,44 @@ async def _fetch_provider_candidate(
         try:
             return await provider.get_details(provider_id, scope)
         except Exception as exc:
-            logger.warning(
-                "%s details failed for %s: %s", provider.provider, media_item.id, exc
-            )
+            logger.warning("%s details failed for %s: %s", provider.provider, media_item.id, exc)
             return None
     if media_item.imdb_id:
         imdb_id = media_item.imdb_id.lower()
         try:
             candidates = await provider.find_by_external_id(imdb_id, scope)
         except Exception as exc:
-            logger.warning(
-                "%s lookup failed for %s: %s", provider.provider, media_item.id, exc
-            )
+            logger.warning("%s lookup failed for %s: %s", provider.provider, media_item.id, exc)
             return None
         return _select_candidate(candidates, scope)
     return None
 
 
 async def _apply_candidate_to_media_item(
-    db: AsyncSession, media_item: MediaItem, candidate: MediaCandidate
+    db: AsyncSession,
+    media_item: MediaItem,
+    candidate: MediaCandidate,
+    update_poster: bool = True,
 ) -> None:
     ids = _extract_candidate_ids(candidate)
     await _set_media_id(db, media_item, "imdb_id", ids.get("imdb_id"), normalize=True)
     await _set_media_id(db, media_item, "tmdb_id", ids.get("tmdb_id"))
     await _set_media_id(db, media_item, "tvdb_id", ids.get("tvdb_id"))
-    if candidate.poster_url and _should_update_poster(media_item.poster_url, candidate.provider):
+    if (
+        update_poster
+        and candidate.poster_url
+        and _should_update_poster(media_item.poster_url, candidate.provider)
+    ):
         media_item.poster_url = candidate.poster_url
     if media_item.year is None and candidate.year is not None:
         media_item.year = candidate.year
+
+    if not media_item.release_date and candidate.release_date:
+        media_item.release_date = _parse_date(candidate.release_date)
+    if not media_item.first_air_date and candidate.first_air_date:
+        media_item.first_air_date = _parse_date(candidate.first_air_date)
+    if not media_item.last_air_date and candidate.last_air_date:
+        media_item.last_air_date = _parse_date(candidate.last_air_date)
 
 
 async def _apply_anime_candidate(
@@ -343,9 +462,7 @@ async def _apply_episode_metadata(
     try:
         episodes = await provider.list_episodes(media_item.tmdb_id, episode_item.season_number)
     except Exception as exc:
-        logger.warning(
-            "%s episode lookup failed for %s: %s", provider.provider, media_item.id, exc
-        )
+        logger.warning("%s episode lookup failed for %s: %s", provider.provider, media_item.id, exc)
         return
     for summary in episodes:
         if summary.episode_number != episode_item.episode_number:
@@ -354,6 +471,8 @@ async def _apply_episode_metadata(
             episode_item.tmdb_id = summary.provider_id
         if summary.title and not episode_item.title:
             episode_item.title = summary.title
+        if summary.air_date and not episode_item.air_date:
+            episode_item.air_date = _parse_date(summary.air_date)
         break
 
 
@@ -452,7 +571,7 @@ def _should_update_poster(current: str | None, provider: str) -> bool:
         return True
     if _is_preferred_poster(current):
         return False
-    return provider in {"tmdb", "tvdb"}
+    return provider in {"tmdb", "tvdb", "imdb"}
 
 
 def _is_preferred_poster(url: str | None) -> bool:
@@ -460,6 +579,17 @@ def _is_preferred_poster(url: str | None) -> bool:
         return False
     lowered = url.lower()
     return any(host in lowered for host in PREFERRED_POSTER_HOSTS)
+
+
+def _select_media_poster(
+    candidates: dict[str, MediaCandidate],
+    current: str | None,
+) -> str | None:
+    for provider in POSTER_PROVIDER_ORDER:
+        candidate = candidates.get(provider)
+        if candidate and candidate.poster_url:
+            return candidate.poster_url
+    return current
 
 
 def _extract_anime_candidate_ids(candidate: MediaCandidate) -> dict[str, str]:
@@ -478,9 +608,7 @@ def _extract_anime_candidate_ids(candidate: MediaCandidate) -> dict[str, str]:
     kitsu_id = _extract_raw_id(raw, ("kitsu_id", "kitsuId", "kitsuID"))
     if kitsu_id:
         ids.setdefault("kitsu_id", kitsu_id)
-    myanimelist_id = _extract_raw_id(
-        raw, ("myanimelist_id", "myanimelistId", "myanimelistID")
-    )
+    myanimelist_id = _extract_raw_id(raw, ("myanimelist_id", "myanimelistId", "myanimelistID"))
     if myanimelist_id:
         ids.setdefault("myanimelist_id", myanimelist_id)
     mal_id = _extract_raw_id(raw, ("mal_id", "malId", "malID"))
@@ -554,3 +682,12 @@ def _extract_tmdb_from_remote_ids(raw: dict) -> str | None:
             if tmdb_value:
                 return str(tmdb_value)
     return None
+
+
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None

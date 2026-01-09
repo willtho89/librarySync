@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -226,6 +227,61 @@ class LetterboxdClient:
             payload,
         )
         return data, status_code
+
+    async def set_watchlist_status(
+        self,
+        film_id: str | None = None,
+        *,
+        in_watchlist: bool = True,
+        imdb_id: str | None = None,
+        tmdb_id: str | None = None,
+        access_token: str | None = None,
+    ) -> tuple[dict[str, Any], int]:
+        if not access_token:
+            access_token = await self.refresh_access_token()
+        if not film_id:
+            film_id = await self.resolve_film_id(access_token, imdb_id, tmdb_id)
+        payload = {"inWatchlist": in_watchlist}
+        path = f"/film/{film_id}/me"
+        data, status_code = await self._update_json(
+            path,
+            access_token,
+            payload,
+            methods=("PATCH",),
+        )
+        return data, status_code
+
+    async def add_to_watchlist(
+        self,
+        film_id: str | None = None,
+        *,
+        imdb_id: str | None = None,
+        tmdb_id: str | None = None,
+        access_token: str | None = None,
+    ) -> tuple[dict[str, Any], int]:
+        return await self.set_watchlist_status(
+            film_id=film_id,
+            in_watchlist=True,
+            imdb_id=imdb_id,
+            tmdb_id=tmdb_id,
+            access_token=access_token,
+        )
+
+    async def remove_from_watchlist(
+        self,
+        film_id: str | None = None,
+        *,
+        imdb_id: str | None = None,
+        tmdb_id: str | None = None,
+        access_token: str | None = None,
+    ) -> tuple[dict[str, Any], int]:
+        return await self.set_watchlist_status(
+            film_id=film_id,
+            in_watchlist=False,
+            imdb_id=imdb_id,
+            tmdb_id=tmdb_id,
+            access_token=access_token,
+        )
 
     async def update_log_entry_rating(
         self,
@@ -533,6 +589,151 @@ class LetterboxdClient:
                 break
         return entries
 
+    async def fetch_watchlist(
+        self,
+        access_token: str,
+        path: str,
+        params: dict[str, str],
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        resolved = dict(params)
+        if cursor:
+            resolved["cursor"] = cursor
+        return await self._get_json(path, access_token, params=resolved)
+
+    async def get_watchlist(
+        self,
+        access_token: str,
+        member_id: str,
+        per_page: int = 20,
+        max_pages: int = 10,
+    ) -> list[dict[str, Any]]:
+        attempts = _build_watchlist_paths(member_id, per_page)
+        last_error: LetterboxdError | None = None
+        for path, params in attempts:
+            try:
+                payload = await self.fetch_watchlist(
+                    access_token,
+                    path=path,
+                    params=params,
+                )
+            except LetterboxdError as exc:
+                last_error = exc
+                if exc.status_code in {400, 404}:
+                    continue
+                raise
+            entries: list[dict[str, Any]] = []
+            cursor: str | None = None
+            for page_index in range(max_pages):
+                if page_index > 0:
+                    payload = await self.fetch_watchlist(
+                        access_token,
+                        path=path,
+                        params=params,
+                        cursor=cursor,
+                    )
+                page_entries = _extract_watchlist_items(payload)
+                if not page_entries:
+                    break
+                entries.extend(page_entries)
+                cursor = _extract_next_cursor(payload)
+                if not cursor:
+                    break
+            return entries
+        if last_error:
+            raise last_error
+        raise LetterboxdError("Letterboxd watchlist lookup failed", status_code=404)
+
+    async def fetch_watchlist_payload(
+        self,
+        access_token: str,
+        member_id: str,
+        per_page: int = 20,
+    ) -> dict[str, Any]:
+        attempts = _build_watchlist_paths(member_id, per_page)
+        last_error: LetterboxdError | None = None
+        for path, params in attempts:
+            try:
+                return await self._get_json(path, access_token, params=params)
+            except LetterboxdError as exc:
+                last_error = exc
+                if exc.status_code in {400, 404}:
+                    continue
+                raise
+        if last_error:
+            raise last_error
+        raise LetterboxdError("Letterboxd watchlist lookup failed", status_code=404)
+
+    async def get_list_entries(
+        self,
+        access_token: str,
+        username: str,
+        slug: str,
+        per_page: int = 20,
+        max_pages: int = 10,
+    ) -> list[dict[str, Any]]:
+        attempts = _build_list_entry_paths(username, slug, per_page)
+        last_error: LetterboxdError | None = None
+        for path, params in attempts:
+            try:
+                payload = await self._get_json(path, access_token, params=params)
+            except LetterboxdError as exc:
+                last_error = exc
+                if exc.status_code in {400, 404}:
+                    continue
+                raise
+            entries: list[dict[str, Any]] = []
+            cursor: str | None = None
+            for page_index in range(max_pages):
+                if page_index > 0:
+                    page_params = dict(params)
+                    if cursor:
+                        page_params["cursor"] = cursor
+                    payload = await self._get_json(path, access_token, params=page_params)
+                page_entries = _extract_watchlist_items(payload)
+                if not page_entries:
+                    break
+                entries.extend(page_entries)
+                cursor = _extract_next_cursor(payload)
+                if not cursor:
+                    break
+            return entries
+        if last_error:
+            raise last_error
+        raise LetterboxdError("Letterboxd list lookup failed", status_code=404)
+
+    async def fetch_list_by_slug(
+        self,
+        access_token: str,
+        username: str,
+        slug: str,
+    ) -> dict[str, Any]:
+        attempts = _build_list_paths(username, slug)
+        last_error: LetterboxdError | None = None
+        for path in attempts:
+            try:
+                return await self._get_json(path, access_token)
+            except LetterboxdError as exc:
+                last_error = exc
+                if exc.status_code in {400, 404}:
+                    continue
+                raise
+        if last_error:
+            raise last_error
+        raise LetterboxdError("Letterboxd list lookup failed", status_code=404)
+
+    async def fetch_user_lists(
+        self,
+        access_token: str,
+        username: str,
+    ) -> dict[str, Any]:
+        path = f"/lists/{username.strip()}"
+        return await self._get_json(path, access_token)
+
+    async def fetch_list(self, list_id: str, access_token: str) -> dict[str, Any]:
+        path = f"/list/{list_id}"
+        return await self._get_json(path, access_token)
+
     async def _resolve_log_entries_strategy(
         self,
         access_token: str,
@@ -765,6 +966,79 @@ def _extract_log_entries(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _extract_watchlist_items(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        items = (
+            payload.get("items")
+            or payload.get("results")
+            or payload.get("entries")
+            or payload.get("films")
+            or payload.get("watchlist")
+        )
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    return []
+
+
+def _build_watchlist_paths(member_id: str, per_page: int) -> list[tuple[str, dict[str, str]]]:
+    member_value = str(member_id)
+    return [
+        (f"/members/{member_value}/watchlist", {"perPage": str(per_page)}),
+        (f"/member/{member_value}/watchlist", {"perPage": str(per_page)}),
+        (
+            "/watchlist",
+            {
+                "member": member_value,
+                "memberRelationship": "Owner",
+                "perPage": str(per_page),
+            },
+        ),
+        (
+            "/films",
+            {
+                "member": member_value,
+                "memberRelationship": "Owner",
+                "where": "Watchlist",
+                "perPage": str(per_page),
+            },
+        ),
+    ]
+
+
+def _build_list_entry_paths(
+    username: str,
+    slug: str,
+    per_page: int,
+) -> list[tuple[str, dict[str, str]]]:
+    user_value = str(username)
+    slug_value = str(slug)
+    base_params = {"perPage": str(per_page)}
+    return [
+        (f"/members/{user_value}/list/{slug_value}", dict(base_params)),
+        (f"/members/{user_value}/lists/{slug_value}", dict(base_params)),
+        (f"/members/{user_value}/list/{slug_value}/entries", dict(base_params)),
+        (f"/members/{user_value}/lists/{slug_value}/entries", dict(base_params)),
+        (f"/list/{slug_value}", dict(base_params)),
+        (f"/lists/{slug_value}", dict(base_params)),
+        (f"/list/{slug_value}/entries", dict(base_params)),
+        (f"/lists/{slug_value}/entries", dict(base_params)),
+    ]
+
+
+def _build_list_paths(username: str, slug: str) -> list[str]:
+    user_value = username.strip()
+    slug_value = slug.strip()
+    return [
+        f"/members/{user_value}/list/{slug_value}",
+        f"/members/{user_value}/lists/{slug_value}",
+        f"/list/{slug_value}",
+        f"/lists/{slug_value}",
+        f"/lists/{user_value}",
+    ]
+
+
 def _extract_log_entry_id(payload: Any) -> str | None:
     if isinstance(payload, dict):
         for key in ("id", "entryId", "diaryEntryId", "logEntryId"):
@@ -943,6 +1217,14 @@ def extract_member_name(payload: Any) -> str | None:
     return _extract_member_name(payload)
 
 
+def extract_watchlist_list_id(payload: Any) -> str | None:
+    return _extract_watchlist_list_id(payload)
+
+
+def extract_watchlist_list_id_from_lists(payload: Any) -> str | None:
+    return _extract_watchlist_list_id_from_lists(payload)
+
+
 def _extract_member_id(payload: Any) -> str | None:
     if isinstance(payload, dict):
         for key in ("id", "memberId", "member_id"):
@@ -958,6 +1240,85 @@ def _extract_member_id(payload: Any) -> str | None:
     return None
 
 
+def _extract_watchlist_list_id(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        for key in ("watchlistId", "watchlist_id"):
+            value = payload.get(key)
+            if isinstance(value, (str, int)):
+                return str(value)
+        list_payload = payload.get("list")
+        if isinstance(list_payload, dict):
+            value = list_payload.get("id")
+            if isinstance(value, (str, int)):
+                return str(value)
+        links = payload.get("links")
+        if isinstance(links, dict):
+            for key in ("list", "watchlist"):
+                link_value = links.get(key)
+                if isinstance(link_value, dict):
+                    list_id = link_value.get("id")
+                    if isinstance(list_id, (str, int)):
+                        return str(list_id)
+                    href = link_value.get("href")
+                    parsed = _extract_list_id_from_href(href)
+                    if parsed:
+                        return parsed
+                elif isinstance(link_value, str):
+                    parsed = _extract_list_id_from_href(link_value)
+                    if parsed:
+                        return parsed
+        watchlist = payload.get("watchlist")
+        if isinstance(watchlist, dict):
+            for key in ("id", "listId", "list_id"):
+                value = watchlist.get(key)
+                if isinstance(value, (str, int)):
+                    return str(value)
+        member = payload.get("member")
+        if isinstance(member, dict):
+            for key in ("watchlistId", "watchlist_id"):
+                value = member.get(key)
+                if isinstance(value, (str, int)):
+                    return str(value)
+            watchlist = member.get("watchlist")
+            if isinstance(watchlist, dict):
+                for key in ("id", "listId", "list_id"):
+                    value = watchlist.get(key)
+                    if isinstance(value, (str, int)):
+                        return str(value)
+    return None
+
+
+def _extract_watchlist_list_id_from_lists(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    items = payload.get("items")
+    if not isinstance(items, list):
+        items = payload.get("lists")
+    if not isinstance(items, list):
+        return None
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        list_payload = entry.get("list") if isinstance(entry.get("list"), dict) else entry
+        if not isinstance(list_payload, dict):
+            continue
+        name = list_payload.get("name") or list_payload.get("slug")
+        if isinstance(name, str) and name.strip().lower() == "watchlist":
+            list_id = list_payload.get("id")
+            if isinstance(list_id, (str, int)):
+                return str(list_id)
+    return None
+
+
+def _extract_list_id_from_href(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    match = re.search(r"/lists?/([A-Za-z0-9_-]+)", value)
+    if match:
+        return match.group(1)
+    return None
+
+
 def _extract_member_name(payload: Any) -> str | None:
     if isinstance(payload, dict):
         for key in ("username", "memberName", "name", "handle"):
@@ -970,4 +1331,22 @@ def _extract_member_name(payload: Any) -> str | None:
                 value = member.get(key)
                 if isinstance(value, str) and value.strip():
                     return value.strip()
+    return None
+
+
+def _extract_list_version(payload: Any) -> int | None:
+    if isinstance(payload, dict):
+        for key in ("version",):
+            value = payload.get(key)
+            if isinstance(value, (int, float)) and value >= 0:
+                return int(value)
+            if isinstance(value, str) and value.isdigit():
+                return int(value)
+        inner = payload.get("list")
+        if isinstance(inner, dict):
+            value = inner.get("version")
+            if isinstance(value, (int, float)) and value >= 0:
+                return int(value)
+            if isinstance(value, str) and value.isdigit():
+                return int(value)
     return None

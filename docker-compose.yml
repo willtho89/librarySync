@@ -85,5 +85,11 @@ services:
     environment:
       LIBRARYSYNC_WORKER_MODES: import_all
 
+  worker-watchlist:
+    <<: *worker-base
+    profiles: ["scaled-workers"]
+    environment:
+      LIBRARYSYNC_WORKER_MODES: watchlist
+
 volumes:
   pgdata:

@@ -807,6 +807,26 @@ h1,
   color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
 }
 
+.\!btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 1rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, -webkit-backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter, -webkit-backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -1595,6 +1615,29 @@ h1,
   border-color: rgb(var(--color-line) / 0.7);
   background-color: rgb(var(--color-surface) / 0.7);
   padding: 1rem;
+}
+
+.history-card.is-watched {
+  border-color: rgb(var(--color-line) / 0.5);
+  background-color: rgb(var(--color-elevated) / 0.6);
+  position: relative;
+  opacity: 0.65;
+}
+
+.history-card.is-watched .candidate-poster {
+  filter: grayscale(0.8);
+}
+
+.watchlist-pill {
+  border-radius: 999px;
+  border: 1px solid rgb(var(--color-line) / 0.7);
+  background-color: rgb(var(--color-surface) / 0.8);
+  padding: 0.15rem 0.55rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgb(var(--color-muted));
 }
 
 .history-select {

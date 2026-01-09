@@ -19,7 +19,10 @@ class MediaCandidate:
     year: int | None
     poster_url: str | None
     imdb_id: str | None
-    raw: dict
+    release_date: str | None = None
+    first_air_date: str | None = None
+    last_air_date: str | None = None
+    raw: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -141,7 +144,5 @@ class EpisodeMetadataProvider(MetadataProvider[ConfigT, SecretsT], ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def list_episodes(
-        self, provider_id: str, season_number: int
-    ) -> list[EpisodeSummary]:
+    async def list_episodes(self, provider_id: str, season_number: int) -> list[EpisodeSummary]:
         raise NotImplementedError

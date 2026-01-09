@@ -154,6 +154,12 @@ class LetterboxdOutboxHandler(OutboxHandler):
                 db, job, force_update_rating=True
             )
             return DeliveryResult(response_code, external_id, resolved_rewatch)
+        if job.job_type == "push_watchlist":
+            response_code, external_id = await _deliver_letterboxd_watchlist(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "remove_watchlist":
+            response_code, external_id = await _deliver_letterboxd_watchlist_remove(db, job)
+            return DeliveryResult(response_code, external_id)
         if job.job_type == "update_log_entry":
             response_code, external_id = await _deliver_letterboxd_log_update(db, job)
             return DeliveryResult(response_code, external_id)
@@ -173,6 +179,12 @@ class TraktOutboxHandler(OutboxHandler):
         if job.job_type == "push_rating":
             response_code, external_id = await _deliver_trakt_rating(db, job)
             return DeliveryResult(response_code, external_id)
+        if job.job_type == "push_watchlist":
+            response_code, external_id = await _deliver_trakt_watchlist(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "remove_watchlist":
+            response_code, external_id = await _deliver_trakt_watchlist_remove(db, job)
+            return DeliveryResult(response_code, external_id)
         if job.job_type == "update_history":
             response_code, external_id = await _deliver_trakt_update(db, job)
             return DeliveryResult(response_code, external_id)
@@ -191,6 +203,12 @@ class SimklOutboxHandler(OutboxHandler):
             return DeliveryResult(response_code, external_id)
         if job.job_type == "push_rating":
             response_code, external_id = await _deliver_simkl_rating(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "push_watchlist":
+            response_code, external_id = await _deliver_simkl_watchlist(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "remove_watchlist":
+            response_code, external_id = await _deliver_simkl_watchlist_remove(db, job)
             return DeliveryResult(response_code, external_id)
         if job.job_type == "update_history":
             response_code, external_id = await _deliver_simkl_update(db, job)
@@ -793,6 +811,69 @@ async def _deliver_letterboxd_watch(
     return response_code, external_id, effective_rewatch
 
 
+async def _deliver_letterboxd_watchlist(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    return await _deliver_letterboxd_watchlist_change(db, job, in_watchlist=True)
+
+
+async def _deliver_letterboxd_watchlist_remove(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    return await _deliver_letterboxd_watchlist_change(db, job, in_watchlist=False)
+
+
+async def _deliver_letterboxd_watchlist_change(
+    db: AsyncSession, job: OutboxJob, *, in_watchlist: bool
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    imdb_id = _coerce_str(payload.get("imdb_id"))
+    tmdb_id = _coerce_str(payload.get("tmdb_id"))
+    film_id = _coerce_str(payload.get("letterboxd_film_id"))
+    if imdb_id:
+        imdb_id = imdb_id.lower()
+    if tmdb_id == "":
+        tmdb_id = None
+    if not imdb_id and not tmdb_id and not film_id:
+        raise ValueError("Letterboxd watchlist sync requires an IMDb or TMDB ID")
+
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "letterboxd")
+    if not integration or not secret_data:
+        raise LetterboxdError("Letterboxd credentials are missing", status_code=401)
+    if not has_required_letterboxd_fields(secret_data):
+        raise LetterboxdError("Letterboxd credentials are incomplete", status_code=401)
+    api_base_url = DEFAULT_LETTERBOXD_API_BASE_URL
+    if integration.config and integration.config.get("api_base_url"):
+        api_base_url = str(integration.config["api_base_url"])
+    client = LetterboxdClient(
+        api_base_url=api_base_url,
+        client_id=str(secret_data.get("client_id")),
+        client_secret=str(secret_data.get("client_secret")),
+        refresh_token=str(secret_data.get("refresh_token")),
+        cookies=_safe_cookies(secret_data.get("cookies")),
+    )
+    access_token = await _ensure_letterboxd_access_token(
+        db, integration.id, secret_data, client
+    )
+    if not film_id:
+        film_id = await client.resolve_film_id(access_token, imdb_id, tmdb_id)
+    if in_watchlist:
+        _, response_code = await client.add_to_watchlist(
+            film_id=film_id,
+            imdb_id=imdb_id,
+            tmdb_id=tmdb_id,
+            access_token=access_token,
+        )
+    else:
+        _, response_code = await client.remove_from_watchlist(
+            film_id=film_id,
+            imdb_id=imdb_id,
+            tmdb_id=tmdb_id,
+            access_token=access_token,
+        )
+    return response_code, film_id
+
+
 async def _deliver_letterboxd_log_update(
     db: AsyncSession, job: OutboxJob
 ) -> tuple[int | None, str | None]:
@@ -1109,6 +1190,50 @@ async def _deliver_trakt_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
     return response_code, external_id
 
 
+async def _deliver_trakt_watchlist(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
+    if not integration or not secret_data:
+        raise TraktError("Trakt credentials are missing", status_code=401)
+    if not has_required_trakt_fields(secret_data):
+        raise TraktError("Trakt credentials are incomplete", status_code=401)
+    if not settings.trakt_client_id or not settings.trakt_client_secret:
+        raise ValueError("Trakt client ID/secret are not configured")
+
+    client = TraktClient(
+        client_id=settings.trakt_client_id,
+        client_secret=settings.trakt_client_secret,
+    )
+    access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
+    watchlist_payload = _build_trakt_watchlist_payload(payload)
+    _, response_code = await client.add_to_watchlist(watchlist_payload, access_token)
+    return response_code, None
+
+
+async def _deliver_trakt_watchlist_remove(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
+    if not integration or not secret_data:
+        raise TraktError("Trakt credentials are missing", status_code=401)
+    if not has_required_trakt_fields(secret_data):
+        raise TraktError("Trakt credentials are incomplete", status_code=401)
+    if not settings.trakt_client_id or not settings.trakt_client_secret:
+        raise ValueError("Trakt client ID/secret are not configured")
+
+    client = TraktClient(
+        client_id=settings.trakt_client_id,
+        client_secret=settings.trakt_client_secret,
+    )
+    access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
+    watchlist_payload = _build_trakt_watchlist_payload(payload)
+    _, response_code = await client.remove_from_watchlist(watchlist_payload, access_token)
+    return response_code, None
+
+
 async def _deliver_trakt_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     watched_at = _parse_datetime(payload.get("watched_at"))
@@ -1274,6 +1399,50 @@ async def _deliver_simkl_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
     response, response_code = await client.add_ratings(ratings_payload, access_token)
     external_id = _extract_simkl_history_id(response)
     return response_code, external_id
+
+
+async def _deliver_simkl_watchlist(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
+    if not integration or not secret_data:
+        raise SimklError("SIMKL credentials are missing", status_code=401)
+    if not has_required_simkl_fields(secret_data):
+        raise SimklError("SIMKL credentials are incomplete", status_code=401)
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise ValueError("SIMKL client ID/secret are not configured")
+
+    client = SimklClient(
+        client_id=settings.simkl_client_id,
+        client_secret=settings.simkl_client_secret,
+    )
+    access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
+    watchlist_payload = _build_simkl_watchlist_payload(payload)
+    _, response_code = await client.add_to_watchlist(watchlist_payload, access_token)
+    return response_code, None
+
+
+async def _deliver_simkl_watchlist_remove(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
+    if not integration or not secret_data:
+        raise SimklError("SIMKL credentials are missing", status_code=401)
+    if not has_required_simkl_fields(secret_data):
+        raise SimklError("SIMKL credentials are incomplete", status_code=401)
+    if not settings.simkl_client_id or not settings.simkl_client_secret:
+        raise ValueError("SIMKL client ID/secret are not configured")
+
+    client = SimklClient(
+        client_id=settings.simkl_client_id,
+        client_secret=settings.simkl_client_secret,
+    )
+    access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
+    watchlist_payload = _build_simkl_watchlist_payload(payload)
+    _, response_code = await client.remove_from_watchlist(watchlist_payload, access_token)
+    return response_code, None
 
 
 async def _deliver_simkl_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
@@ -1751,6 +1920,68 @@ def _build_trakt_history_payload(
             ]
         }
     raise ValueError("Trakt sync requires show or episode ids")
+
+
+def _build_trakt_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    if media_type in {"movie", "anime"}:
+        movie_ids = _normalize_trakt_ids(payload.get("movie_ids"))
+        if not movie_ids:
+            movie_ids = _normalize_trakt_ids(
+                {
+                    "imdb": payload.get("imdb_id"),
+                    "tmdb": payload.get("tmdb_id"),
+                    "tvdb": payload.get("tvdb_id"),
+                }
+            )
+        if not movie_ids:
+            raise ValueError("Trakt watchlist sync requires movie ids")
+        return {"movies": [{"ids": movie_ids}]}
+
+    show_ids = _normalize_trakt_ids(payload.get("show_ids"))
+    if not show_ids:
+        show_ids = _normalize_trakt_ids(
+            {
+                "imdb": payload.get("imdb_id"),
+                "tmdb": payload.get("tmdb_id"),
+                "tvdb": payload.get("tvdb_id"),
+            }
+        )
+    if not show_ids:
+        raise ValueError("Trakt watchlist sync requires show ids")
+    return {"shows": [{"ids": show_ids}]}
+
+
+def _build_simkl_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    if media_type in {"movie", "anime"}:
+        movie_ids = _normalize_simkl_ids(payload.get("movie_ids"))
+        if not movie_ids:
+            movie_ids = _normalize_simkl_ids(
+                {
+                    "imdb": payload.get("imdb_id"),
+                    "tmdb": payload.get("tmdb_id"),
+                    "tvdb": payload.get("tvdb_id"),
+                    "simkl": payload.get("simkl_id"),
+                }
+            )
+        if not movie_ids:
+            raise ValueError("SIMKL watchlist sync requires movie ids")
+        return {"movies": [{"ids": movie_ids}]}
+
+    show_ids = _normalize_simkl_ids(payload.get("show_ids"))
+    if not show_ids:
+        show_ids = _normalize_simkl_ids(
+            {
+                "imdb": payload.get("imdb_id"),
+                "tmdb": payload.get("tmdb_id"),
+                "tvdb": payload.get("tvdb_id"),
+                "simkl": payload.get("simkl_id"),
+            }
+        )
+    if not show_ids:
+        raise ValueError("SIMKL watchlist sync requires show ids")
+    return {"shows": [{"ids": show_ids}]}
 
 
 def _build_trakt_remove_payload(payload: dict[str, object]) -> dict[str, Any]:

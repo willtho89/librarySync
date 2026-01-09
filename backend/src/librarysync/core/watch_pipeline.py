@@ -17,6 +17,7 @@ from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.anime import is_anime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
+from librarysync.core.watchlist import check_and_update_watchlist
 from librarysync.db.models import (
     EpisodeItem,
     MediaItem,
@@ -57,6 +58,9 @@ def _build_outbox_dedupe_key(
     watched_item_id = payload.get("watched_item_id")
     if watched_item_id:
         return f"{user_id}:{provider}:{job_type}:{watched_item_id}"
+    watchlist_item_id = payload.get("watchlist_item_id")
+    if watchlist_item_id:
+        return f"{user_id}:{provider}:{job_type}:{watchlist_item_id}"
     return None
 
 
@@ -277,6 +281,8 @@ async def process_new_item_job(db: AsyncSession, job: OutboxJob) -> None:
     is_rewatch = bool(payload.get("is_rewatch"))
 
     await enrich_watched_metadata(db, watched.user_id, media_item, episode_item)
+    if media_item:
+        await check_and_update_watchlist(db, watched.user_id, media_item.id)
     await _sync_to_integrations(db, watched, media_item, episode_item, is_rewatch)
 
 
@@ -287,9 +293,7 @@ async def _sync_to_integrations(
     episode_item: EpisodeItem | None,
     is_rewatch: bool,
 ) -> None:
-    await SYNC_COORDINATOR.enqueue_new(
-        db, watched, media_item, episode_item, is_rewatch
-    )
+    await SYNC_COORDINATOR.enqueue_new(db, watched, media_item, episode_item, is_rewatch)
 
 
 class LetterboxdSyncStrategy(SyncStrategy):
@@ -476,9 +480,7 @@ class HistorySyncStrategy(SyncStrategy):
         return bool(client_id and client_secret)
 
     async def _has_integration(self, db: AsyncSession, user_id: str) -> bool:
-        integration, secret_data = await load_integration_with_secrets(
-            db, user_id, self.provider
-        )
+        integration, secret_data = await load_integration_with_secrets(db, user_id, self.provider)
         if not integration or not secret_data:
             return False
         return self._config.has_required_fields(secret_data)
@@ -787,9 +789,7 @@ class StremioSyncStrategy(SyncStrategy):
         )
 
 
-async def _get_watch_sync(
-    db: AsyncSession, watched_id: str, provider: str
-) -> WatchSync | None:
+async def _get_watch_sync(db: AsyncSession, watched_id: str, provider: str) -> WatchSync | None:
     result = await db.execute(
         select(WatchSync).where(
             WatchSync.watched_item_id == watched_id,
@@ -847,9 +847,7 @@ def build_history_payload(
 ) -> dict[str, object] | None:
     if episode_item:
         show_ids = id_builder(media_item.imdb_id, media_item.tmdb_id, media_item.tvdb_id)
-        episode_ids = id_builder(
-            episode_item.imdb_id, episode_item.tmdb_id, episode_item.tvdb_id
-        )
+        episode_ids = id_builder(episode_item.imdb_id, episode_item.tmdb_id, episode_item.tvdb_id)
         if not show_ids and not episode_ids:
             return None
         payload: dict[str, object] = {
@@ -927,11 +925,11 @@ class AniListSyncStrategy(SyncStrategy):
         # AniList only supports anime
         if not media_item or not is_anime(media_item):
             return
-        
+
         # AniList requires anilist_id for syncing
         if not media_item.anilist_id:
             return
-        
+
         integration, secret_data = await load_integration_with_secrets(
             db, watched.user_id, "anilist"
         )
@@ -969,10 +967,10 @@ class AniListSyncStrategy(SyncStrategy):
             "watched_at": watched.watched_at.isoformat(),
             "is_rewatch": is_rewatch,
         }
-        
+
         if watched.rating is not None:
             payload["rating"] = watched.rating
-        
+
         # For TV shows/episodes, include episode information for progress tracking
         if episode_item:
             payload["is_episode"] = True
@@ -1001,7 +999,7 @@ class AniListSyncStrategy(SyncStrategy):
             return
         if not media_item.anilist_id:
             return
-        
+
         integration, secret_data = await load_integration_with_secrets(
             db, watched.user_id, "anilist"
         )
@@ -1053,7 +1051,7 @@ class AniListSyncStrategy(SyncStrategy):
     ) -> None:
         if not media_item or not is_anime(media_item):
             return
-        
+
         integration, secret_data = await load_integration_with_secrets(
             db, watched.user_id, "anilist"
         )
@@ -1164,9 +1162,7 @@ def _extract_stremio_item_id(media_item: MediaItem) -> str | None:
     return None
 
 
-def _extract_stremio_video_id(
-    media_item: MediaItem, episode_item: EpisodeItem
-) -> str | None:
+def _extract_stremio_video_id(media_item: MediaItem, episode_item: EpisodeItem) -> str | None:
     raw = episode_item.raw if isinstance(episode_item.raw, dict) else {}
     stremio_video_id = _coerce_str(raw.get("stremio_video_id"))
     if not stremio_video_id:
@@ -1178,9 +1174,7 @@ def _extract_stremio_video_id(
             if not stremio_video_id:
                 state = stremio_payload.get("state")
                 if isinstance(state, dict):
-                    stremio_video_id = _coerce_str(
-                        state.get("video_id") or state.get("videoId")
-                    )
+                    stremio_video_id = _coerce_str(state.get("video_id") or state.get("videoId"))
     if stremio_video_id:
         return stremio_video_id
     if episode_item.imdb_id:
