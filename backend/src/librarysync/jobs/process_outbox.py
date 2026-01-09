@@ -91,11 +91,19 @@ RETRYABLE_STATUSES = ("pending", "failed_retryable")
 BATCHABLE_PROVIDERS = {"trakt", "simkl"}
 BATCHABLE_JOB_TYPES = {"push_watched", "push_rating"}
 MIXED_PROVIDER_ORDER = ("trakt", "simkl", "letterboxd", "stremio")
-PROVIDER_MAX_BATCH_SIZES = {
-    "trakt": lambda: settings.trakt_max_batch_size,
-    "simkl": lambda: settings.simkl_max_batch_size,
-}
 logger = logging.getLogger(__name__)
+
+
+def _get_provider_batch_sizes() -> dict[str, int]:
+    """Get provider batch sizes from settings.
+    
+    This function is called once per batch grouping operation to retrieve
+    the current settings values.
+    """
+    return {
+        "trakt": settings.trakt_max_batch_size,
+        "simkl": settings.simkl_max_batch_size,
+    }
 
 
 @dataclass(frozen=True)
@@ -434,11 +442,8 @@ def _group_batchable_jobs(jobs: list[OutboxJob]) -> tuple[list[list[OutboxJob]],
 
 def _get_provider_max_batch_size(provider: str) -> int:
     """Get the maximum batch size for a provider."""
-    batch_size_fn = PROVIDER_MAX_BATCH_SIZES.get(provider)
-    if batch_size_fn:
-        return batch_size_fn()
-    # Default fallback if provider not configured
-    return 1000
+    batch_sizes = _get_provider_batch_sizes()
+    return batch_sizes.get(provider, 1000)  # Default fallback
 
 
 def _chunk_jobs(jobs: list[OutboxJob], chunk_size: int) -> list[list[OutboxJob]]:

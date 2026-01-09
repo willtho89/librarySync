@@ -216,4 +216,3 @@ def _create_mock_job(idx: int):
 
 if __name__ == "__main__":
     unittest.main()
-
