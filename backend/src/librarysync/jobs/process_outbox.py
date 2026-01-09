@@ -94,6 +94,18 @@ MIXED_PROVIDER_ORDER = ("trakt", "simkl", "letterboxd", "stremio")
 logger = logging.getLogger(__name__)
 
 
+def _get_provider_batch_sizes() -> dict[str, int]:
+    """Get provider batch sizes from settings.
+    
+    Returns a dictionary mapping provider names to their configured maximum
+    batch sizes. Called during batch processing to retrieve current settings.
+    """
+    return {
+        "trakt": settings.trakt_max_batch_size,
+        "simkl": settings.simkl_max_batch_size,
+    }
+
+
 @dataclass(frozen=True)
 class DeliveryResult:
     response_code: int | None
@@ -411,15 +423,37 @@ def _group_batchable_jobs(jobs: list[OutboxJob]) -> tuple[list[list[OutboxJob]],
         else:
             remaining.append(job)
     batch_groups: list[list[OutboxJob]] = []
-    for group in grouped.values():
+    for (user_id, provider, job_type), group in grouped.items():
         if len(group) < 2:
             remaining.extend(group)
             continue
         group.sort(key=lambda entry: entry.created_at)
-        batch_groups.append(group)
+        # Split large batches based on provider-specific limits
+        max_batch_size = _get_provider_max_batch_size(provider)
+        for batch in _chunk_jobs(group, max_batch_size):
+            if len(batch) >= 2:
+                batch_groups.append(batch)
+            else:
+                remaining.extend(batch)
     batch_groups.sort(key=lambda group: group[0].created_at)
     remaining.sort(key=lambda entry: entry.created_at)
     return batch_groups, remaining
+
+
+def _get_provider_max_batch_size(provider: str) -> int:
+    """Get the maximum batch size for a provider."""
+    batch_sizes = _get_provider_batch_sizes()
+    return batch_sizes.get(provider, 1000)  # Default fallback
+
+
+def _chunk_jobs(jobs: list[OutboxJob], chunk_size: int) -> list[list[OutboxJob]]:
+    """Split a list of jobs into chunks of a maximum size."""
+    if chunk_size <= 0:
+        chunk_size = 1000
+    chunks: list[list[OutboxJob]] = []
+    for i in range(0, len(jobs), chunk_size):
+        chunks.append(jobs[i : i + chunk_size])
+    return chunks
 
 
 def _mixed_provider_limits(limit: int, providers: tuple[str, ...]) -> dict[str, int]:

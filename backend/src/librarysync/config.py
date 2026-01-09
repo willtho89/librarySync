@@ -32,6 +32,8 @@ class Settings:
     stremio_rate_limit_per_minute: int
     anilist_rate_limit_per_minute: int
     enable_dashboard_stats: bool
+    trakt_max_batch_size: int
+    simkl_max_batch_size: int
 
 
 def load_settings() -> Settings:
@@ -76,6 +78,12 @@ def load_settings() -> Settings:
         ),
         enable_dashboard_stats=(
             (_get_env("LIBRARYSYNC_ENABLE_DASHBOARD_STATS", "true") or "true").lower() == "true"
+        ),
+        trakt_max_batch_size=int(
+            _get_env("LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE", "750") or "750"
+        ),
+        simkl_max_batch_size=int(
+            _get_env("LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE", "750") or "750"
         ),
     )
 
