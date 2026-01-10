@@ -31,6 +31,8 @@ class Settings:
     letterboxd_rate_limit_per_minute: int
     stremio_rate_limit_per_minute: int
     anilist_rate_limit_per_minute: int
+    tmdb_rate_limit_per_minute: int
+    tvdb_rate_limit_per_minute: int
     enable_dashboard_stats: bool
     trakt_max_batch_size: int
     simkl_max_batch_size: int
@@ -75,6 +77,12 @@ def load_settings() -> Settings:
         ),
         anilist_rate_limit_per_minute=int(
             _get_env("LIBRARYSYNC_ANILIST_RATE_LIMIT_PER_MINUTE", "90") or "90"
+        ),
+        tmdb_rate_limit_per_minute=int(
+            _get_env("LIBRARYSYNC_TMDB_RATE_LIMIT_PER_MINUTE", "150") or "150"
+        ),
+        tvdb_rate_limit_per_minute=int(
+            _get_env("LIBRARYSYNC_TVDB_RATE_LIMIT_PER_MINUTE", "150") or "150"
         ),
         enable_dashboard_stats=(
             (_get_env("LIBRARYSYNC_ENABLE_DASHBOARD_STATS", "true") or "true").lower() == "true"

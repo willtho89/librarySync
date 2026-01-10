@@ -30,6 +30,8 @@ class RateLimiter:
     def from_settings(cls) -> "RateLimiter":
         configs: dict[str, RateLimitConfig] = {}
         for provider, limit in {
+            "tmdb": settings.tmdb_rate_limit_per_minute,
+            "tvdb": settings.tvdb_rate_limit_per_minute,
             "trakt": settings.trakt_rate_limit_per_minute,
             "simkl": settings.simkl_rate_limit_per_minute,
             "letterboxd": settings.letterboxd_rate_limit_per_minute,

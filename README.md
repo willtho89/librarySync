@@ -72,6 +72,8 @@ All defaults below are from `.env.example`.
 - `LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE` (default `60`).
 - `LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE` (default `30`).
 - `LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE` (default `120`).
+- `LIBRARYSYNC_TMDB_RATE_LIMIT_PER_MINUTE` (default `150`).
+- `LIBRARYSYNC_TVDB_RATE_LIMIT_PER_MINUTE` (default `150`).
 
 ### Batch Sizes (for batch-capable providers)
 - `LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE` (default `750`): Maximum number of items per Trakt batch request.

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import EpisodeMetadataProvider
 from librarysync.core.metadata_providers import MetadataProviderService
+from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.db.models import (
     EpisodeItem,
     MediaItem,
@@ -189,10 +190,13 @@ async def backfill_show_episodes(
         provider = await service.load_provider("tmdb")
         if not provider or not isinstance(provider, EpisodeMetadataProvider):
             return False
+    provider_name = provider.provider
 
     media_dirty = False
     if not media_item.tmdb_id:
         if media_item.imdb_id and provider.capabilities.supports_external_id:
+            if not await _acquire_rate_limit(db, user_id, provider_name):
+                return False
             try:
                 candidates = await provider.find_by_external_id(media_item.imdb_id.lower(), "tv")
             except Exception as exc:
@@ -214,15 +218,21 @@ async def backfill_show_episodes(
         if not media_item.tmdb_id:
             return False
 
+    if not await _acquire_rate_limit(db, user_id, provider_name):
+        return False
     try:
         seasons = await provider.list_seasons(media_item.tmdb_id)
     except Exception as exc:
         logger.warning("TMDB season lookup failed for %s: %s", media_item.id, exc)
         return False
     refreshed = True
+    rate_limited = False
 
     episodes_dirty = False
     for season in seasons:
+        if not await _acquire_rate_limit(db, user_id, provider_name):
+            rate_limited = True
+            break
         try:
             episodes = await provider.list_episodes(media_item.tmdb_id, season.season_number)
         except Exception as exc:
@@ -243,10 +253,32 @@ async def backfill_show_episodes(
         ):
             episodes_dirty = True
 
-    if refreshed:
+    if refreshed and not rate_limited:
         media_item.updated_at = datetime.now(timezone.utc)
         await db.flush()
-    return refreshed or media_dirty or episodes_dirty
+    return (refreshed and not rate_limited) or media_dirty or episodes_dirty
+
+
+async def _acquire_rate_limit(
+    db: AsyncSession,
+    user_id: str | None,
+    provider: str,
+) -> bool:
+    if not user_id:
+        return True
+    now = datetime.now(timezone.utc)
+    rate_decision = await RATE_LIMITER.try_acquire(db, user_id, provider, now=now)
+    if rate_decision and not rate_decision.allowed:
+        retry_at = rate_decision.retry_at.isoformat() if rate_decision.retry_at else "unknown"
+        logger.info(
+            "%s metadata backfill rate-limited for user %s until %s",
+            provider,
+            user_id,
+            retry_at,
+        )
+        return False
+    return True
+
 
 async def check_and_update_watchlist(
     db: AsyncSession,

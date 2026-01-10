@@ -17,7 +17,7 @@ from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.anime import is_anime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
-from librarysync.core.watchlist import check_and_update_watchlist
+from librarysync.core.watchlist import backfill_show_episodes, check_and_update_watchlist
 from librarysync.db.models import (
     EpisodeItem,
     MediaItem,
@@ -281,6 +281,8 @@ async def process_new_item_job(db: AsyncSession, job: OutboxJob) -> None:
     is_rewatch = bool(payload.get("is_rewatch"))
 
     await enrich_watched_metadata(db, watched.user_id, media_item, episode_item)
+    if media_item and media_item.media_type in {"tv", "anime"}:
+        await backfill_show_episodes(db, watched.user_id, media_item)
     if media_item:
         await check_and_update_watchlist(db, watched.user_id, media_item.id)
     await _sync_to_integrations(db, watched, media_item, episode_item, is_rewatch)
