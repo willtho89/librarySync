@@ -485,6 +485,10 @@
     @apply w-full rounded-lg px-3 py-1.5 text-left text-sm hover:bg-elevated;
   }
 
+  .menu-panel a {
+    @apply w-full rounded-lg px-3 py-1.5 text-left text-sm hover:bg-elevated;
+  }
+
   .history-edit {
     @apply hidden flex-wrap gap-2;
   }

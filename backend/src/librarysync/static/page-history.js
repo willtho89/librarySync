@@ -623,6 +623,8 @@ async function loadHistory() {
     metadataButton.textContent = "View metadata";
     metadataButton.setAttribute("role", "menuitem");
 
+    const externalLinks = buildExternalMenuLinks(item);
+
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "danger-button";
@@ -634,6 +636,7 @@ async function loadHistory() {
       menuPanel.appendChild(addToWatchlistButton);
     }
     menuPanel.appendChild(metadataButton);
+    externalLinks.forEach((link) => menuPanel.appendChild(link));
     menuPanel.appendChild(deleteButton);
 
     actions.appendChild(menuButton);

@@ -412,6 +412,8 @@ async function loadWatchlist() {
         openMetadataModal(modalItem);
     });
 
+    const externalLinks = buildExternalMenuLinks(item);
+
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "danger-button";
@@ -429,6 +431,7 @@ async function loadWatchlist() {
     });
 
     menuPanel.appendChild(metadataButton);
+    externalLinks.forEach((link) => menuPanel.appendChild(link));
     menuPanel.appendChild(deleteButton);
     
     if (card.classList.contains("is-watched")) {

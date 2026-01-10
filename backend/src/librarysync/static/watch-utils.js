@@ -124,6 +124,113 @@ function formatMetadataDate(value) {
   return date.toLocaleString();
 }
 
+function normalizeExternalIds(item) {
+  const metadataIds = item && item.metadata && item.metadata.ids ? item.metadata.ids : {};
+  return {
+    imdb_id: metadataIds.imdb_id || item.imdb_id,
+    tmdb_id: metadataIds.tmdb_id || item.tmdb_id,
+    tvdb_id: metadataIds.tvdb_id || item.tvdb_id,
+    tvmaze_id: metadataIds.tvmaze_id || item.tvmaze_id,
+    kitsu_id: metadataIds.kitsu_id || item.kitsu_id,
+    myanimelist_id: metadataIds.myanimelist_id || item.myanimelist_id,
+    anilist_id: metadataIds.anilist_id || item.anilist_id,
+  };
+}
+
+function buildTraktUrl(item, ids) {
+  if (ids.imdb_id) {
+    return `https://trakt.tv/search/imdb?query=${encodeURIComponent(ids.imdb_id)}`;
+  }
+  if (ids.tmdb_id) {
+    return `https://trakt.tv/search/tmdb?query=${encodeURIComponent(ids.tmdb_id)}`;
+  }
+  if (ids.tvdb_id) {
+    return `https://trakt.tv/search/tvdb?query=${encodeURIComponent(ids.tvdb_id)}`;
+  }
+  if (item && item.title) {
+    return `https://trakt.tv/search?query=${encodeURIComponent(item.title)}`;
+  }
+  return "";
+}
+
+function buildLetterboxdUrl(item, ids) {
+  if (!item || item.media_type !== "movie") {
+    return "";
+  }
+  if (ids.tmdb_id) {
+    return `https://letterboxd.com/tmdb/${encodeURIComponent(ids.tmdb_id)}/`;
+  }
+  if (item.title) {
+    return `https://letterboxd.com/search/films/${encodeURIComponent(item.title)}/`;
+  }
+  return "";
+}
+
+function buildExternalLinks(item) {
+  if (!item) {
+    return [];
+  }
+  const ids = normalizeExternalIds(item);
+  const links = [];
+  const seen = new Set();
+  const addLink = (label, url) => {
+    if (!url || seen.has(url)) {
+      return;
+    }
+    seen.add(url);
+    links.push({ label, url });
+  };
+  const mediaType = item.media_type || "movie";
+
+  addLink("Letterboxd", buildLetterboxdUrl(item, ids));
+  addLink("Trakt", buildTraktUrl(item, ids));
+  if (ids.imdb_id) {
+    addLink("IMDb", `https://www.imdb.com/title/${encodeURIComponent(ids.imdb_id)}/`);
+  }
+  if (ids.tmdb_id) {
+    const section = mediaType === "movie" ? "movie" : "tv";
+    addLink(
+      "TMDB",
+      `https://www.themoviedb.org/${section}/${encodeURIComponent(ids.tmdb_id)}`
+    );
+  }
+  if (ids.tvdb_id) {
+    const section = mediaType === "movie" ? "movies" : "series";
+    addLink(
+      "TVDB",
+      `https://thetvdb.com/${section}/${encodeURIComponent(ids.tvdb_id)}`
+    );
+  }
+  if (ids.tvmaze_id) {
+    addLink("TVMaze", `https://www.tvmaze.com/shows/${encodeURIComponent(ids.tvmaze_id)}`);
+  }
+  if (ids.kitsu_id && mediaType === "anime") {
+    addLink("Kitsu", `https://kitsu.io/anime/${encodeURIComponent(ids.kitsu_id)}`);
+  }
+  if (ids.myanimelist_id && mediaType === "anime") {
+    addLink(
+      "MyAnimeList",
+      `https://myanimelist.net/anime/${encodeURIComponent(ids.myanimelist_id)}`
+    );
+  }
+  if (ids.anilist_id && mediaType === "anime") {
+    addLink("AniList", `https://anilist.co/anime/${encodeURIComponent(ids.anilist_id)}`);
+  }
+  return links;
+}
+
+function buildExternalMenuLinks(item) {
+  return buildExternalLinks(item).map((link) => {
+    const anchor = document.createElement("a");
+    anchor.href = link.url;
+    anchor.target = "_blank";
+    anchor.rel = "noreferrer noopener";
+    anchor.textContent = `View in ${link.label}`;
+    anchor.setAttribute("role", "menuitem");
+    return anchor;
+  });
+}
+
 function renderMetadataSection(title, rows) {
   const section = document.createElement("section");
   section.className = "metadata-section";
