@@ -12,6 +12,7 @@ from librarysync.core.watchlist_sources import (
     upsert_watchlist_source_item,
 )
 from librarysync.db.models import WatchEvent, WatchlistSource
+from librarysync.jobs.import_utils import load_existing_entry_keys
 
 MediaType = Literal["movie", "tv"]
 
@@ -45,11 +46,22 @@ async def process_watchlist_candidates(
         return 0
     if now is None:
         now = datetime.now(timezone.utc)
+    candidate_entries: list[tuple[WatchlistCandidate, str]] = []
+    entry_keys: list[str] = []
+    for candidate in candidate_list:
+        entry_key = candidate.entry_key or _build_fallback_key(candidate)
+        candidate_entries.append((candidate, entry_key))
+        entry_keys.append(entry_key)
+    existing_entry_keys = await load_existing_entry_keys(
+        db,
+        user_id,
+        f"{provider}_watchlist_imported",
+        entry_keys,
+    )
     seen: set[str] = set()
     imported = 0
     seen_item_ids: list[str] = []
-    for candidate in candidate_list:
-        entry_key = candidate.entry_key or _build_fallback_key(candidate)
+    for candidate, entry_key in candidate_entries:
         if entry_key in seen:
             continue
         seen.add(entry_key)
@@ -75,7 +87,7 @@ async def process_watchlist_candidates(
             now=now,
         )
         seen_item_ids.append(item.id)
-        if status in {"created", "restored"}:
+        if status in {"created", "restored"} and entry_key not in existing_entry_keys:
             imported += 1
             event = WatchEvent(
                 user_id=user_id,
