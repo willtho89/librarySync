@@ -35,6 +35,8 @@ async def enrich_watched_metadata(
     user_id: str,
     media_item: MediaItem | None,
     episode_item: EpisodeItem | None,
+    provider_overrides: dict[str, MetadataProvider] | None = None,
+    use_overrides_only: bool = False,
 ) -> None:
     if not media_item:
         return
@@ -49,10 +51,19 @@ async def enrich_watched_metadata(
         if not _needs_media_enrichment(media_item, episode_item):
             return
 
-    service = MetadataProviderService(db, user_id)
-    tmdb = await service.load_provider("tmdb")
-    tvdb = await service.load_provider("tvdb")
-    imdb = await service.load_provider("imdb")
+    overrides = provider_overrides or {}
+    tmdb = overrides.get("tmdb")
+    tvdb = overrides.get("tvdb")
+    imdb = overrides.get("imdb")
+    service: MetadataProviderService | None = None
+    if not use_overrides_only:
+        service = MetadataProviderService(db, user_id)
+        if tmdb is None:
+            tmdb = await service.load_provider("tmdb")
+        if tvdb is None:
+            tvdb = await service.load_provider("tvdb")
+        if imdb is None:
+            imdb = await service.load_provider("imdb")
     if not tmdb and not tvdb and not imdb:
         return
 

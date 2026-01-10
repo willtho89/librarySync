@@ -7,7 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_admin_api_key, get_db
 from librarysync.db.models import OutboxJob, ScheduledJob, WatchEvent
-from librarysync.jobs.metadata_backfill import METADATA_BACKFILL_JOB
+from librarysync.jobs.metadata_backfill import (
+    METADATA_BACKFILL_FORCE_JOB,
+    METADATA_BACKFILL_JOB,
+)
 from librarysync.jobs.metadata_cache import METADATA_CACHE_JOB
 from librarysync.jobs.watchlist_refresh import WATCHLIST_REFRESH_JOB
 
@@ -164,16 +167,16 @@ async def purge_jobs(
     description="Schedule a metadata backfill run for the worker to execute.",
 )
 async def schedule_metadata_backfill(
+    force: bool = Query(False, description="If true, force episode refresh regardless of delta"),
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_admin_api_key),
 ) -> JSONResponse:
     now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(ScheduledJob).where(ScheduledJob.name == METADATA_BACKFILL_JOB)
-    )
+    job_name = METADATA_BACKFILL_FORCE_JOB if force else METADATA_BACKFILL_JOB
+    result = await db.execute(select(ScheduledJob).where(ScheduledJob.name == job_name))
     job = result.scalars().first()
     if not job:
-        job = ScheduledJob(name=METADATA_BACKFILL_JOB, next_run_at=now)
+        job = ScheduledJob(name=job_name, next_run_at=now)
         db.add(job)
     else:
         job.next_run_at = now
@@ -184,6 +187,7 @@ async def schedule_metadata_backfill(
     return JSONResponse(
         {
             "message": "Metadata backfill scheduled",
+            "force": force,
             "next_run_at": job.next_run_at.isoformat() if job.next_run_at else None,
         }
     )

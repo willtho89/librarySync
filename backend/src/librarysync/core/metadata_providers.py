@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass, fields
 from typing import Any, Callable, Iterable
 
@@ -394,3 +395,50 @@ class MetadataProviderService:
         include_adult = bool(result.scalar_one_or_none())
         self._context = ProviderContext(user_id=self._user_id, include_adult=include_adult)
         return self._context
+
+
+async def load_random_provider(
+    db: AsyncSession,
+    provider: str,
+    registry: MetadataProviderRegistry | None = None,
+) -> MetadataProvider | None:
+    active_registry = registry or METADATA_PROVIDER_REGISTRY
+    definition = active_registry.get(provider)
+    if not definition:
+        return None
+    result = await db.execute(
+        select(Integration, IntegrationSecret.integration_id)
+        .outerjoin(IntegrationSecret, IntegrationSecret.integration_id == Integration.id)
+        .where(Integration.provider == provider)
+    )
+    candidates: list[str] = []
+    for integration, secret_id in result.all():
+        config = integration.config if integration and integration.config else {}
+        if not config.get("enabled"):
+            continue
+        if definition.uses_secrets() and not secret_id:
+            continue
+        candidates.append(integration.user_id)
+    if not candidates:
+        return None
+    user_id = random.choice(candidates)
+    integration, secret_data = await load_integration_with_secrets(db, user_id, provider)
+    if not integration or not integration.config or not integration.config.get("enabled"):
+        return None
+    if definition.uses_secrets() and not secret_data:
+        return None
+    result = await db.execute(
+        select(User.include_adult_in_search).where(User.id == user_id)
+    )
+    include_adult = bool(result.scalar_one_or_none())
+    context = ProviderContext(user_id=user_id, include_adult=include_adult)
+    factory = MetadataProviderFactory(active_registry)
+    try:
+        return factory.build(
+            definition,
+            dict(integration.config or {}),
+            secret_data,
+            context,
+        )
+    except ValueError:
+        return None

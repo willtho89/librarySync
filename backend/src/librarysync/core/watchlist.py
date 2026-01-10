@@ -174,14 +174,14 @@ async def backfill_show_episodes(
     db: AsyncSession,
     user_id: str,
     media_item: MediaItem,
-) -> None:
-    if media_item.media_type != "tv":
-        return
+) -> bool:
+    if media_item.media_type not in {"tv", "anime"}:
+        return False
 
     service = MetadataProviderService(db, user_id)
     provider = await service.load_provider("tmdb")
     if not provider or not isinstance(provider, EpisodeMetadataProvider):
-        return
+        return False
 
     media_dirty = False
     if not media_item.tmdb_id:
@@ -205,13 +205,14 @@ async def backfill_show_episodes(
                         media_item.poster_url = candidate.poster_url
                     media_dirty = True
         if not media_item.tmdb_id:
-            return
+            return False
 
     try:
         seasons = await provider.list_seasons(media_item.tmdb_id)
     except Exception as exc:
         logger.warning("TMDB season lookup failed for %s: %s", media_item.id, exc)
-        return
+        return False
+    refreshed = True
 
     episodes_dirty = False
     for season in seasons:
@@ -235,9 +236,10 @@ async def backfill_show_episodes(
         ):
             episodes_dirty = True
 
-    if media_dirty or episodes_dirty:
+    if refreshed:
+        media_item.updated_at = datetime.now(timezone.utc)
         await db.flush()
-
+    return refreshed or media_dirty or episodes_dirty
 
 async def check_and_update_watchlist(
     db: AsyncSession,
