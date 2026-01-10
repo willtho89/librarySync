@@ -41,7 +41,13 @@ async def enrich_watched_metadata(
     if not media_item:
         return
     if is_anime(media_item):
-        await _enrich_anime_metadata(db, user_id, media_item)
+        await _enrich_anime_metadata(
+            db,
+            user_id,
+            media_item,
+            provider_overrides=provider_overrides,
+            use_overrides_only=use_overrides_only,
+        )
     if media_item.media_type not in {"movie", "tv"}:
         return
     if not _needs_media_enrichment(media_item, episode_item):
@@ -213,17 +219,33 @@ def _needs_anime_enrichment(media_item: MediaItem) -> bool:
     )
 
 
-async def _enrich_anime_metadata(db: AsyncSession, user_id: str, media_item: MediaItem) -> None:
+async def _enrich_anime_metadata(
+    db: AsyncSession,
+    user_id: str,
+    media_item: MediaItem,
+    *,
+    provider_overrides: dict[str, MetadataProvider] | None = None,
+    use_overrides_only: bool = False,
+) -> None:
     if not _needs_anime_enrichment(media_item):
         return
     if not media_item.title:
         return
-    service = MetadataProviderService(db, user_id)
+
     providers: list[MetadataProvider] = []
+    overrides = provider_overrides or {}
     for provider_name in ANIME_PROVIDERS:
-        provider = await service.load_provider(provider_name)
+        provider = overrides.get(provider_name)
         if provider:
             providers.append(provider)
+    if not use_overrides_only:
+        service = MetadataProviderService(db, user_id)
+        for provider_name in ANIME_PROVIDERS:
+            if provider_name in overrides:
+                continue
+            provider = await service.load_provider(provider_name)
+            if provider:
+                providers.append(provider)
     if not providers:
         return
     for provider in providers:
@@ -408,15 +430,27 @@ async def _fetch_provider_candidate(
         except Exception as exc:
             logger.warning("%s details failed for %s: %s", provider.provider, media_item.id, exc)
             return None
-    if media_item.imdb_id:
-        imdb_id = media_item.imdb_id.lower()
+    external_ids = _external_ids_for_provider(provider, media_item)
+    for external_id in external_ids:
         try:
-            candidates = await provider.find_by_external_id(imdb_id, scope)
+            candidates = await provider.find_by_external_id(external_id, scope)
         except Exception as exc:
             logger.warning("%s lookup failed for %s: %s", provider.provider, media_item.id, exc)
             return None
-        return _select_candidate(candidates, scope)
+        candidate = _select_candidate(candidates, scope)
+        if candidate:
+            return candidate
     return None
+
+
+def _external_ids_for_provider(
+    provider: MetadataProvider, media_item: MediaItem
+) -> list[str]:
+    if media_item.imdb_id:
+        return [media_item.imdb_id.lower()]
+    if provider.provider == "tvdb" and media_item.tmdb_id:
+        return [media_item.tmdb_id]
+    return []
 
 
 async def _apply_candidate_to_media_item(

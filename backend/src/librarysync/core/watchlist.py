@@ -172,16 +172,23 @@ async def _persist_episode_list_for_media_item(
 
 async def backfill_show_episodes(
     db: AsyncSession,
-    user_id: str,
+    user_id: str | None,
     media_item: MediaItem,
+    provider_override: EpisodeMetadataProvider | None = None,
 ) -> bool:
     if media_item.media_type not in {"tv", "anime"}:
         return False
 
-    service = MetadataProviderService(db, user_id)
-    provider = await service.load_provider("tmdb")
-    if not provider or not isinstance(provider, EpisodeMetadataProvider):
+    provider = provider_override
+    if provider is not None and not isinstance(provider, EpisodeMetadataProvider):
         return False
+    if provider is None:
+        if not user_id:
+            return False
+        service = MetadataProviderService(db, user_id)
+        provider = await service.load_provider("tmdb")
+        if not provider or not isinstance(provider, EpisodeMetadataProvider):
+            return False
 
     media_dirty = False
     if not media_item.tmdb_id:
