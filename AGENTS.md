@@ -102,16 +102,30 @@ librarySync/
         letterboxd_import.py
         stremio_import.py
         merge_history.py
-      static/
-        index.html
-        login.html
-        integrations.html
-        settings.html
-        activity.html
-        history.html
-        add-watched.html
-        app.js
-        styles.css
+       static/
+         app.js
+         styles.css
+       templates/
+         index.html
+         login.html
+         integrations.html
+         settings.html
+         activity.html
+         history.html
+         add-watched.html
+         settings/
+           providers.html
+           metadata.html
+           watchlists.html
+           blacklist.html
+           activity.html
+           history.html
+           imports.html
+           preferences.html
+           modals.html
+         base.html
+         watchlist.html
+         offline.html
 
   worker/
     Dockerfile

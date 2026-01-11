@@ -226,7 +226,7 @@
   }
 
   .tab-button {
-    @apply w-full min-w-[170px] rounded-2xl border border-line/60 bg-surface/75 px-4 py-3 text-left text-sm text-muted transition;
+    @apply flex-none min-w-[170px] rounded-2xl border border-line/60 bg-surface/75 px-4 py-3 text-left text-sm text-muted transition;
   }
 
   .tab-button:hover {

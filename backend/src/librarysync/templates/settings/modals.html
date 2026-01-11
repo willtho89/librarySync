@@ -1,0 +1,44 @@
+<div id="history-clear-modal" class="modal" hidden>
+  <div class="modal-backdrop" data-modal-close></div>
+  <div
+    class="modal-panel"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="history-clear-title"
+  >
+    <header class="modal-header">
+      <h2 id="history-clear-title" class="section-title">Clear history</h2>
+      <button type="button" class="btn btn-ghost btn-sm" data-modal-close>Close</button>
+    </header>
+    <form id="history-clear-form" class="space-y-4">
+      <p class="helper-text">
+        Type <strong>delete</strong> to confirm. This will remove all watched items.
+      </p>
+      <label class="field">
+        <span>Confirmation</span>
+        <input
+          id="history-clear-input"
+          class="input"
+          type="text"
+          name="confirmation"
+          autocomplete="off"
+          placeholder="delete"
+        />
+      </label>
+      <p id="history-clear-modal-message" class="form-message" role="status" hidden></p>
+      <div class="flex flex-wrap gap-2">
+        <button
+          id="history-clear-confirm"
+          type="submit"
+          class="btn btn-danger"
+          disabled
+        >
+          Delete history
+        </button>
+        <button type="button" class="btn btn-secondary" data-modal-close>
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+</div>

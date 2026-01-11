@@ -1,0 +1,65 @@
+<div
+  id="panel-blacklist"
+  class="tab-panel"
+  role="tabpanel"
+  aria-labelledby="tab-blacklist"
+  data-tab-panel
+  data-tab="blacklist"
+  hidden
+>
+  <div class="card card-muted space-y-2">
+    <p class="eyebrow">Blacklist</p>
+    <h2 class="section-title">Blacklist TV shows</h2>
+    <p class="section-subtitle">
+      Imported episodes from these shows are ignored. Manual entries are still saved.
+    </p>
+  </div>
+
+  <div class="space-y-6">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h2 class="section-title">Add a show</h2>
+          <p class="section-subtitle">Search by title or ID (IMDb, TMDB, TVDB).</p>
+        </div>
+      </div>
+      <form id="blacklist-lookup-form" class="grid gap-4 md:grid-cols-3">
+        <label class="field md:col-span-2">
+          <span>Show title or ID</span>
+          <input
+            class="input"
+            type="text"
+            name="query"
+            placeholder="Friends or 1668"
+            required
+          />
+        </label>
+        <div class="md:col-span-3 flex flex-wrap items-center gap-3">
+          <button class="btn btn-primary" type="submit">Search TV</button>
+          <p id="blacklist-lookup-message" class="form-message" role="status" hidden></p>
+        </div>
+      </form>
+    </div>
+
+    <div class="card" id="blacklist-results" hidden>
+      <div class="card-header">
+        <div>
+          <h2 class="section-title">Search results</h2>
+          <p class="section-subtitle">Add a show to ignore during imports.</p>
+        </div>
+      </div>
+      <div id="blacklist-candidates" class="candidate-list"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h2 class="section-title">Your blacklist</h2>
+          <p class="section-subtitle">Only imports are filtered. Manual adds always stay.</p>
+        </div>
+      </div>
+      <p id="blacklist-message" class="form-message" role="status" hidden></p>
+      <div id="blacklist-entries" class="space-y-4">Loading...</div>
+    </div>
+  </div>
+</div>

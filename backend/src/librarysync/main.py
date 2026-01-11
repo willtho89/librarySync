@@ -269,20 +269,6 @@ def create_app() -> FastAPI:
             current_user=current_user,
         )
 
-    @app.get("/activity", include_in_schema=False)
-    async def activity(
-        request: Request,
-        current_user: User | None = Depends(get_optional_user),
-    ):
-        return _render_page(
-            request,
-            "activity.html",
-            page_title="Activity",
-            active_page="activity",
-            requires_auth=True,
-            current_user=current_user,
-        )
-
     @app.get("/settings", include_in_schema=False)
     async def settings_page(
         request: Request,
@@ -293,20 +279,6 @@ def create_app() -> FastAPI:
             "settings.html",
             page_title="Settings",
             active_page="settings",
-            requires_auth=True,
-            current_user=current_user,
-        )
-
-    @app.get("/blacklist", include_in_schema=False)
-    async def blacklist_page(
-        request: Request,
-        current_user: User | None = Depends(get_optional_user),
-    ):
-        return _render_page(
-            request,
-            "blacklist.html",
-            page_title="Blacklist",
-            active_page="blacklist",
             requires_auth=True,
             current_user=current_user,
         )

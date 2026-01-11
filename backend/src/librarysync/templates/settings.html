@@ -8,850 +8,134 @@
       <h1 class="text-2xl font-display text-ink md:text-3xl">
         Precision control for your sync hub.
       </h1>
-      <p class="section-subtitle max-w-2xl">
-        Shape how librarySync searches, connects, and imports. Changes save immediately while
-        keeping every provider aligned.
-      </p>
+
     </div>
   </header>
 
-  <div class="tab-shell lg:grid-cols-[240px,1fr]" data-tabset>
-    <div
-      class="tab-list lg:sticky lg:top-24 lg:flex-col lg:overflow-visible"
-      role="tablist"
-      aria-label="Settings sections"
-    >
-      <button
-        class="tab-button"
-        type="button"
-        role="tab"
-        aria-selected="true"
-        aria-controls="panel-preferences"
-        id="tab-preferences"
-        data-tab-button
-        data-tab="preferences"
-        tabindex="0"
-      >
-        <span class="tab-title">Preferences</span>
-        <span class="tab-meta">Search + appearance</span>
-      </button>
-      <button
-        class="tab-button"
-        type="button"
-        role="tab"
-        aria-selected="false"
-        aria-controls="panel-providers"
-        id="tab-providers"
-        data-tab-button
-        data-tab="providers"
-        tabindex="-1"
-      >
-        <span class="tab-title">Sync providers</span>
-        <span class="tab-meta">Trakt, SIMKL, Letterboxd</span>
-      </button>
-      <button
-        class="tab-button"
-        type="button"
-        role="tab"
-        aria-selected="false"
-        aria-controls="panel-imports"
-        id="tab-imports"
-        data-tab-button
-        data-tab="imports"
-        tabindex="-1"
-      >
-        <span class="tab-title">History imports</span>
-        <span class="tab-meta">Quick and full pulls</span>
-      </button>
-      <button
-        class="tab-button"
-        type="button"
-        role="tab"
-        aria-selected="false"
-        aria-controls="panel-watchlists"
-        id="tab-watchlists"
-        data-tab-button
-        data-tab="watchlists"
-        tabindex="-1"
-      >
-        <span class="tab-title">Watchlists</span>
-        <span class="tab-meta">External list sync</span>
-      </button>
-      <button
-        class="tab-button"
-        type="button"
-        role="tab"
-        aria-selected="false"
-        aria-controls="panel-metadata"
-        id="tab-metadata"
-        data-tab-button
-        data-tab="metadata"
-        tabindex="-1"
-      >
-        <span class="tab-title">Metadata</span>
-        <span class="tab-meta">TMDB, TVDB, anime</span>
-      </button>
-      <button
-        class="tab-button"
-        type="button"
-        role="tab"
-        aria-selected="false"
-        aria-controls="panel-history"
-        id="tab-history"
-        data-tab-button
-        data-tab="history"
-        tabindex="-1"
-      >
-        <span class="tab-title">History tools</span>
-        <span class="tab-meta">Clear watched items</span>
-      </button>
-    </div>
+  <div class="tab-shell" data-tabset>
+     <div
+       class="tab-list lg:mb-8"
+       role="tablist"
+       aria-label="Settings sections"
+     >
+         <button
+           class="tab-button"
+           type="button"
+           role="tab"
+           aria-selected="true"
+           aria-controls="panel-metadata"
+           id="tab-metadata"
+           data-tab-button
+           data-tab="metadata"
+           tabindex="0"
+         >
+           <span class="tab-title">Metadata</span>
+           <span class="tab-meta">TMDB, TVDB, anime</span>
+         </button>
+       <button
+         class="tab-button"
+         type="button"
+         role="tab"
+         aria-selected="false"
+         aria-controls="panel-providers"
+         id="tab-providers"
+         data-tab-button
+         data-tab="providers"
+         tabindex="-1"
+       >
+         <span class="tab-title">Sync providers</span>
+         <span class="tab-meta">Trakt, SIMKL, Letterboxd</span>
+       </button>
+       <button
+         class="tab-button"
+         type="button"
+         role="tab"
+         aria-selected="false"
+         aria-controls="panel-watchlists"
+         id="tab-watchlists"
+         data-tab-button
+         data-tab="watchlists"
+         tabindex="-1"
+       >
+         <span class="tab-title">Watchlists</span>
+         <span class="tab-meta">External list sync</span>
+       </button>
+         <button
+           class="tab-button"
+           type="button"
+           role="tab"
+           aria-selected="false"
+           aria-controls="panel-blacklist"
+           id="tab-blacklist"
+           data-tab-button
+           data-tab="blacklist"
+           tabindex="-1"
+         >
+           <span class="tab-title">Blacklist</span>
+           <span class="tab-meta">Ignored shows</span>
+         </button>
+         <button
+           class="tab-button"
+           type="button"
+           role="tab"
+           aria-selected="false"
+           aria-controls="panel-activity"
+           id="tab-activity"
+           data-tab-button
+           data-tab="activity"
+           tabindex="-1"
+         >
+           <span class="tab-title">Activity</span>
+           <span class="tab-meta">Jobs, events, schedules</span>
+         </button>
+       <button
+         class="tab-button"
+         type="button"
+         role="tab"
+         aria-selected="false"
+         aria-controls="panel-preferences"
+         id="tab-preferences"
+         data-tab-button
+         data-tab="preferences"
+         tabindex="-1"
+       >
+         <span class="tab-title">Preferences</span>
+         <span class="tab-meta">Search + appearance</span>
+       </button>
+         <button
+           class="tab-button"
+           type="button"
+           role="tab"
+           aria-selected="false"
+           aria-controls="panel-history"
+           id="tab-history"
+           data-tab-button
+           data-tab="history"
+           tabindex="-1"
+         >
+           <span class="tab-title">History tools</span>
+           <span class="tab-meta">Clear watched items</span>
+         </button>
+       </div>
 
-    <div class="tab-panels">
-      <div
-        id="panel-preferences"
-        class="tab-panel"
-        role="tabpanel"
-        aria-labelledby="tab-preferences"
-        data-tab-panel
-        data-tab="preferences"
-      >
-        <div class="card card-muted space-y-2">
-          <p class="eyebrow">Personal preferences</p>
-          <h2 class="section-title">Tune search and theme defaults.</h2>
-          <p class="section-subtitle">Choose how results appear and how the interface renders.</p>
-        </div>
-        <div class="grid gap-4 lg:grid-cols-2">
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h2 class="section-title">Search</h2>
-                <p class="section-subtitle">Control how lookups behave.</p>
-              </div>
-            </div>
-            <form id="settings-form" class="space-y-4">
-              <label class="inline-control">
-                <input type="checkbox" name="include_adult_in_search" />
-                <span>Include adult titles in search results</span>
-              </label>
-              <button class="btn btn-primary" type="submit">Save</button>
-              <p id="settings-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h2 class="section-title">Appearance</h2>
-                <p class="section-subtitle">Choose how the interface is rendered.</p>
-              </div>
-            </div>
-            <div class="space-y-3">
-              <label class="inline-control">
-                <input type="radio" name="theme_mode" value="system" data-theme-option />
-                <span>System</span>
-              </label>
-              <label class="inline-control">
-                <input type="radio" name="theme_mode" value="light" data-theme-option />
-                <span>Light</span>
-              </label>
-              <label class="inline-control">
-                <input type="radio" name="theme_mode" value="dark" data-theme-option />
-                <span>Dark</span>
-              </label>
-              <p class="helper-text">Defaults to system when unset.</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div
-        id="panel-providers"
-        class="tab-panel"
-        role="tabpanel"
-        aria-labelledby="tab-providers"
-        data-tab-panel
-        data-tab="providers"
-        hidden
-      >
-        <div class="card card-muted space-y-2">
-          <p class="eyebrow">Sync providers</p>
-          <h2 class="section-title">Connect services for history and ratings sync.</h2>
-          <p class="section-subtitle">
-            OAuth where available. Manual tokens stay encrypted and never logged.
-          </p>
-        </div>
-        <div class="grid gap-4 lg:grid-cols-2">
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Letterboxd</h3>
-                <p class="section-subtitle">Paste your OAuth refresh command.</p>
-              </div>
-              <span id="letterboxd-status" class="status-pill">Not connected</span>
-            </div>
-            <form id="letterboxd-form" class="space-y-4">
-              <label class="field">
-                <span>Paste curl/httpie command</span>
-                <textarea
-                  class="textarea"
-                  name="command"
-                  id="letterboxd-command"
-                  rows="6"
-                  placeholder="curl -H 'Cookie: ...' -d 'client_id=...&client_secret=...&refresh_token=...' https://api.letterboxd.com/api/v0/oauth/token"
-                ></textarea>
-              </label>
-              <button type="button" id="letterboxd-parse" class="btn btn-ghost btn-sm">
-                Parse command
-              </button>
-              <div class="grid gap-3 md:grid-cols-2">
-                <label class="field md:col-span-2">
-                  <span>API Base URL</span>
-                  <input
-                    class="input"
-                    type="url"
-                    name="api_base_url"
-                    placeholder="https://api.letterboxd.com/api/v0"
-                  />
-                </label>
-                <label class="field">
-                  <span>Client ID</span>
-                  <input class="input" type="text" name="client_id" autocomplete="off" />
-                </label>
-                <label class="field">
-                  <span>Client Secret</span>
-                  <input class="input" type="password" name="client_secret" autocomplete="off" />
-                </label>
-                <label class="field">
-                  <span>Refresh Token</span>
-                  <input class="input" type="password" name="refresh_token" autocomplete="off" />
-                </label>
-              </div>
-              <label class="field">
-                <span>Cookies (JSON)</span>
-                <textarea
-                  class="textarea"
-                  name="cookies"
-                  rows="5"
-                  placeholder='{"letterboxd.signed.in.as":"..."}'
-                ></textarea>
-              </label>
-              <p class="helper-text">
-                Paste a JSON object of cookie names to values from your captured session.
-              </p>
-              <div class="flex flex-wrap gap-2">
-                <button class="btn btn-primary" type="submit">Save</button>
-                <button type="button" id="letterboxd-test" class="btn btn-secondary">
-                  Test
-                </button>
-                <button
-                  type="button"
-                  id="letterboxd-disconnect"
-                  class="btn btn-ghost"
-                  hidden
-                >
-                  Disconnect
-                </button>
-              </div>
-              <p id="letterboxd-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Trakt</h3>
-                <p class="section-subtitle">OAuth connection for sync + imports.</p>
-              </div>
-              <span id="trakt-status" class="status-pill">Not connected</span>
-            </div>
-            <p id="trakt-message" class="form-message" role="status" hidden></p>
-            <div class="flex flex-wrap gap-2">
-              <button type="button" id="trakt-connect" class="btn btn-primary">
-                Connect Trakt
-              </button>
-              <button type="button" id="trakt-disconnect" class="btn btn-ghost" hidden>
-                Disconnect
-              </button>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">SIMKL</h3>
-                <p class="section-subtitle">OAuth connection for sync + imports.</p>
-              </div>
-              <span id="simkl-status" class="status-pill">Not connected</span>
-            </div>
-            <p id="simkl-message" class="form-message" role="status" hidden></p>
-            <div class="flex flex-wrap gap-2">
-              <button type="button" id="simkl-connect" class="btn btn-primary">
-                Connect SIMKL
-              </button>
-              <button type="button" id="simkl-disconnect" class="btn btn-ghost" hidden>
-                Disconnect
-              </button>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">AniList</h3>
-                <p class="section-subtitle">OAuth connection for anime sync.</p>
-              </div>
-              <span id="anilist-status" class="status-pill">Not connected</span>
-            </div>
-            <p id="anilist-message" class="form-message" role="status" hidden></p>
-            <div class="flex flex-wrap gap-2">
-              <button type="button" id="anilist-connect" class="btn btn-primary">
-                Connect AniList
-              </button>
-              <button type="button" id="anilist-disconnect" class="btn btn-ghost" hidden>
-                Disconnect
-              </button>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Stremio</h3>
-                <p class="section-subtitle">Sign in with your Stremio account.</p>
-              </div>
-              <span id="stremio-status" class="status-pill">Not connected</span>
-            </div>
-            <form id="stremio-form" class="space-y-4">
-              <label class="field">
-                <span>Email</span>
-                <input class="input" type="email" name="email" autocomplete="username" required />
-              </label>
-              <label class="field">
-                <span>Password</span>
-                <input
-                  class="input"
-                  type="password"
-                  name="password"
-                  autocomplete="current-password"
-                  required
-                />
-              </label>
-              <label class="field">
-                <span>API Base URL (optional)</span>
-                <input class="input" type="url" name="api_base_url" placeholder="https://api.strem.io" />
-              </label>
-              <div class="flex flex-wrap gap-2">
-                <button type="submit" id="stremio-connect" class="btn btn-primary">
-                  Connect Stremio
-                </button>
-                <button type="button" id="stremio-disconnect" class="btn btn-ghost" hidden>
-                  Disconnect
-                </button>
-              </div>
-              <p id="stremio-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">AIOStreams Proxy</h3>
-                <p class="section-subtitle">Import watch activity from proxy stats.</p>
-              </div>
-              <span id="aiostreams-status" class="status-pill">Not connected</span>
-            </div>
-            <form id="aiostreams-form" class="space-y-4">
-              <label class="field">
-                <span>API Base URL</span>
-                <input
-                  class="input"
-                  type="url"
-                  name="api_base_url"
-                  placeholder="https://aiostreams.example"
-                />
-              </label>
-              <label class="field">
-                <span>Auth (user:token)</span>
-                <input class="input" type="password" name="auth" autocomplete="off" />
-              </label>
-              <label class="field">
-                <span>Username (optional)</span>
-                <input class="input" type="text" name="username" autocomplete="off" />
-              </label>
-              <div class="flex flex-wrap gap-2">
-                <button class="btn btn-primary" type="submit">Save</button>
-                <button type="button" id="aiostreams-test" class="btn btn-secondary">
-                  Test
-                </button>
-                <button type="button" id="aiostreams-disconnect" class="btn btn-ghost" hidden>
-                  Disconnect
-                </button>
-              </div>
-              <p id="aiostreams-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-        </div>
-        <p class="text-xs text-muted">
-          Secrets are encrypted at rest and stored in the integration secrets table. Config fields
-          are kept in provider configs only.
-        </p>
-      </div>
-
-      <div
-        id="panel-imports"
-        class="tab-panel"
-        role="tabpanel"
-        aria-labelledby="tab-imports"
-        data-tab-panel
-        data-tab="imports"
-        hidden
-      >
-        <div class="card card-muted space-y-2">
-          <p class="eyebrow">History imports</p>
-          <h2 class="section-title">Pull recent history or run a full backfill.</h2>
-          <p class="section-subtitle">
-            Drag providers to set the import queue order for quick and full imports.
-          </p>
-        </div>
-        <div class="grid gap-4 lg:grid-cols-2">
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Quick import</h3>
-                <p class="section-subtitle">Sync the last 7 days on a schedule.</p>
-              </div>
-            </div>
-            <form id="quick-import-form" class="space-y-4">
-              <label class="field">
-                <span>Import schedule</span>
-                <select class="select" name="quick_import_interval">
-                  <option value="">Manual only</option>
-                  <option value="21600">Every 6 hours</option>
-                  <option value="43200">Every 12 hours</option>
-                  <option value="86400">Every day</option>
-                  <option value="259200">Every 3 days</option>
-                  <option value="604800">Every 7 days</option>
-                </select>
-              </label>
-              <div class="flex flex-wrap gap-2">
-                <button class="btn btn-primary" type="submit">Save schedule</button>
-                <button type="button" id="quick-import-now" class="btn btn-secondary">
-                  Import now
-                </button>
-              </div>
-              <p id="quick-import-last" class="helper-text"></p>
-              <p id="quick-import-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Import all</h3>
-                <p class="section-subtitle">Full-history import using your configured lookback.</p>
-              </div>
-            </div>
-            <div class="space-y-3">
-              <button type="button" id="import-all-button" class="btn btn-primary">
-                Import all
-              </button>
-              <p id="import-all-message" class="form-message" role="status" hidden></p>
-              <p class="helper-text">Outbox delivery resumes after the merge completes.</p>
-            </div>
-          </div>
-          <div class="card lg:col-span-2">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Import queue order</h3>
-                <p class="section-subtitle">Drag to reorder provider priority.</p>
-              </div>
-            </div>
-            <div class="space-y-3">
-              <p class="helper-text">
-                Only connected integrations appear here. New integrations are appended to the end
-                of the queue.
-              </p>
-              <p id="import-queue-empty" class="empty-state" hidden>
-                Connect an integration to create an import queue.
-              </p>
-              <ul id="import-queue-list" class="import-queue-list" role="list"></ul>
-              <div class="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  id="import-queue-restore"
-                  class="btn btn-ghost"
-                >
-                  Restore default order
-                </button>
-              </div>
-              <p id="import-queue-message" class="form-message" role="status" hidden></p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div
-        id="panel-watchlists"
-        class="tab-panel"
-        role="tabpanel"
-        aria-labelledby="tab-watchlists"
-        data-tab-panel
-        data-tab="watchlists"
-        hidden
-      >
-        <div class="card card-muted space-y-2">
-          <p class="eyebrow">Watchlist imports</p>
-          <h2 class="section-title">Pull watchlists during quick and full imports.</h2>
-          <p class="section-subtitle">
-            Adds external watchlists into librarySync only. Personal watchlists are enabled when
-            the integration is connected.
-          </p>
-          <p class="helper-text">
-            Watchlists do not sync between services (unlike history), so an item in Trakt will not
-            appear in SIMKL.
-          </p>
-        </div>
-        <div class="grid gap-4 lg:grid-cols-2">
-          <div class="card space-y-4">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Watchlist sources</h3>
-                <p class="section-subtitle">
-                  Manage which external lists sync into your watchlist.
-                </p>
-              </div>
-            </div>
-            <p class="helper-text">
-              Personal watchlists from connected integrations are enabled by default and cannot
-              be removed.
-            </p>
-            <p id="watchlist-sources-empty" class="empty-state" hidden>
-              Connect Trakt, SIMKL, or Letterboxd to start syncing watchlists.
-            </p>
-            <ul id="watchlist-sources-list" class="space-y-3" role="list"></ul>
-            <p id="watchlist-sources-message" class="form-message" role="status" hidden></p>
-          </div>
-
-          <div class="card space-y-4">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Add a watchlist</h3>
-                <p class="section-subtitle">Paste a public Trakt or Letterboxd list URL.</p>
-              </div>
-            </div>
-            <form id="watchlist-source-form" class="space-y-4">
-              <label class="field">
-                <span>Watchlist URL</span>
-                <input
-                  class="input"
-                  type="url"
-                  name="url"
-                  placeholder="https://app.trakt.tv/users/garycrawfordgc/lists/latest-releases"
-                  required
-                />
-              </label>
-              <p class="helper-text">
-                Supported formats: Trakt user lists and public lists, Letterboxd public lists.
-              </p>
-              <div class="flex flex-wrap gap-2">
-                <button class="btn btn-primary" type="submit">Add watchlist</button>
-              </div>
-              <p id="watchlist-source-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-        </div>
-      </div>
-
-      <div
-        id="panel-metadata"
-        class="tab-panel"
-        role="tabpanel"
-        aria-labelledby="tab-metadata"
-        data-tab-panel
-        data-tab="metadata"
-        hidden
-      >
-        <div class="card card-muted space-y-2">
-          <p class="eyebrow">Metadata providers</p>
-          <h2 class="section-title">Enable providers and store API keys where needed.</h2>
-          <p class="section-subtitle">
-            Mix and match sources for richer titles, posters, and cross-IDs.
-          </p>
-        </div>
-        <div class="grid gap-4 lg:grid-cols-2">
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">TMDB</h3>
-                <p class="section-subtitle">Movies + TV metadata.</p>
-              </div>
-            </div>
-            <form id="tmdb-form" class="space-y-4">
-              <label class="inline-control">
-                <input type="checkbox" name="enabled" />
-                <span>Enable TMDB</span>
-              </label>
-              <label class="field">
-                <span>TMDB API Key</span>
-                <input class="input" type="text" name="api_key" autocomplete="off" />
-              </label>
-              <div class="grid gap-3 md:grid-cols-2">
-                <label class="field">
-                  <span>Language (optional)</span>
-                  <input class="input" type="text" name="language" placeholder="en-US" />
-                </label>
-                <label class="field">
-                  <span>Region (optional)</span>
-                  <input class="input" type="text" name="region" placeholder="US" />
-                </label>
-              </div>
-              <button class="btn btn-secondary" type="submit">Save</button>
-              <p id="tmdb-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">TVDB</h3>
-                <p class="section-subtitle">Episode metadata and IDs.</p>
-              </div>
-            </div>
-            <form id="tvdb-form" class="space-y-4">
-              <label class="inline-control">
-                <input type="checkbox" name="enabled" />
-                <span>Enable TVDB</span>
-              </label>
-              <label class="field">
-                <span>TVDB API Key</span>
-                <input class="input" type="text" name="api_key" autocomplete="off" />
-              </label>
-              <label class="field">
-                <span>TVDB PIN (optional)</span>
-                <input class="input" type="text" name="pin" autocomplete="off" />
-              </label>
-              <label class="field">
-                <span>Language (optional)</span>
-                <input class="input" type="text" name="language" placeholder="en" />
-              </label>
-              <button class="btn btn-secondary" type="submit">Save</button>
-              <p id="tvdb-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">TVMaze</h3>
-                <p class="section-subtitle">No API key required.</p>
-              </div>
-            </div>
-            <form id="tvmaze-form" class="space-y-4">
-              <label class="inline-control">
-                <input type="checkbox" name="enabled" />
-                <span>Enable TVMaze</span>
-              </label>
-              <p class="helper-text">No API key required for TVMaze metadata lookups.</p>
-              <button class="btn btn-secondary" type="submit">Save</button>
-              <p id="tvmaze-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">IMDb</h3>
-                <p class="section-subtitle">No API key required.</p>
-              </div>
-            </div>
-            <form id="imdb-form" class="space-y-4">
-              <label class="inline-control">
-                <input type="checkbox" name="enabled" />
-                <span>Enable IMDb</span>
-              </label>
-              <p class="helper-text">No API key required for IMDb metadata lookups.</p>
-              <button class="btn btn-secondary" type="submit">Save</button>
-              <p id="imdb-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Kitsu</h3>
-                <p class="section-subtitle">Anime metadata provider.</p>
-              </div>
-            </div>
-            <form id="kitsu-form" class="space-y-4">
-              <label class="inline-control">
-                <input type="checkbox" name="enabled" />
-                <span>Enable Kitsu</span>
-              </label>
-              <label class="field">
-                <span>Title language (optional)</span>
-                <input class="input" type="text" name="language" placeholder="en, en_jp, ja_jp" />
-              </label>
-              <p class="helper-text">No API key required for Kitsu metadata lookups.</p>
-              <button class="btn btn-secondary" type="submit">Save</button>
-              <p id="kitsu-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">MyAnimeList</h3>
-                <p class="section-subtitle">Anime metadata provider.</p>
-              </div>
-            </div>
-            <form id="myanimelist-form" class="space-y-4">
-              <label class="inline-control">
-                <input type="checkbox" name="enabled" />
-                <span>Enable MyAnimeList</span>
-              </label>
-              <p class="helper-text">No API key required for MyAnimeList lookups.</p>
-              <button class="btn btn-secondary" type="submit">Save</button>
-              <p id="myanimelist-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">AniList</h3>
-                <p class="section-subtitle">Anime metadata provider.</p>
-              </div>
-            </div>
-            <form id="anilist-provider-form" class="space-y-4">
-              <label class="inline-control">
-                <input type="checkbox" name="enabled" />
-                <span>Enable AniList</span>
-              </label>
-              <p class="helper-text">No API key required for AniList lookups.</p>
-              <button class="btn btn-secondary" type="submit">Save</button>
-              <p id="anilist-provider-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-        </div>
-      </div>
-
-      <div
-        id="panel-history"
-        class="tab-panel"
-        role="tabpanel"
-        aria-labelledby="tab-history"
-        data-tab-panel
-        data-tab="history"
-        hidden
-      >
-        <div class="card card-muted space-y-2">
-          <p class="eyebrow">History management</p>
-          <h2 class="section-title">Remove all watched items from your account.</h2>
-          <p class="section-subtitle">Use this to wipe history across integrations.</p>
-        </div>
-        <div class="grid gap-4 lg:grid-cols-2">
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Clear history</h3>
-                <p class="section-subtitle">Permanently delete all watched items.</p>
-              </div>
-            </div>
-            <p class="helper-text">
-              This cannot be undone and will remove all watched items from your account.
-            </p>
-            <div class="flex flex-wrap gap-2">
-              <button id="history-clear-open" type="button" class="btn btn-danger btn-sm">
-                Clear history
-              </button>
-            </div>
-            <p id="history-clear-message" class="form-message" role="status" hidden></p>
-          </div>
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="section-title">Reset import history</h3>
-                <p class="section-subtitle">Allow a provider to re-import past entries.</p>
-              </div>
-            </div>
-            <form id="import-history-reset-form" class="space-y-4">
-              <label class="field">
-                <span>Provider</span>
-                <select class="select" name="provider" required>
-                  <option value="aiostreams">AIOStreams</option>
-                  <option value="trakt">Trakt</option>
-                  <option value="simkl">SIMKL</option>
-                  <option value="letterboxd">Letterboxd</option>
-                  <option value="stremio">Stremio</option>
-                  <option value="anilist">AniList</option>
-                </select>
-              </label>
-              <label class="inline-control">
-                <input type="checkbox" name="include_blacklisted" checked />
-                <span>Also clear blacklisted import events</span>
-              </label>
-              <p class="helper-text">
-                Use this if reimport says entries already exist even after clearing history.
-              </p>
-              <button class="btn btn-secondary btn-sm" type="submit">
-                Reset import history
-              </button>
-              <p id="import-history-reset-message" class="form-message" role="status" hidden></p>
-            </form>
-          </div>
-        </div>
-      </div>
-    </div>
+       <div class="tab-panels">
+         {% include "settings/metadata.html" %}
+         {% include "settings/providers.html" %}
+         {% include "settings/watchlists.html" %}
+         {% include "settings/blacklist.html" %}
+         {% include "settings/activity.html" %}
+         {% include "settings/preferences.html" %}
+         {% include "settings/history.html" %}
+       </div>
   </div>
 </section>
 
-<div id="history-clear-modal" class="modal" hidden>
-  <div class="modal-backdrop" data-modal-close></div>
-  <div
-    class="modal-panel"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="history-clear-title"
-  >
-    <header class="modal-header">
-      <h2 id="history-clear-title" class="section-title">Clear history</h2>
-      <button type="button" class="btn btn-ghost btn-sm" data-modal-close>Close</button>
-    </header>
-    <form id="history-clear-form" class="space-y-4">
-      <p class="helper-text">
-        Type <strong>delete</strong> to confirm. This will remove all watched items.
-      </p>
-      <label class="field">
-        <span>Confirmation</span>
-        <input
-          id="history-clear-input"
-          class="input"
-          type="text"
-          name="confirmation"
-          autocomplete="off"
-          placeholder="delete"
-        />
-      </label>
-      <p id="history-clear-modal-message" class="form-message" role="status" hidden></p>
-      <div class="flex flex-wrap gap-2">
-        <button
-          id="history-clear-confirm"
-          type="submit"
-          class="btn btn-danger"
-          disabled
-        >
-          Delete history
-        </button>
-        <button type="button" class="btn btn-secondary" data-modal-close>
-          Cancel
-        </button>
-      </div>
-    </form>
-  </div>
-</div>
+{% include "settings/modals.html" %}
 {% endblock %}
 
 {% block scripts %}
+  <script src="{{ static_url('/static/status-utils.js') }}" defer></script>
+  <script src="{{ static_url('/static/watch-utils.js') }}" defer></script>
   <script src="{{ static_url('/static/integrations-utils.js') }}" defer></script>
   <script src="{{ static_url('/static/page-settings.js') }}" defer></script>
 {% endblock %}

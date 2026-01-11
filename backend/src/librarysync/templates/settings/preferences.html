@@ -1,0 +1,56 @@
+<div
+  id="panel-preferences"
+  class="tab-panel"
+  role="tabpanel"
+  aria-labelledby="tab-preferences"
+  data-tab-panel
+  data-tab="preferences"
+>
+  <div class="card card-muted space-y-2">
+    <p class="eyebrow">Personal preferences</p>
+    <h2 class="section-title">Tune search and theme defaults.</h2>
+    <p class="section-subtitle">Choose how results appear and how the interface renders.</p>
+  </div>
+  <div class="grid gap-4 lg:grid-cols-2">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h2 class="section-title">Search</h2>
+          <p class="section-subtitle">Control how lookups behave.</p>
+        </div>
+      </div>
+      <form id="settings-form" class="space-y-4">
+        <label class="inline-control">
+          <input type="checkbox" name="include_adult_in_search" />
+          <span>Include adult titles in search results</span>
+        </label>
+        <button class="btn btn-primary" type="submit">Save</button>
+        <p id="settings-message" class="form-message" role="status" hidden></p>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h2 class="section-title">Appearance</h2>
+          <p class="section-subtitle">Choose how the interface is rendered.</p>
+        </div>
+      </div>
+      <div class="space-y-3">
+        <label class="inline-control">
+          <input type="radio" name="theme_mode" value="system" data-theme-option />
+          <span>System</span>
+        </label>
+        <label class="inline-control">
+          <input type="radio" name="theme_mode" value="light" data-theme-option />
+          <span>Light</span>
+        </label>
+        <label class="inline-control">
+          <input type="radio" name="theme_mode" value="dark" data-theme-option />
+          <span>Dark</span>
+        </label>
+        <p class="helper-text">Defaults to system when unset.</p>
+      </div>
+    </div>
+  </div>
+</div>
