@@ -110,6 +110,19 @@ Example values (replace `example.com` with your domain):
 If you’re using `docker compose` with the `scaled-workers` profile, `worker-metadata-cache`
 is now available and will run the metadata cache loop (`LIBRARYSYNC_WORKER_MODES=metadata_cache`).
 
+## Release
+
+Use the release helper to bump versions in both `backend/pyproject.toml` and
+`worker/pyproject.toml`, tag, and create a GitHub release.
+
+Examples:
+- `python scripts/release.py --patch`
+- `python scripts/release.py 0.9.0 --no-release`
+
+The release helper runs `ruff` and the unit tests before it commits.
+
+`gh` must be installed and authenticated if you are creating a GitHub release.
+
 ## Static File Cache Invalidation
 
 librarySync automatically handles browser cache invalidation for static assets (CSS and JavaScript) by appending version query parameters to their URLs.
