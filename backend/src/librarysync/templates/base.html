@@ -64,76 +64,105 @@
     {% if guest_only %}data-guest-only="true"{% endif %}
   >
     <div class="flex min-h-screen flex-col">
-      <header class="sticky top-0 z-40 border-b border-line/60 bg-surface/90 backdrop-blur">
-        <div
-          class="mx-auto flex w-full max-w-6xl flex-nowrap items-center justify-between gap-4 px-4 py-4"
-        >
-          <a href="/" class="flex items-center gap-3">
-            <img class="h-10 w-10" src="/favicon.svg" alt="" />
-            <div class="leading-none">
-              <span class="block font-display text-lg tracking-tight">librarySync</span>
-              <span class="block text-xs uppercase tracking-[0.3em] text-muted">Sync Hub</span>
-            </div>
-          </a>
-          <nav class="flex items-center gap-2 text-sm" data-auth-only>
+      <header class="sticky top-0 z-40 w-full border-b border-line/60 bg-surface/80 backdrop-blur-md">
+        <div class="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+          
+          <!-- Left: Logo -->
+          <div class="flex items-center gap-4">
+            <a href="/" class="flex items-center gap-2 transition-opacity hover:opacity-80">
+              <img class="h-8 w-8" src="/favicon.svg" alt="" />
+              <div class="hidden flex-col leading-none sm:flex">
+                <span class="font-display text-lg font-semibold tracking-tight">librarySync</span>
+                <span class="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Sync Hub</span>
+              </div>
+            </a>
+          </div>
+
+          <!-- Center: Desktop Nav -->
+          <nav class="hidden items-center gap-1 md:flex" data-auth-only>
             <a
               href="/add-watched"
-              data-auth-only
-              class="nav-link{% if active_page == 'add-watched' %} nav-link-active{% endif %}"
+              class="rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-elevated hover:text-ink {% if active_page == 'add-watched' %}bg-elevated text-ink{% else %}text-muted{% endif %}"
             >
-              Add
+              Add Watched
             </a>
             <a
               href="/watchlist"
-              data-auth-only
-              class="nav-link{% if active_page == 'watchlist' %} nav-link-active{% endif %}"
+              class="rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-elevated hover:text-ink {% if active_page == 'watchlist' %}bg-elevated text-ink{% else %}text-muted{% endif %}"
             >
               Watchlist
             </a>
             <a
               href="/history"
-              data-auth-only
-              class="nav-link{% if active_page == 'history' %} nav-link-active{% endif %}"
+              class="rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-elevated hover:text-ink {% if active_page == 'history' %}bg-elevated text-ink{% else %}text-muted{% endif %}"
             >
               History
             </a>
             <a
               href="/activity"
-              data-auth-only
-              class="nav-link{% if active_page == 'activity' %} nav-link-active{% endif %}"
+              class="rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-elevated hover:text-ink {% if active_page == 'activity' %}bg-elevated text-ink{% else %}text-muted{% endif %}"
             >
               Activity
             </a>
+            <a
+              href="/blacklist"
+              class="rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-elevated hover:text-ink {% if active_page == 'blacklist' %}bg-elevated text-ink{% else %}text-muted{% endif %}"
+            >
+              Blacklist
+            </a>
           </nav>
-          <!-- Burger Menu Button -->
-          <button
-            type="button"
-            class="flex flex-col gap-1"
-            data-mobile-menu-toggle
-            aria-label="Toggle menu"
-            aria-expanded="false"
-          >
-            <span class="h-0.5 w-6 bg-ink transition-transform"></span>
-            <span class="h-0.5 w-6 bg-ink transition-opacity"></span>
-            <span class="h-0.5 w-6 bg-ink transition-transform"></span>
-          </button>
+
+          <!-- Right: Actions & Mobile Toggle -->
+          <div class="flex items-center gap-3">
+            
+            <!-- Desktop: User Actions -->
+            <div class="hidden items-center gap-2 md:flex" data-auth-only>
+              <a 
+                href="/settings" 
+                class="inline-flex h-9 w-9 items-center justify-center rounded-full text-muted transition-colors hover:bg-elevated hover:text-ink {% if active_page == 'settings' %}bg-elevated text-ink{% endif %}"
+                aria-label="Settings"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </a>
+              <button 
+                type="button" 
+                class="inline-flex h-9 w-9 items-center justify-center rounded-full text-muted transition-colors hover:bg-red-500/10 hover:text-red-500"
+                data-logout
+                aria-label="Log out"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+              </button>
+            </div>
+            
+            <div class="hidden items-center gap-3 md:flex" data-guest-only>
+               <a href="/login" class="btn btn-primary btn-sm rounded-lg">Log in</a>
+            </div>
+
+            <!-- Mobile: Burger Button (Hidden, replaced by Bottom Nav) -->
+            <!-- <button ... > -->
+          </div>
         </div>
       </header>
+
       <!-- Mobile Menu Overlay -->
       <div
-        class="fixed inset-0 z-50 hidden bg-slate/70 backdrop-blur-sm"
+        class="fixed inset-0 z-50 bg-slate/60 backdrop-blur-sm transition-opacity duration-300 opacity-0 pointer-events-none"
         data-mobile-menu-backdrop
+        aria-hidden="true"
       ></div>
+
       <!-- Mobile Menu Panel -->
       <nav
-        class="fixed right-0 top-0 z-50 flex h-full w-64 translate-x-full flex-col gap-2 border-l border-line/60 bg-surface p-6 shadow-card transition-transform duration-300"
+        class="fixed inset-y-0 right-0 z-50 flex w-full max-w-[300px] translate-x-full flex-col border-l border-line/60 bg-surface shadow-2xl transition-transform duration-300 ease-out"
         data-mobile-menu-panel
+        aria-label="Mobile menu"
       >
-        <div class="mb-4 flex items-center justify-between">
-          <span class="text-lg font-display">Menu</span>
+        <!-- Mobile Menu Header -->
+        <div class="flex h-16 items-center justify-between border-b border-line/60 px-5">
+          <span class="font-display text-lg font-semibold">Menu</span>
           <button
             type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-lg border border-line/60 text-muted hover:text-ink"
+            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-ink"
             data-mobile-menu-close
             aria-label="Close menu"
           >
@@ -153,61 +182,85 @@
             </svg>
           </button>
         </div>
-        <a
-          href="/"
-          class="mobile-nav-link{% if active_page == 'home' %} mobile-nav-link-active{% endif %}"
-        >
-          Home
-        </a>
-        <a
-          href="/login"
-          data-guest-only
-          class="mobile-nav-link{% if active_page == 'login' %} mobile-nav-link-active{% endif %}"
-        >
-          Login
-        </a>
-        <a
-          href="/watchlist"
-          data-auth-only
-          class="mobile-nav-link{% if active_page == 'watchlist' %} mobile-nav-link-active{% endif %}"
-        >
-          Watchlist
-        </a>
-        <a
-          href="/activity"
-          data-auth-only
-          class="mobile-nav-link{% if active_page == 'activity' %} mobile-nav-link-active{% endif %}"
-        >
-          Activity
-        </a>
-        <a
-          href="/blacklist"
-          data-auth-only
-          class="mobile-nav-link{% if active_page == 'blacklist' %} mobile-nav-link-active{% endif %}"
-        >
-          Blacklist
-        </a>
-        <a
-          href="/settings"
-          data-auth-only
-          class="mobile-nav-link{% if active_page == 'settings' or active_page == 'integrations' %} mobile-nav-link-active{% endif %}"
-        >
-          Settings
-        </a>
-        <div class="mt-auto border-t border-line/60 pt-4">
-          <div class="flex flex-col gap-2">
-            <button type="button" class="btn btn-ghost w-full justify-start" data-logout data-auth-only>
-              Log out
-            </button>
+
+        <!-- Mobile Content -->
+        <div class="flex-1 overflow-y-auto px-5 py-6">
+          
+          <!-- User Profile (Mobile) -->
+          <div class="mb-6 flex items-center gap-3 rounded-xl border border-line/60 bg-elevated/40 p-3" data-auth-only>
+             <div class="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+             </div>
+             <div class="flex flex-col overflow-hidden">
+               <span class="truncate text-sm font-semibold text-ink" data-user-username>User</span>
+               <span class="text-xs text-muted">Signed in</span>
+             </div>
           </div>
+
+          <!-- Links -->
+          <div class="flex flex-col gap-1">
+            <a href="/" class="mobile-nav-link {% if active_page == 'home' %}mobile-nav-link-active{% endif %}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+              Home
+            </a>
+            
+            <a href="/add-watched" data-auth-only class="mobile-nav-link {% if active_page == 'add-watched' %}mobile-nav-link-active{% endif %}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+              Add Watched
+            </a>
+            
+            <a href="/watchlist" data-auth-only class="mobile-nav-link {% if active_page == 'watchlist' %}mobile-nav-link-active{% endif %}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+              Watchlist
+            </a>
+            
+            <a href="/history" data-auth-only class="mobile-nav-link {% if active_page == 'history' %}mobile-nav-link-active{% endif %}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              History
+            </a>
+            
+            <a href="/activity" data-auth-only class="mobile-nav-link {% if active_page == 'activity' %}mobile-nav-link-active{% endif %}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+              Activity
+            </a>
+            
+            <a href="/blacklist" data-auth-only class="mobile-nav-link {% if active_page == 'blacklist' %}mobile-nav-link-active{% endif %}">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>
+              Blacklist
+            </a>
+          </div>
+
+          <hr class="my-6 border-line/60" data-auth-only />
+
+          <div class="flex flex-col gap-1" data-auth-only>
+             <a href="/settings" class="mobile-nav-link {% if active_page == 'settings' or active_page == 'integrations' %}mobile-nav-link-active{% endif %}">
+               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+               Settings
+             </a>
+             <button type="button" class="mobile-nav-link text-red-500 hover:bg-red-500/10 hover:text-red-500" data-logout>
+               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+               Log out
+             </button>
+          </div>
+
+          <div class="flex flex-col gap-1" data-guest-only>
+             <a href="/login" class="btn btn-primary w-full justify-center rounded-lg">Log in</a>
+          </div>
+
+        </div>
+
+        <!-- Mobile Footer -->
+        <div class="border-t border-line/60 bg-elevated/50 px-6 py-4">
+          <p class="text-xs text-muted">librarySync v{{ app_version }}</p>
         </div>
       </nav>
+
       <main class="flex-1">
         <div class="mx-auto w-full max-w-6xl px-4 pb-20 pt-8">
           {% block content %}{% endblock %}
         </div>
       </main>
-      <footer class="border-t border-line/60 bg-surface/70">
+      <footer class="border-t border-line/60 bg-surface/70 pb-20 md:pb-6">
         <div class="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-muted">
           <span>librarySync is a self-hosted sync hub for watch history and ratings.</span>
           <span class="flex flex-wrap items-center gap-3">
@@ -216,6 +269,35 @@
           </span>
         </div>
       </footer>
+
+      <!-- Bottom Navigation (Mobile) -->
+      <nav class="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around border-t border-line/60 bg-surface/90 px-2 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-md md:hidden">
+        <a href="/" class="flex flex-1 flex-col items-center gap-1 p-2 text-[10px] font-medium {% if active_page == 'home' %}text-primary{% else %}text-muted hover:text-ink{% endif %}">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          Home
+        </a>
+        
+        <a href="/watchlist" class="flex flex-1 flex-col items-center gap-1 p-2 text-[10px] font-medium {% if active_page == 'watchlist' %}text-primary{% else %}text-muted hover:text-ink{% endif %}" data-auth-only>
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+          Watchlist
+        </a>
+
+        <a href="/add-watched" class="group flex flex-1 flex-col items-center gap-1 p-2 text-[10px] font-medium {% if active_page == 'add-watched' %}text-primary{% else %}text-muted hover:text-ink{% endif %}" data-auth-only>
+          <div class="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary transition-transform group-active:scale-95 {% if active_page == 'add-watched' %}bg-primary text-white shadow-glow{% endif %}">
+             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </div>
+        </a>
+
+        <a href="/history" class="flex flex-1 flex-col items-center gap-1 p-2 text-[10px] font-medium {% if active_page == 'history' %}text-primary{% else %}text-muted hover:text-ink{% endif %}" data-auth-only>
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          History
+        </a>
+
+        <button type="button" class="flex flex-1 flex-col items-center gap-1 p-2 text-[10px] font-medium text-muted hover:text-ink" data-mobile-menu-toggle>
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
+          Menu
+        </button>
+      </nav>
     </div>
   </body>
 </html>

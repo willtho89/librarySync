@@ -15,55 +15,46 @@
       </label>
     </div>
     <div class="card history-toolbar">
-      <div class="history-toolbar-row">
-        <label class="field min-w-[160px]">
-          <span>Type</span>
-          <select id="history-type-filter" class="select">
-            <option value="all">All types</option>
-            <option value="movie">Movies</option>
-            <option value="tv">TV</option>
-            <option value="anime">Anime</option>
-          </select>
-        </label>
-        <label class="field min-w-[160px]">
-          <span>Source</span>
-          <select id="history-source-filter" class="select">
-            <option value="all">All sources</option>
-            <option value="manual">Manual</option>
-            <option value="trakt">Trakt</option>
-            <option value="simkl">SIMKL</option>
-            <option value="letterboxd">Letterboxd</option>
-            <option value="stremio">Stremio</option>
-            <option value="aiostreams">AIOStreams</option>
-          </select>
-        </label>
-        <label class="field min-w-[120px]">
-          <span>Per page</span>
-          <select id="history-page-size" class="select">
-            <option value="25">25</option>
-            <option value="50">50</option>
-            <option value="100">100</option>
-          </select>
-        </label>
-      </div>
-      <div class="history-toolbar-actions">
-        <div class="flex flex-wrap items-center gap-3">
-          <button id="history-page-prev" type="button" class="btn btn-ghost btn-sm">
-            Previous
-          </button>
-          <span id="history-page-info" class="helper-text">Loading...</span>
-          <button id="history-page-next" type="button" class="btn btn-ghost btn-sm">
-            Next
-          </button>
+      <div class="flex flex-col gap-4 md:flex-row md:items-end">
+        <div class="history-toolbar-row flex-1">
+          <label class="field min-w-[160px]">
+            <span>Type</span>
+            <select id="history-type-filter" class="select">
+              <option value="all">All types</option>
+              <option value="movie">Movies</option>
+              <option value="tv">TV</option>
+              <option value="anime">Anime</option>
+            </select>
+          </label>
+          <label class="field min-w-[160px]">
+            <span>Source</span>
+            <select id="history-source-filter" class="select">
+              <option value="all">All sources</option>
+              <option value="manual">Manual</option>
+              <option value="trakt">Trakt</option>
+              <option value="simkl">SIMKL</option>
+              <option value="letterboxd">Letterboxd</option>
+              <option value="stremio">Stremio</option>
+              <option value="aiostreams">AIOStreams</option>
+            </select>
+          </label>
+          <label class="field min-w-[120px]">
+            <span>Per page</span>
+            <select id="history-page-size" class="select">
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
         </div>
-        <button id="history-filters-clear" type="button" class="btn btn-secondary btn-sm">
+        <button id="history-filters-clear" type="button" class="btn btn-secondary btn-sm whitespace-nowrap">
           Clear filters
         </button>
       </div>
     </div>
   </div>
 
-  <div class="card">
+  <div class="card mb-24">
     <div class="card-header">
       <div>
         <h2 class="section-title">Watched items</h2>
@@ -84,6 +75,23 @@
     <div id="history-list" class="candidate-list">Loading...</div>
   </div>
 </section>
+
+<div class="sticky-footer">
+  <div class="flex items-center justify-between gap-4">
+     <div class="hidden sm:block">
+        <!-- Optional: Total count or other info could go here -->
+     </div>
+     <div class="flex flex-1 items-center justify-between gap-3 sm:flex-none sm:justify-start">
+          <button id="history-page-prev" type="button" class="btn btn-ghost btn-sm">
+            Previous
+          </button>
+          <span id="history-page-info" class="text-xs font-medium text-ink">Loading...</span>
+          <button id="history-page-next" type="button" class="btn btn-ghost btn-sm">
+            Next
+          </button>
+     </div>
+  </div>
+</div>
 
 <div id="history-bulk-bar" class="history-bulk-bar" data-bulk-bar>
   <div class="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-4 px-4 py-3">
