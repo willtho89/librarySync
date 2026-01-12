@@ -2099,6 +2099,7 @@ function formatSyncJobType(jobType) {
     delete_log_entry: "History removal",
     remove_watched: "Remove watched",
     new_item_added: "New item",
+    watchlist_update: "Watchlist update",
   };
   return labels[jobType] || formatLabel(jobType);
 }

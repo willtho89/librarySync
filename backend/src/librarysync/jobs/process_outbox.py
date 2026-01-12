@@ -74,7 +74,7 @@ from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.security import encrypt_value
-from librarysync.core.watch_pipeline import process_new_item_job
+from librarysync.core.watch_pipeline import process_new_item_job, process_watchlist_update_job
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
@@ -252,10 +252,13 @@ class InternalOutboxHandler(OutboxHandler):
     provider = "internal"
 
     async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
-        if job.job_type != "new_item_added":
-            raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
-        await process_new_item_job(db, job)
-        return DeliveryResult(None, None, None)
+        if job.job_type == "new_item_added":
+            await process_new_item_job(db, job)
+            return DeliveryResult(None, None, None)
+        if job.job_type == "watchlist_update":
+            await process_watchlist_update_job(db, job)
+            return DeliveryResult(None, None, None)
+        raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
 
 
 OUTBOX_HANDLER_REGISTRY = OutboxHandlerRegistry(

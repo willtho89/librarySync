@@ -17,7 +17,11 @@ from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.anime import is_anime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
-from librarysync.core.watchlist import backfill_show_episodes, check_and_update_watchlist
+from librarysync.core.watchlist import (
+    backfill_show_episodes,
+    check_and_update_watchlist,
+    refresh_watchlist_from_history,
+)
 from librarysync.db.models import (
     EpisodeItem,
     MediaItem,
@@ -61,6 +65,10 @@ def _build_outbox_dedupe_key(
     watchlist_item_id = payload.get("watchlist_item_id")
     if watchlist_item_id:
         return f"{user_id}:{provider}:{job_type}:{watchlist_item_id}"
+    if job_type == "watchlist_update":
+        media_item_id = payload.get("media_item_id")
+        if media_item_id:
+            return f"{user_id}:{provider}:{job_type}:{media_item_id}"
     return None
 
 
@@ -260,6 +268,21 @@ async def enqueue_new_item_job(
     )
 
 
+async def enqueue_watchlist_update_job(
+    db: AsyncSession,
+    user_id: str,
+    media_item_id: str,
+) -> OutboxJob:
+    return await enqueue_outbox_job(
+        db,
+        user_id=user_id,
+        target_provider="internal",
+        job_type="watchlist_update",
+        payload={"media_item_id": media_item_id},
+        status="pending",
+    )
+
+
 async def process_new_item_job(db: AsyncSession, job: OutboxJob) -> None:
     payload = job.payload or {}
     watched_id = payload.get("watched_item_id")
@@ -286,6 +309,14 @@ async def process_new_item_job(db: AsyncSession, job: OutboxJob) -> None:
     if media_item:
         await check_and_update_watchlist(db, watched.user_id, media_item.id)
     await _sync_to_integrations(db, watched, media_item, episode_item, is_rewatch)
+
+
+async def process_watchlist_update_job(db: AsyncSession, job: OutboxJob) -> None:
+    payload = job.payload or {}
+    media_item_id = payload.get("media_item_id")
+    if not media_item_id:
+        raise ValueError("watchlist_update requires media_item_id")
+    await refresh_watchlist_from_history(db, job.user_id, str(media_item_id))
 
 
 async def _sync_to_integrations(

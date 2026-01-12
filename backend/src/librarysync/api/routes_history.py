@@ -19,6 +19,7 @@ from librarysync.core.watch_pipeline import (
     SYNC_COORDINATOR,
     SYNC_STRATEGY_REGISTRY,
     enqueue_new_item_job,
+    enqueue_watchlist_update_job,
 )
 from librarysync.db.models import (
     EpisodeItem,
@@ -661,36 +662,46 @@ async def clear_watched_items(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    show_item = aliased(MediaItem)
     result = await db.execute(
-        select(
-            WatchedItem.id,
-            WatchedItem.media_item_id,
-            WatchedItem.episode_item_id,
-            WatchedItem.watched_at,
-        ).where(WatchedItem.user_id == current_user.id)
+        select(WatchedItem, MediaItem, EpisodeItem, show_item)
+        .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
+        .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .outerjoin(show_item, EpisodeItem.show_media_item_id == show_item.id)
+        .where(WatchedItem.user_id == current_user.id)
     )
     rows = result.all()
     if not rows:
         return {"deleted": 0}
 
     now = datetime.now(timezone.utc)
-    events = [
-        WatchEvent(
-            user_id=current_user.id,
-            media_item_id=row.media_item_id,
-            episode_item_id=row.episode_item_id,
-            event_type="manual_watched_deleted",
-            occurred_at=now,
-            raw={
-                "watched_id": row.id,
-                "previous_watched_at": row.watched_at.isoformat()
-                if row.watched_at
-                else None,
-                "bulk_clear": True,
-            },
+    events: list[WatchEvent] = []
+    watchlist_media_ids: set[str] = set()
+    for watched, media_item, episode_item, show in rows:
+        events.append(
+            WatchEvent(
+                user_id=current_user.id,
+                media_item_id=watched.media_item_id,
+                episode_item_id=watched.episode_item_id,
+                event_type="manual_watched_deleted",
+                occurred_at=now,
+                raw={
+                    "watched_id": watched.id,
+                    "previous_watched_at": watched.watched_at.isoformat()
+                    if watched.watched_at
+                    else None,
+                    "bulk_clear": True,
+                },
+            )
         )
-        for row in rows
-    ]
+        target_media = media_item or show
+        if target_media and target_media.id not in watchlist_media_ids:
+            watchlist_media_ids.add(target_media.id)
+            await enqueue_watchlist_update_job(
+                db,
+                current_user.id,
+                target_media.id,
+            )
     db.add_all(events)
     await db.execute(delete(WatchedItem).where(WatchedItem.user_id == current_user.id))
     await db.execute(
@@ -865,38 +876,21 @@ async def delete_watched_item(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    show_item = aliased(MediaItem)
     result = await db.execute(
-        select(WatchedItem).where(
-            WatchedItem.id == watched_id, WatchedItem.user_id == current_user.id
-        )
+        select(WatchedItem, MediaItem, EpisodeItem, show_item)
+        .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
+        .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .outerjoin(show_item, EpisodeItem.show_media_item_id == show_item.id)
+        .where(WatchedItem.id == watched_id, WatchedItem.user_id == current_user.id)
     )
-    watched = result.scalars().first()
-    if not watched:
+    row = result.first()
+    if not row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Watched entry not found"
         )
 
-    media_item: MediaItem | None = None
-    episode_item: EpisodeItem | None = None
-    show_item: MediaItem | None = None
-    if delete_integrations:
-        if watched.media_item_id:
-            result = await db.execute(
-                select(MediaItem).where(MediaItem.id == watched.media_item_id)
-            )
-            media_item = result.scalars().first()
-        if watched.episode_item_id:
-            result = await db.execute(
-                select(EpisodeItem).where(EpisodeItem.id == watched.episode_item_id)
-            )
-            episode_item = result.scalars().first()
-            if episode_item:
-                result = await db.execute(
-                    select(MediaItem).where(
-                        MediaItem.id == episode_item.show_media_item_id
-                    )
-                )
-                show_item = result.scalars().first()
+    watched, media_item, episode_item, show_item = row
 
     event_raw: dict[str, object] = {
         "watched_id": watched.id,
@@ -916,8 +910,8 @@ async def delete_watched_item(
         raw=event_raw,
     )
     db.add(event)
+    target_media = media_item or show_item
     if delete_integrations:
-        target_media = media_item or show_item
         if target_media:
             await _enqueue_delete_syncs(
                 db,
@@ -925,6 +919,12 @@ async def delete_watched_item(
                 target_media,
                 episode_item,
             )
+    if target_media:
+        await enqueue_watchlist_update_job(
+            db,
+            current_user.id,
+            target_media.id,
+        )
     await db.delete(watched)
     await db.commit()
     return {"status": "deleted"}
@@ -965,6 +965,7 @@ async def bulk_delete_watched_items(
     now = datetime.now(timezone.utc)
     events: list[WatchEvent] = []
     delete_ids: list[str] = []
+    watchlist_media_ids: set[str] = set()
 
     for watched, media_item, episode_item, show in rows:
         delete_ids.append(watched.id)
@@ -987,8 +988,8 @@ async def bulk_delete_watched_items(
                 raw=event_raw,
             )
         )
+        target_media = media_item or show
         if payload.delete_integrations:
-            target_media = media_item or show
             if target_media:
                 await _enqueue_delete_syncs(
                     db,
@@ -996,6 +997,13 @@ async def bulk_delete_watched_items(
                     target_media,
                     episode_item,
                 )
+        if target_media and target_media.id not in watchlist_media_ids:
+            watchlist_media_ids.add(target_media.id)
+            await enqueue_watchlist_update_job(
+                db,
+                current_user.id,
+                target_media.id,
+            )
 
     db.add_all(events)
     await db.flush()

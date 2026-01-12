@@ -324,6 +324,53 @@ async def check_and_update_watchlist(
         await evaluate_show_watchlist_status(db, user_id, item, media_item)
 
 
+async def refresh_watchlist_from_history(
+    db: AsyncSession,
+    user_id: str,
+    media_item_id: str,
+) -> None:
+    result = await db.execute(
+        select(WatchlistItem).where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.media_item_id == media_item_id,
+        )
+    )
+    item = result.scalars().first()
+    if not item:
+        return
+
+    media_item = await db.get(MediaItem, media_item_id)
+    if not media_item:
+        return
+
+    now_date = datetime.now(timezone.utc).date()
+    if media_item.media_type == "movie":
+        watch_result = await db.execute(
+            select(WatchedItem.id)
+            .where(
+                WatchedItem.user_id == user_id,
+                WatchedItem.media_item_id == media_item_id,
+            )
+            .limit(1)
+        )
+        has_watched = bool(watch_result.scalars().first())
+        new_status = determine_movie_watchlist_status(
+            media_item,
+            has_watched=has_watched,
+            now_date=now_date,
+        )
+        await apply_watchlist_status_change(
+            db,
+            item,
+            user_id,
+            media_item_id,
+            new_status,
+            reason="history_update",
+        )
+    elif media_item.media_type == "tv":
+        await evaluate_show_watchlist_status(db, user_id, item, media_item)
+
+
 async def evaluate_show_watchlist_status(
     db: AsyncSession,
     user_id: str,
