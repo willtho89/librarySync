@@ -20,10 +20,20 @@ from librarysync.db.models import (
 logger = logging.getLogger(__name__)
 
 WATCHLIST_IMPORT_KEY = "watchlist_import"
+LEGACY_WATCHLIST_STATUS_MAP = {
+    "active": "added",
+    "waiting": "watched",
+}
 
 
 def _is_future_date(value: date | None, now_date: date) -> bool:
     return value is not None and value > now_date
+
+
+def normalize_watchlist_status(status: str | None) -> str | None:
+    if not status:
+        return status
+    return LEGACY_WATCHLIST_STATUS_MAP.get(status, status)
 
 
 def determine_movie_watchlist_status(
@@ -301,16 +311,14 @@ async def check_and_update_watchlist(
         return
 
     if media_item.media_type == "movie":
-        if item.status != "watched":
-            item.status = "watched"
-            item.updated_at = datetime.now(timezone.utc)
-            await log_watchlist_event(
-                db,
-                user_id,
-                media_item_id,
-                "watchlist_status_changed",
-                {"status": "watched", "reason": "watched"},
-            )
+        await apply_watchlist_status_change(
+            db,
+            item,
+            user_id,
+            media_item_id,
+            "watched",
+            reason="watched",
+        )
 
     elif media_item.media_type == "tv":
         await evaluate_show_watchlist_status(db, user_id, item, media_item)
@@ -374,16 +382,49 @@ async def evaluate_show_watchlist_status(
         now_date=now_date,
     )
 
-    if watchlist_item.status != new_status:
+    await apply_watchlist_status_change(
+        db,
+        watchlist_item,
+        user_id,
+        media_item.id,
+        new_status,
+        reason="auto_evaluation",
+    )
+
+
+async def apply_watchlist_status_change(
+    db: AsyncSession,
+    watchlist_item: WatchlistItem,
+    user_id: str,
+    media_item_id: str,
+    new_status: str,
+    *,
+    reason: str,
+    now: datetime | None = None,
+) -> bool:
+    if watchlist_item.status == "removed":
+        return False
+    if watchlist_item.status == new_status:
+        return False
+
+    current_status = watchlist_item.status
+    normalized_current = normalize_watchlist_status(current_status)
+    normalized_new = normalize_watchlist_status(new_status)
+    if normalized_current == normalized_new:
         watchlist_item.status = new_status
-        watchlist_item.updated_at = datetime.now(timezone.utc)
-        await log_watchlist_event(
-            db,
-            user_id,
-            media_item.id,
-            "watchlist_status_changed",
-            {"status": new_status, "reason": "auto_evaluation"},
-        )
+        watchlist_item.updated_at = now or datetime.now(timezone.utc)
+        return True
+
+    watchlist_item.status = new_status
+    watchlist_item.updated_at = now or datetime.now(timezone.utc)
+    await log_watchlist_event(
+        db,
+        user_id,
+        media_item_id,
+        "watchlist_status_changed",
+        {"status": new_status, "previous_status": current_status, "reason": reason},
+    )
+    return True
 
 
 async def log_watchlist_event(

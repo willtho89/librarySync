@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.core.scheduler import (
@@ -11,10 +11,10 @@ from librarysync.core.scheduler import (
     release_scheduled_job,
 )
 from librarysync.core.watchlist import (
+    apply_watchlist_status_change,
     backfill_show_episodes,
     determine_movie_watchlist_status,
     evaluate_show_watchlist_status,
-    log_watchlist_event,
 )
 from librarysync.db.models import EpisodeItem, MediaItem, ScheduledJob, User, WatchlistItem
 from librarysync.db.session import SessionLocal, init_session_factory
@@ -24,6 +24,15 @@ WATCHLIST_REFRESH_JOB = "watchlist_refresh"
 WATCHLIST_REFRESH_INTERVAL = timedelta(minutes=30)
 WATCHLIST_REFRESH_LEASE = timedelta(minutes=20)
 WATCHLIST_REFRESH_RETRY_DELAY = timedelta(minutes=5)
+WATCHLIST_REFRESH_STATUSES = (
+    "added",
+    "in_progress",
+    "watched",
+    "not_released",
+    "active",
+    "waiting",
+    "hidden",
+)
 
 
 async def process_watchlist_refresh_once() -> int:
@@ -49,6 +58,7 @@ async def process_watchlist_refresh_once() -> int:
 
 async def run_watchlist_refresh(db: AsyncSession, job: ScheduledJob) -> None:
     logger.info("Starting watchlist refresh")
+    last_run_at = job.last_run_at
 
     # Get all users
     result = await db.execute(select(User.id))
@@ -56,25 +66,7 @@ async def run_watchlist_refresh(db: AsyncSession, job: ScheduledJob) -> None:
 
     for user_id in user_ids:
         # Get all active/hidden items
-        items_result = await db.execute(
-            select(WatchlistItem, MediaItem)
-            .join(MediaItem, WatchlistItem.media_item_id == MediaItem.id)
-            .where(
-                WatchlistItem.user_id == user_id,
-                WatchlistItem.status.in_(
-                    [
-                        "added",
-                        "in_progress",
-                        "watched",
-                        "not_released",
-                        "active",
-                        "waiting",
-                        "hidden",
-                    ]
-                ),
-            )
-        )
-        rows = items_result.all()
+        rows = await _load_watchlist_rows_for_refresh(db, user_id, last_run_at)
 
         await _backfill_missing_show_episodes(db, user_id, rows)
 
@@ -87,6 +79,139 @@ async def run_watchlist_refresh(db: AsyncSession, job: ScheduledJob) -> None:
 
     await db.commit()
     logger.info("Finished daily watchlist refresh")
+
+
+async def _load_watchlist_rows_for_refresh(
+    db: AsyncSession,
+    user_id: str,
+    last_run_at: datetime | None,
+) -> list[tuple[WatchlistItem, MediaItem]]:
+    base_query = (
+        select(WatchlistItem, MediaItem)
+        .join(MediaItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
+        )
+    )
+    if not last_run_at:
+        return (await db.execute(base_query)).all()
+
+    now = datetime.now(timezone.utc)
+    now_date = now.date()
+    last_run_date = last_run_at.date()
+
+    media_ids: set[str] = set()
+
+    new_watchlist_result = await db.execute(
+        select(MediaItem.id)
+        .join(WatchlistItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
+            or_(
+                WatchlistItem.created_at > last_run_at,
+                WatchlistItem.updated_at > last_run_at,
+            ),
+        )
+    )
+    media_ids.update(new_watchlist_result.scalars().all())
+
+    updated_result = await db.execute(
+        select(MediaItem.id)
+        .join(WatchlistItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
+            MediaItem.updated_at.is_not(None),
+            MediaItem.updated_at > last_run_at,
+        )
+    )
+    media_ids.update(updated_result.scalars().all())
+
+    episode_update_result = await db.execute(
+        select(EpisodeItem.show_media_item_id)
+        .join(MediaItem, EpisodeItem.show_media_item_id == MediaItem.id)
+        .join(WatchlistItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
+            MediaItem.media_type == "tv",
+            EpisodeItem.updated_at.is_not(None),
+            EpisodeItem.updated_at > last_run_at,
+        )
+        .distinct()
+    )
+    media_ids.update(episode_update_result.scalars().all())
+
+    released_result = await db.execute(
+        select(EpisodeItem.show_media_item_id)
+        .join(MediaItem, EpisodeItem.show_media_item_id == MediaItem.id)
+        .join(WatchlistItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
+            MediaItem.media_type == "tv",
+            EpisodeItem.air_date.is_not(None),
+            EpisodeItem.air_date >= last_run_date,
+            EpisodeItem.air_date <= now_date,
+            EpisodeItem.season_number > 0,
+        )
+        .distinct()
+    )
+    media_ids.update(released_result.scalars().all())
+
+    movie_release_result = await db.execute(
+        select(MediaItem.id)
+        .join(WatchlistItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
+            MediaItem.media_type == "movie",
+            MediaItem.release_date.is_not(None),
+            MediaItem.release_date >= last_run_date,
+            MediaItem.release_date <= now_date,
+        )
+    )
+    media_ids.update(movie_release_result.scalars().all())
+
+    if now_date.year > last_run_date.year:
+        movie_year_result = await db.execute(
+            select(MediaItem.id)
+            .join(WatchlistItem, WatchlistItem.media_item_id == MediaItem.id)
+            .where(
+                WatchlistItem.user_id == user_id,
+                WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
+                MediaItem.media_type == "movie",
+                MediaItem.release_date.is_(None),
+                MediaItem.year.is_not(None),
+                MediaItem.year > last_run_date.year,
+                MediaItem.year <= now_date.year,
+            )
+        )
+        media_ids.update(movie_year_result.scalars().all())
+
+    missing_episodes_result = await db.execute(
+        select(MediaItem.id)
+        .join(WatchlistItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
+            MediaItem.media_type == "tv",
+            ~exists(
+                select(EpisodeItem.id).where(
+                    EpisodeItem.show_media_item_id == MediaItem.id
+                )
+            ),
+        )
+    )
+    media_ids.update(missing_episodes_result.scalars().all())
+
+    if not media_ids:
+        return []
+
+    result = await db.execute(base_query.where(MediaItem.id.in_(media_ids)))
+    return result.all()
 
 
 async def _backfill_missing_show_episodes(
@@ -129,12 +254,11 @@ async def _refresh_movie_status(
     )
 
     if item.status != new_status:
-        item.status = new_status
-        item.updated_at = datetime.now(timezone.utc)
-        await log_watchlist_event(
+        await apply_watchlist_status_change(
             db,
+            item,
             user_id,
             media.id,
-            "watchlist_status_changed",
-            {"status": new_status, "reason": "release_date_check"},
+            new_status,
+            reason="release_date_check",
         )

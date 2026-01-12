@@ -13,6 +13,7 @@ from librarysync.connectors.services.simkl import SimklError
 from librarysync.connectors.services.trakt import TraktError
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
+    apply_watchlist_status_change,
     determine_movie_watchlist_status,
     determine_show_watchlist_status,
     log_watchlist_event,
@@ -600,16 +601,15 @@ async def list_watchlist_items(
             )
 
         if item.status != "removed" and item.status != desired_status:
-            item.status = desired_status
-            item.updated_at = datetime.now(timezone.utc)
-            await log_watchlist_event(
+            if await apply_watchlist_status_change(
                 db,
+                item,
                 current_user.id,
                 media.id,
-                "watchlist_status_changed",
-                {"status": desired_status, "reason": "auto_evaluation"},
-            )
-            status_changed = True
+                desired_status,
+                reason="auto_evaluation",
+            ):
+                status_changed = True
 
         items.append(
             WatchlistItemOut(
@@ -954,16 +954,15 @@ async def _refresh_watchlist_statuses_for_filter(
             )
 
         if item.status != desired_status:
-            item.status = desired_status
-            item.updated_at = datetime.now(timezone.utc)
-            await log_watchlist_event(
+            if await apply_watchlist_status_change(
                 db,
+                item,
                 user_id,
                 media.id,
-                "watchlist_status_changed",
-                {"status": desired_status, "reason": "auto_evaluation"},
-            )
-            status_changed = True
+                desired_status,
+                reason="auto_evaluation",
+            ):
+                status_changed = True
 
     if status_changed:
         await db.commit()
