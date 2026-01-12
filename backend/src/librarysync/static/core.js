@@ -129,12 +129,12 @@ function initThemeToggle() {
 }
 
 function initMobileMenu() {
-  const toggleButton = document.querySelector("[data-mobile-menu-toggle]");
+  const toggleButtons = Array.from(document.querySelectorAll("[data-mobile-menu-toggle]"));
   const closeButton = document.querySelector("[data-mobile-menu-close]");
   const backdrop = document.querySelector("[data-mobile-menu-backdrop]");
   const panel = document.querySelector("[data-mobile-menu-panel]");
 
-  if (!toggleButton || !panel || !backdrop) {
+  if (!toggleButtons.length || !panel || !backdrop) {
     return;
   }
 
@@ -142,27 +142,40 @@ function initMobileMenu() {
     console.warn("Mobile menu close button not found");
   }
 
+  const setExpanded = (value) => {
+    toggleButtons.forEach((button) => {
+      button.setAttribute("aria-expanded", value ? "true" : "false");
+    });
+  };
+
   function openMenu() {
     panel.classList.add("is-open");
     backdrop.classList.add("is-open");
-    toggleButton.setAttribute("aria-expanded", "true");
+    panel.setAttribute("aria-hidden", "false");
+    setExpanded(true);
     document.body.style.overflow = "hidden";
   }
 
   function closeMenu() {
     panel.classList.remove("is-open");
     backdrop.classList.remove("is-open");
-    toggleButton.setAttribute("aria-expanded", "false");
+    panel.setAttribute("aria-hidden", "true");
+    setExpanded(false);
     document.body.style.overflow = "";
   }
 
-  toggleButton.addEventListener("click", () => {
-    const isOpen = panel.classList.contains("is-open");
-    if (isOpen) {
-      closeMenu();
-    } else {
-      openMenu();
+  toggleButtons.forEach((button) => {
+    if (panel.id && !button.hasAttribute("aria-controls")) {
+      button.setAttribute("aria-controls", panel.id);
     }
+    button.addEventListener("click", () => {
+      const isOpen = panel.classList.contains("is-open");
+      if (isOpen) {
+        closeMenu();
+      } else {
+        openMenu();
+      }
+    });
   });
 
   if (closeButton) {
@@ -171,7 +184,7 @@ function initMobileMenu() {
 
   backdrop.addEventListener("click", closeMenu);
 
-  panel.querySelectorAll("a").forEach((link) => {
+  panel.querySelectorAll("a, button[data-logout]").forEach((link) => {
     link.addEventListener("click", closeMenu);
   });
 
