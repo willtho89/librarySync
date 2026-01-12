@@ -13,6 +13,7 @@ VERSION_FILES = (
     ROOT / "backend/pyproject.toml",
     ROOT / "worker/pyproject.toml",
 )
+UV_LOCK = ROOT / "uv.lock"
 
 VERSION_LINE = re.compile(r'^(?P<indent>\s*)version\s*=\s*"(?P<version>[^"]+)"\s*$')
 SEMVER = re.compile(
@@ -132,9 +133,7 @@ def main() -> int:
 
     if args.version:
         if not SEMVER.match(args.version):
-            raise SystemExit(
-                f'Provided version "{args.version}" is not semver (x.y.z).'
-            )
+            raise SystemExit(f'Provided version "{args.version}" is not semver (x.y.z).')
         new_version = args.version
     else:
         part = "major" if args.major else "minor" if args.minor else "patch"
@@ -153,14 +152,19 @@ def main() -> int:
         set_version(path, new_version)
         print(f"Updated {path.relative_to(ROOT)} to {new_version}.")
 
+    run(["uv", "lock"])
+    print(f"Updated {UV_LOCK.relative_to(ROOT)}.")
+
     tag_name = f"{args.tag_prefix}{new_version}"
 
     if not args.no_commit:
-        run(["git", "add", str(VERSION_FILES[0]), str(VERSION_FILES[1])])
+        run(["git", "add", str(VERSION_FILES[0]), str(VERSION_FILES[1]), str(UV_LOCK)])
         run(["git", "commit", "-m", f"Release {tag_name}"])
+        run(["git", "push"])
 
     if not args.no_tag:
         run(["git", "tag", "-a", tag_name, "-m", tag_name])
+        run(["git", "push", "--tags"])
 
     if not args.no_release:
         if not shutil.which("gh"):
