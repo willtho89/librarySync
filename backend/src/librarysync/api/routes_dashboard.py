@@ -27,7 +27,7 @@ async def get_dashboard_stats(
     """
     Get dashboard statistics including:
     - Watch statistics (movies/shows watched, ratings)
-    - Activity over time (last 90 days)
+    - Activity over time (last 30 days)
     - Rating distribution
     - Integration summary
     - System statistics
@@ -82,7 +82,7 @@ async def get_dashboard_stats(
             "total_watch_days": 0,
         }
 
-    # Get daily activity (last 90 days)
+    # Get daily activity (last 30 days)
     daily_activity_query = text("""
         SELECT
             watch_date,
@@ -210,7 +210,7 @@ async def get_dashboard_stats(
     )
     last_30_days_count = last_30_days_result.scalar() or 0
 
-    # Get overall daily activity (last 90 days) excluding current user for comparison
+    # Get overall daily activity (last 30 days) excluding current user for comparison
     overall_daily_activity_query = text("""
         SELECT
             DATE(w.watched_at AT TIME ZONE 'UTC') as watch_date,
@@ -218,7 +218,7 @@ async def get_dashboard_stats(
             COUNT(DISTINCT CASE WHEN w.episode_item_id IS NOT NULL THEN w.id END) as episodes_count
         FROM watched_items w
         LEFT JOIN media_items m ON w.media_item_id = m.id
-        WHERE w.watched_at >= NOW() - INTERVAL '90 days'
+        WHERE w.watched_at >= NOW() - INTERVAL '30 days'
         AND w.user_id != :user_id
         GROUP BY DATE(w.watched_at AT TIME ZONE 'UTC')
         ORDER BY watch_date ASC
