@@ -8,6 +8,8 @@ const watchlistState = {
     source: "all",
     search: "",
     watchedDisplay: "overlay", // hide, overlay, show
+    orderBy: "date_added",
+    orderDir: "desc",
   },
   searchTimer: null,
 };
@@ -54,7 +56,9 @@ function watchlistHasActiveFilters() {
     (watchlistState.filters.search && watchlistState.filters.search.trim()) ||
     watchlistState.filters.status !== "all" ||
     watchlistState.filters.mediaType !== "all" ||
-    watchlistState.filters.source !== "all"
+    watchlistState.filters.source !== "all" ||
+    watchlistState.filters.orderBy !== "date_added" ||
+    watchlistState.filters.orderDir !== "desc"
   );
 }
 
@@ -88,6 +92,9 @@ function buildWatchlistQueryParams() {
   if (watchlistState.filters.search && watchlistState.filters.search.trim()) {
     params.set("search", watchlistState.filters.search.trim());
   }
+
+  params.set("order_by", watchlistState.filters.orderBy);
+  params.set("order_dir", watchlistState.filters.orderDir);
 
   return params;
 }
@@ -537,6 +544,26 @@ function bindWatchlistUi() {
             loadWatchlist();
         });
     }
+
+    const orderBySelect = document.getElementById("watchlist-order-by");
+    if (orderBySelect) {
+        orderBySelect.value = watchlistState.filters.orderBy;
+        orderBySelect.addEventListener("change", () => {
+            watchlistState.filters.orderBy = orderBySelect.value;
+            watchlistState.page = 1;
+            loadWatchlist();
+        });
+    }
+
+    const orderDirSelect = document.getElementById("watchlist-order-dir");
+    if (orderDirSelect) {
+        orderDirSelect.value = watchlistState.filters.orderDir;
+        orderDirSelect.addEventListener("change", () => {
+            watchlistState.filters.orderDir = orderDirSelect.value;
+            watchlistState.page = 1;
+            loadWatchlist();
+        });
+    }
     
     const pageSizeSelect = document.getElementById("watchlist-page-size");
     if (pageSizeSelect) {
@@ -576,12 +603,16 @@ function bindWatchlistUi() {
             watchlistState.filters.status = "all";
             watchlistState.filters.source = "all";
             watchlistState.filters.mediaType = "all";
+            watchlistState.filters.orderBy = "date_added";
+            watchlistState.filters.orderDir = "desc";
             watchlistState.page = 1;
 
             if (searchInput) searchInput.value = "";
             if (statusSelect) statusSelect.value = "all";
             if (sourceSelect) sourceSelect.value = "all";
             if (typeSelect) typeSelect.value = "all";
+            if (orderBySelect) orderBySelect.value = "date_added";
+            if (orderDirSelect) orderDirSelect.value = "desc";
             // Don't reset watchedDisplay as it's more of a view preference?
             // History clears everything. Let's clear everything but maybe watchedDisplay?
             // Actually history clears "Type" and "Source".

@@ -11,6 +11,11 @@ from librarysync.api.deps import get_current_user, get_db
 from librarysync.connectors.services.letterboxd import LetterboxdError
 from librarysync.connectors.services.simkl import SimklError
 from librarysync.connectors.services.trakt import TraktError
+from librarysync.core.catalog_ordering import (
+    CatalogOrderBy,
+    CatalogOrderDirection,
+    apply_catalog_ordering,
+)
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
     apply_watchlist_status_change,
@@ -481,6 +486,12 @@ async def list_watchlist_items(
     media_type: Literal["movie", "tv", "anime"] | None = Query(None),
     search: str | None = Query(None, max_length=200),
     source: str | None = Query(None, max_length=32),
+    order_by: CatalogOrderBy = Query(
+        "date_added",
+        description="Order by: date_added, release_date, last_watched, episodes_left, "
+        "progress, last_episode_air_date, next_episode_air_date",
+    ),
+    order_dir: CatalogOrderDirection = Query("desc", description="Order direction"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -512,18 +523,20 @@ async def list_watchlist_items(
         if normalized_source == "manual":
             query = query.where(WatchlistItem.source == "manual")
         elif normalized_source:
-            query = (
-                query.join(
-                    WatchlistSourceItem,
-                    WatchlistItem.id == WatchlistSourceItem.watchlist_item_id,
-                )
+            source_match = (
+                select(1)
+                .select_from(WatchlistSourceItem)
                 .join(
                     WatchlistSource,
                     WatchlistSourceItem.source_id == WatchlistSource.id,
                 )
-                .where(WatchlistSource.provider == normalized_source)
-                .distinct()
+                .where(
+                    WatchlistSourceItem.watchlist_item_id == WatchlistItem.id,
+                    WatchlistSourceItem.user_id == current_user.id,
+                    WatchlistSource.provider == normalized_source,
+                )
             )
+            query = query.where(source_match.exists())
 
     if search:
         normalized_search = search.strip()
@@ -546,7 +559,18 @@ async def list_watchlist_items(
     total_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = int(total_result.scalar() or 0)
 
-    query = query.order_by(WatchlistItem.updated_at.desc()).offset(offset).limit(limit)
+    release_date_expr = func.coalesce(MediaItem.release_date, MediaItem.first_air_date)
+    query = apply_catalog_ordering(
+        query,
+        order_by=order_by,
+        order_dir=order_dir,
+        user_id=current_user.id,
+        date_added_col=WatchlistItem.created_at,
+        release_date_col=release_date_expr,
+        base_media_id_col=MediaItem.id,
+        tie_breaker_col=WatchlistItem.id,
+    )
+    query = query.offset(offset).limit(limit)
     result = await db.execute(query)
     rows = result.all()
     source_map: dict[str, list[WatchlistItemSourceOut]] = {}

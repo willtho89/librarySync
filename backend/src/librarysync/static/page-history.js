@@ -6,6 +6,8 @@ const historyState = {
     search: "",
     mediaType: "all",
     source: "all",
+    orderBy: "last_watched",
+    orderDir: "desc",
   },
   searchTimer: null,
 };
@@ -20,7 +22,9 @@ function historyHasActiveFilters() {
   return (
     (historyState.filters.search && historyState.filters.search.trim()) ||
     historyState.filters.mediaType !== "all" ||
-    historyState.filters.source !== "all"
+    historyState.filters.source !== "all" ||
+    historyState.filters.orderBy !== "last_watched" ||
+    historyState.filters.orderDir !== "desc"
   );
 }
 
@@ -37,6 +41,8 @@ function buildHistoryQueryParams() {
   if (historyState.filters.source !== "all") {
     params.set("source", historyState.filters.source);
   }
+  params.set("order_by", historyState.filters.orderBy);
+  params.set("order_dir", historyState.filters.orderDir);
   return params;
 }
 
@@ -202,6 +208,24 @@ function bindHistoryUi() {
       loadHistory();
     });
   }
+  const orderBySelect = document.getElementById("history-order-by");
+  if (orderBySelect) {
+    orderBySelect.value = historyState.filters.orderBy;
+    orderBySelect.addEventListener("change", () => {
+      historyState.filters.orderBy = orderBySelect.value;
+      historyState.page = 1;
+      loadHistory();
+    });
+  }
+  const orderDirSelect = document.getElementById("history-order-dir");
+  if (orderDirSelect) {
+    orderDirSelect.value = historyState.filters.orderDir;
+    orderDirSelect.addEventListener("change", () => {
+      historyState.filters.orderDir = orderDirSelect.value;
+      historyState.page = 1;
+      loadHistory();
+    });
+  }
   const pageSizeSelect = document.getElementById("history-page-size");
   if (pageSizeSelect) {
     pageSizeSelect.value = String(historyState.pageSize);
@@ -242,6 +266,8 @@ function bindHistoryUi() {
       historyState.filters.search = "";
       historyState.filters.mediaType = "all";
       historyState.filters.source = "all";
+      historyState.filters.orderBy = "last_watched";
+      historyState.filters.orderDir = "desc";
       historyState.page = 1;
       if (searchInput) {
         searchInput.value = "";
@@ -251,6 +277,12 @@ function bindHistoryUi() {
       }
       if (sourceSelect) {
         sourceSelect.value = "all";
+      }
+      if (orderBySelect) {
+        orderBySelect.value = "last_watched";
+      }
+      if (orderDirSelect) {
+        orderDirSelect.value = "desc";
       }
       loadHistory();
     });

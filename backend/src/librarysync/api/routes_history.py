@@ -9,6 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from librarysync.api.deps import get_current_user, get_db
+from librarysync.core.catalog_ordering import (
+    CatalogOrderBy,
+    CatalogOrderDirection,
+    apply_catalog_ordering,
+)
 from librarysync.core.ratings import normalize_star_rating
 from librarysync.core.watch_pipeline import (
     SYNC_COORDINATOR,
@@ -330,7 +335,7 @@ async def add_watched_item(
 @router.get(
     "/items",
     summary="List watched items",
-    description="Return the current user's watched history, newest first.",
+    description="Return the current user's watched history.",
 )
 async def list_watched_items(
     limit: int = Query(100, ge=1, le=500),
@@ -338,6 +343,12 @@ async def list_watched_items(
     search: str | None = Query(None, max_length=200),
     media_type: Literal["movie", "tv", "anime"] | None = Query(None),
     source: str | None = Query(None, max_length=32),
+    order_by: CatalogOrderBy = Query(
+        "last_watched",
+        description="Order by: date_added, release_date, last_watched, episodes_left, "
+        "progress, last_episode_air_date, next_episode_air_date",
+    ),
+    order_dir: CatalogOrderDirection = Query("desc", description="Order direction"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -401,7 +412,7 @@ async def list_watched_items(
     )
     total = int(total_result.scalar() or 0)
 
-    result = await db.execute(
+    query = (
         select(
             WatchedItem,
             MediaItem,
@@ -452,10 +463,27 @@ async def list_watched_items(
             ),
         )
         .where(*filters)
-        .order_by(WatchedItem.watched_at.desc())
-        .offset(offset)
-        .limit(limit)
     )
+    release_date_expr = func.coalesce(
+        MediaItem.release_date,
+        MediaItem.first_air_date,
+        show_item.release_date,
+        show_item.first_air_date,
+    )
+    base_media_id = func.coalesce(MediaItem.id, show_item.id)
+    query = apply_catalog_ordering(
+        query,
+        order_by=order_by,
+        order_dir=order_dir,
+        user_id=current_user.id,
+        date_added_col=WatchedItem.created_at,
+        release_date_col=release_date_expr,
+        base_media_id_col=base_media_id,
+        last_watched_col=WatchedItem.watched_at,
+        tie_breaker_col=WatchedItem.id,
+    )
+    query = query.offset(offset).limit(limit)
+    result = await db.execute(query)
     items = []
     for (
         watched,
@@ -1203,7 +1231,6 @@ def _merge_history_items(items: list[dict]) -> list[dict]:
             ):
                 merged_item["title"] = title
         merged.append(merged_item)
-    merged.sort(key=lambda entry: entry.get("watched_at"), reverse=True)
     return merged
 
 

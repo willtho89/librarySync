@@ -54,6 +54,25 @@
               <option value="anime">Anime</option>
             </select>
           </label>
+          <label class="field min-w-[190px]">
+            <span>Order by</span>
+            <select id="watchlist-order-by" class="select">
+              <option value="date_added" selected>Date added</option>
+              <option value="release_date">Release date</option>
+              <option value="last_watched">Last watched</option>
+              <option value="episodes_left">Episodes left</option>
+              <option value="progress">Progress</option>
+              <option value="last_episode_air_date">Last episode air date</option>
+              <option value="next_episode_air_date">Next episode air date</option>
+            </select>
+          </label>
+          <label class="field min-w-[140px]">
+            <span>Direction</span>
+            <select id="watchlist-order-dir" class="select">
+              <option value="desc" selected>Descending</option>
+              <option value="asc">Ascending</option>
+            </select>
+          </label>
           <label class="field min-w-[120px]">
             <span>Per page</span>
             <select id="watchlist-page-size" class="select">
