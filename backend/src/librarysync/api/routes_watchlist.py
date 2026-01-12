@@ -755,11 +755,17 @@ async def mark_watchlist_item_watched(
             )
 
         # b) Get watched episodes
+        # Use a JOIN to properly filter watched episodes for this show
         watched_result = await db.execute(
-            select(WatchedItem.episode_item_id).where(
+            select(WatchedItem.episode_item_id)
+            .join(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
+            .where(
                 WatchedItem.user_id == current_user.id,
-                WatchedItem.media_item_id is None,
-                WatchedItem.episode_item_id.in_([e.id for e in released_episodes]),
+                WatchedItem.media_item_id.is_(None),
+                EpisodeItem.show_media_item_id == media_item.id,
+                EpisodeItem.air_date.is_not(None),
+                EpisodeItem.air_date <= now_date,
+                EpisodeItem.season_number > 0,
             )
         )
         watched_episode_ids = set(watched_result.scalars().all())
