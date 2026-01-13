@@ -6,7 +6,8 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_admin_api_key, get_db
-from librarysync.db.models import OutboxJob, ScheduledJob, WatchEvent
+from librarysync.db.models import OutboxJob, ScheduledJob, User, WatchEvent
+from librarysync.jobs.merge_history import merge_history_for_user
 from librarysync.jobs.metadata_backfill import (
     METADATA_BACKFILL_FORCE_JOB,
     METADATA_BACKFILL_JOB,
@@ -234,9 +235,7 @@ async def schedule_metadata_cache(
     _: str = Depends(get_admin_api_key),
 ) -> JSONResponse:
     now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(ScheduledJob).where(ScheduledJob.name == METADATA_CACHE_JOB)
-    )
+    result = await db.execute(select(ScheduledJob).where(ScheduledJob.name == METADATA_CACHE_JOB))
     job = result.scalars().first()
     if not job:
         job = ScheduledJob(name=METADATA_CACHE_JOB, next_run_at=now)
@@ -291,9 +290,7 @@ async def reset_import_history(
     if user_id:
         conditions.append(WatchEvent.user_id == user_id)
 
-    count_result = await db.execute(
-        select(func.count()).select_from(WatchEvent).where(*conditions)
-    )
+    count_result = await db.execute(select(func.count()).select_from(WatchEvent).where(*conditions))
     count = int(count_result.scalar_one() or 0)
     if dry_run:
         return JSONResponse(
@@ -318,5 +315,42 @@ async def reset_import_history(
             "provider": normalized,
             "user_id": user_id,
             "event_types": event_types,
+        }
+    )
+
+
+@router.post(
+    "/merge-history",
+    summary="Merge duplicate history entries",
+    description="Merge duplicate watched history entries for users to fix pagination issues.",
+)
+async def merge_history(
+    user_id: str | None = Query(
+        None, description="User ID to merge for. Omit to merge for all users."
+    ),
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_admin_api_key),
+) -> JSONResponse:
+    if user_id:
+        users = [user_id]
+    else:
+        result = await db.execute(select(User.id))
+        users = [row[0] for row in result.all()]
+
+    total_merged = 0
+    user_results = []
+    for uid in users:
+        try:
+            merged = await merge_history_for_user(db, uid)
+            total_merged += merged
+            user_results.append({"user_id": uid, "merged_count": merged})
+        except Exception as e:
+            user_results.append({"user_id": uid, "error": str(e)})
+
+    return JSONResponse(
+        {
+            "message": "History merge completed",
+            "total_merged": total_merged,
+            "user_results": user_results,
         }
     )

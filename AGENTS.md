@@ -164,7 +164,7 @@ librarySync/
 
 ## 7) Worker Modes & Jobs
 
-- `LIBRARYSYNC_WORKER_MODES`: `outbox`, `metadata`, `metadata_cache`, `quick_import`, `import_all`, `watchlist`.
+- `LIBRARYSYNC_WORKER_MODES`: `outbox`, `metadata`, `metadata_cache`, `quick_import`, `import_all`, `watchlist`, `merge_all_history`.
 - `process_outbox` handles `push_watched`, `push_rating`, `update_history`,
   `remove_history`, `update_log_entry`, `delete_log_entry`, `remove_watched`,
   and internal `new_item_added`.
@@ -172,6 +172,7 @@ librarySync/
 - `metadata_cache` scans recent lookup candidates and seeds `media_items` to speed up add-menu searches.
 - `quick_import` runs the 7-day import window; `import_all` sequences providers per user.
   `merge_history` runs after quick/import-all to dedupe same-day movie entries and repoint sync/outbox rows.
+- `merge_all_history` runs periodically to permanently dedupe watched history entries in DB for all users (API still merges on-the-fly until DB is clean).
 
 ---
 
@@ -231,6 +232,7 @@ librarySync/
 ### Admin (requires `X-API-Key`)
 - `POST /api/admin/reset-outbox-jobs`
 - `DELETE /api/admin/purge-jobs`
+- `POST /api/admin/merge-history`
 
 ---
 
