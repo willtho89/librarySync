@@ -564,7 +564,7 @@ class HistorySyncStrategy(SyncStrategy):
         if watch_sync and watch_sync.status in {"pending", "in_progress"} and not force:
             return
 
-        same_day_synced = await _has_same_day_synced_watch(
+        has_same_day_synced_watch = await _has_same_day_synced_watch(
             db,
             watched.user_id,
             media_item.id if not episode_item else None,
@@ -575,7 +575,7 @@ class HistorySyncStrategy(SyncStrategy):
         )
         now = datetime.now(timezone.utc)
         watch_status = "pending"
-        if same_day_synced and watched.rating is None:
+        if has_same_day_synced_watch and watched.rating is None:
             watch_status = "assumed_tracked"
 
         if not watch_sync:
@@ -598,7 +598,7 @@ class HistorySyncStrategy(SyncStrategy):
 
         payload["watch_sync_id"] = watch_sync.id
         payload["watched_item_id"] = watched.id
-        if watch_status != "assumed_tracked" and not same_day_synced:
+        if watch_status != "assumed_tracked" and not has_same_day_synced_watch:
             await enqueue_outbox_job(
                 db,
                 user_id=watched.user_id,
