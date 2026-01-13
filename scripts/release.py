@@ -11,7 +11,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILES = (
     ROOT / "backend/pyproject.toml",
-    ROOT / "worker/pyproject.toml",
 )
 UV_LOCK = ROOT / "uv.lock"
 
@@ -83,7 +82,7 @@ def ensure_clean_worktree() -> None:
 
 
 def run_checks() -> None:
-    run(["uv", "run", "ruff", "check", "./backend/", "./worker/"])
+    run(["uv", "run", "ruff", "check", "./backend/"])
     run(["uv", "run", "python", "-m", "unittest", "discover", "backend/tests"])
 
 
@@ -122,14 +121,7 @@ def main() -> int:
     if not args.version and not (args.major or args.minor or args.patch):
         parser.error("Provide a version or one of --major/--minor/--patch.")
 
-    current_backend = get_version(VERSION_FILES[0])
-    current_worker = get_version(VERSION_FILES[1])
-    if current_backend != current_worker:
-        print(
-            f"Warning: backend is {current_backend} but worker is {current_worker}.",
-            file=sys.stderr,
-        )
-    base_version = current_backend
+    base_version = get_version(VERSION_FILES[0])
 
     if args.version:
         if not SEMVER.match(args.version):
@@ -158,7 +150,7 @@ def main() -> int:
     tag_name = f"{args.tag_prefix}{new_version}"
 
     if not args.no_commit:
-        run(["git", "add", str(VERSION_FILES[0]), str(VERSION_FILES[1]), str(UV_LOCK)])
+        run(["git", "add", str(VERSION_FILES[0]), str(UV_LOCK)])
         run(["git", "commit", "-m", f"Release {tag_name}"])
         run(["git", "push"])
 

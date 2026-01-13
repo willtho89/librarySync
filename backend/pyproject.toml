@@ -19,6 +19,8 @@ dependencies = [
   "httpx>=0.27",
   "passlib[bcrypt]>=1.7",
   "python-jose[cryptography]>=3.3",
+  "greenlet>=3.0",
+  "parsett",
 ]
 
 [tool.setuptools.packages.find]

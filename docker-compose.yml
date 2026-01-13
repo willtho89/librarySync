@@ -1,6 +1,7 @@
 x-worker-base: &worker-base
-  image: ghcr.io/willtho89/librarysync-worker:latest
+  image: ghcr.io/willtho89/librarysync:latest
   env_file: .env
+  command: ["python", "-m", "librarysync.worker"]
   depends_on:
     db:
       condition: service_healthy
@@ -38,7 +39,7 @@ services:
       start_period: 5s
 
   api:
-    image: ghcr.io/willtho89/librarysync-backend:latest
+    image: ghcr.io/willtho89/librarysync:latest
     env_file: .env
     depends_on:
       db:

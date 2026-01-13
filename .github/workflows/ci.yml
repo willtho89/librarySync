@@ -19,18 +19,17 @@ jobs:
           cache: "pip"
           cache-dependency-path: |
             backend/pyproject.toml
-            worker/pyproject.toml
 
       - name: Install dependencies
         env:
           PIP_IGNORE_REQUIRES_PYTHON: "1"
         run: |
           python -m pip install --upgrade pip
-          pip install -e backend -e worker
+          pip install -e backend
           pip install ruff
 
       - name: Ruff
-        run: ruff check backend/src worker/src
+        run: ruff check backend/src
 
       - name: Unit tests
         env:

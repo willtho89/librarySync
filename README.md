@@ -103,17 +103,17 @@ Example values (replace `example.com` with your domain):
 3. Run API:
    `cd backend && uv run uvicorn librarysync.main:app --reload`
 4. Run worker:
-   `cd worker && uv run python -m librarysync_worker.main`
+   `cd backend && uv run python -m librarysync.worker`
 5. Lint:
-   `uv run ruff check ./backend/ ./worker/`
+   `uv run ruff check ./backend/`
 
 If you’re using `docker compose` with the `scaled-workers` profile, `worker-metadata-cache`
 is now available and will run the metadata cache loop (`LIBRARYSYNC_WORKER_MODES=metadata_cache`).
 
 ## Release
 
-Use the release helper to bump versions in both `backend/pyproject.toml` and
-`worker/pyproject.toml`, tag, and create a GitHub release.
+Use the release helper to bump the version in `backend/pyproject.toml`, tag,
+and create a GitHub release.
 
 Examples:
 - `python scripts/release.py --patch`

@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["backend", "worker"]
+members = ["backend"]
 
 [tool.ruff]
 line-length = 100

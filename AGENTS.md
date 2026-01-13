@@ -52,6 +52,7 @@ librarySync/
     pyproject.toml
     src/librarysync/
       main.py                  # FastAPI app entry
+      worker.py                # Async worker entrypoint
       config.py                # env/config handling
       db/
         models.py
@@ -127,11 +128,6 @@ librarySync/
          watchlist.html
          offline.html
 
-  worker/
-    Dockerfile
-    pyproject.toml
-    src/librarysync_worker/
-      main.py
 ```
 
 ---
