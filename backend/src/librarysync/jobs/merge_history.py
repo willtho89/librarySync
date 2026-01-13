@@ -98,7 +98,11 @@ async def merge_history_for_user(db: AsyncSession, user_id: str) -> int:
         .order_by(WatchedItem.watched_at)
     )
     rows = [
-        WatchedRow(watched, media or show, episode)
+        WatchedRow(
+            watched,
+            (show or media) if episode is not None else media,
+            episode,
+        )
         for watched, media, show, episode in result.all()
     ]
     if not rows:
