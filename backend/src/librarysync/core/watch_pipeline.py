@@ -537,7 +537,23 @@ class HistorySyncStrategy(SyncStrategy):
             watched.watched_at,
             watched.rating,
         )
+        if not payload and force:
+            await enrich_watched_metadata(db, watched.user_id, media_item, episode_item)
+            payload = self._config.build_payload(
+                media_item,
+                episode_item,
+                watched.watched_at,
+                watched.rating,
+            )
         if not payload:
+            if force:
+                await _mark_sync_failed(
+                    db,
+                    watched,
+                    self.provider,
+                    is_rewatch,
+                    "Missing external IDs for sync",
+                )
             return
         if not await self._has_integration(db, watched.user_id):
             return
@@ -548,17 +564,18 @@ class HistorySyncStrategy(SyncStrategy):
         if watch_sync and watch_sync.status in {"pending", "in_progress"} and not force:
             return
 
-        same_day_duplicate = await _has_same_day_watch(
+        same_day_synced = await _has_same_day_synced_watch(
             db,
             watched.user_id,
             media_item.id if not episode_item else None,
             episode_item.id if episode_item else None,
             watched.watched_at,
+            self.provider,
             watched.id,
         )
         now = datetime.now(timezone.utc)
         watch_status = "pending"
-        if same_day_duplicate and watched.rating is None:
+        if same_day_synced and watched.rating is None:
             watch_status = "assumed_tracked"
 
         if not watch_sync:
@@ -581,7 +598,7 @@ class HistorySyncStrategy(SyncStrategy):
 
         payload["watch_sync_id"] = watch_sync.id
         payload["watched_item_id"] = watched.id
-        if watch_status != "assumed_tracked" and not same_day_duplicate:
+        if watch_status != "assumed_tracked" and not same_day_synced:
             await enqueue_outbox_job(
                 db,
                 user_id=watched.user_id,
@@ -832,20 +849,28 @@ async def _get_watch_sync(db: AsyncSession, watched_id: str, provider: str) -> W
     return result.scalars().first()
 
 
-async def _has_same_day_watch(
+async def _has_same_day_synced_watch(
     db: AsyncSession,
     user_id: str,
     media_item_id: str | None,
     episode_item_id: str | None,
     watched_at: datetime,
+    provider: str,
     exclude_watched_id: str | None = None,
 ) -> bool:
     if not media_item_id and not episode_item_id:
         return False
     target_date = watched_at.date()
-    query = select(WatchedItem.id).where(
-        WatchedItem.user_id == user_id,
-        func.date(WatchedItem.watched_at) == target_date,
+    confirmed_statuses = ("succeeded", f"synced_from_{provider}")
+    query = (
+        select(WatchedItem.id)
+        .join(WatchSync, WatchSync.watched_item_id == WatchedItem.id)
+        .where(
+            WatchedItem.user_id == user_id,
+            func.date(WatchedItem.watched_at) == target_date,
+            WatchSync.provider == provider,
+            WatchSync.status.in_(confirmed_statuses),
+        )
     )
     if media_item_id:
         query = query.where(WatchedItem.media_item_id == media_item_id)
@@ -856,6 +881,32 @@ async def _has_same_day_watch(
     query = query.limit(1)
     result = await db.execute(query)
     return result.scalars().first() is not None
+
+
+async def _mark_sync_failed(
+    db: AsyncSession,
+    watched: WatchedItem,
+    provider: str,
+    is_rewatch: bool,
+    error_message: str,
+) -> None:
+    watch_sync = await _get_watch_sync(db, watched.id, provider)
+    if not watch_sync:
+        watch_sync = WatchSync(
+            user_id=watched.user_id,
+            watched_item_id=watched.id,
+            provider=provider,
+            status="failed_permanent",
+            is_rewatch=is_rewatch,
+            last_error=error_message,
+        )
+        db.add(watch_sync)
+        return
+    watch_sync.status = "failed_permanent"
+    watch_sync.is_rewatch = is_rewatch
+    watch_sync.last_error = error_message
+    watch_sync.last_synced_at = None
+    db.add(watch_sync)
 
 
 def collect_external_ids(
