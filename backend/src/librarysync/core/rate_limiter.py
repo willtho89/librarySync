@@ -56,7 +56,8 @@ class RateLimiter:
             return None
         if now is None:
             now = datetime.now(timezone.utc)
-        async with db.begin():
+        begin_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+        async with begin_ctx:
             result = await db.execute(
                 select(RateLimitBucket)
                 .where(
