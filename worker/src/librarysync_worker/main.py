@@ -6,6 +6,10 @@ from typing import Awaitable, Callable
 
 from librarysync.config import settings
 from librarysync.jobs.imports import process_import_all_once, process_quick_import_once
+from librarysync.jobs.merge_history import (
+    process_merge_all_history_once,
+    process_merge_history_once,
+)
 from librarysync.jobs.metadata_backfill import process_metadata_backfill_once
 from librarysync.jobs.metadata_cache import process_metadata_cache_refresh_once
 from librarysync.jobs.metadata_lookup import process_metadata_lookups_once
@@ -31,6 +35,10 @@ MODE_CONFIGS: dict[str, ModeConfig] = {
     "quick_import": ModeConfig("quick_import", process_quick_import_once, 2.0, 0.5),
     "import_all": ModeConfig("import_all", process_import_all_once, 2.0, 0.5),
     "watchlist": ModeConfig("watchlist", process_watchlist_refresh_once, 60.0, 10.0),
+    "merge_history": ModeConfig("merge_history", process_merge_history_once, 60.0, 10.0),
+    "merge_all_history": ModeConfig(
+        "merge_all_history", process_merge_all_history_once, 86400.0, 3600.0
+    ),  # daily
 }
 
 

@@ -97,5 +97,17 @@ services:
     environment:
       LIBRARYSYNC_WORKER_MODES: metadata_cache
 
+  worker-metadata-backfill:
+    <<: *worker-base
+    profiles: ["scaled-workers"]
+    environment:
+      LIBRARYSYNC_WORKER_MODES: metadata_backfill
+
+  worker-history-merge:
+    <<: *worker-base
+    profiles: ["scaled-workers"]
+    environment:
+      LIBRARYSYNC_WORKER_MODES: merge_all_history
+
 volumes:
   pgdata:

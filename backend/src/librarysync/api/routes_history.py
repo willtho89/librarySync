@@ -262,9 +262,7 @@ async def add_watched_item(
             _apply_episode_id_update(episode_item, "imdb_id", episode_ids.get("imdb_id"))
             _apply_episode_id_update(episode_item, "tmdb_id", episode_ids.get("tmdb_id"))
             _apply_episode_id_update(episode_item, "tvdb_id", episode_ids.get("tvdb_id"))
-            _apply_episode_id_update(
-                episode_item, "tvmaze_id", episode_ids.get("tvmaze_id")
-            )
+            _apply_episode_id_update(episode_item, "tvmaze_id", episode_ids.get("tvmaze_id"))
             if payload.episode_title and not episode_item.title:
                 episode_item.title = payload.episode_title
         episode_ids = {
@@ -361,9 +359,7 @@ async def list_watched_items(
     anilist_sync = aliased(WatchSync)
     filters = [WatchedItem.user_id == current_user.id]
     if media_type:
-        filters.append(
-            or_(MediaItem.media_type == media_type, show_item.media_type == media_type)
-        )
+        filters.append(or_(MediaItem.media_type == media_type, show_item.media_type == media_type))
     if source:
         normalized_source = source.strip().lower()
         if normalized_source:
@@ -398,9 +394,7 @@ async def list_watched_items(
         ]
         if normalized_search.isdigit() and len(normalized_search) == 4:
             year_value = int(normalized_search)
-            search_clauses.extend(
-                [MediaItem.year == year_value, show_item.year == year_value]
-            )
+            search_clauses.extend([MediaItem.year == year_value, show_item.year == year_value])
         filters.append(or_(*search_clauses))
 
     total_result = await db.execute(
@@ -735,9 +729,7 @@ async def clear_import_history(
 ) -> dict:
     provider = payload.provider.strip().lower()
     if provider not in IMPORT_EVENT_PROVIDERS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported provider"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported provider")
     event_types = [f"{provider}_imported"]
     if payload.include_blacklisted:
         event_types.append(f"{provider}_blacklisted")
@@ -745,9 +737,7 @@ async def clear_import_history(
         WatchEvent.user_id == current_user.id,
         WatchEvent.event_type.in_(event_types),
     ]
-    result = await db.execute(
-        select(func.count()).select_from(WatchEvent).where(*conditions)
-    )
+    result = await db.execute(select(func.count()).select_from(WatchEvent).where(*conditions))
     count = int(result.scalar_one() or 0)
     if count:
         await db.execute(delete(WatchEvent).where(*conditions))
@@ -777,9 +767,7 @@ async def update_watched_item(
     )
     watched = result.scalars().first()
     if not watched:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watched entry not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watched entry not found")
 
     watched_at_updated = False
     rating_updated = False
@@ -840,9 +828,7 @@ async def update_watched_item(
             episode_item = result.scalars().first()
             if episode_item:
                 result = await db.execute(
-                    select(MediaItem).where(
-                        MediaItem.id == episode_item.show_media_item_id
-                    )
+                    select(MediaItem).where(MediaItem.id == episode_item.show_media_item_id)
                 )
                 show_item = result.scalars().first()
         if media_item or episode_item:
@@ -886,17 +872,13 @@ async def delete_watched_item(
     )
     row = result.first()
     if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watched entry not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watched entry not found")
 
     watched, media_item, episode_item, show_item = row
 
     event_raw: dict[str, object] = {
         "watched_id": watched.id,
-        "previous_watched_at": watched.watched_at.isoformat()
-        if watched.watched_at
-        else None,
+        "previous_watched_at": watched.watched_at.isoformat() if watched.watched_at else None,
     }
     if delete_integrations:
         event_raw["delete_integrations"] = True
@@ -971,9 +953,7 @@ async def bulk_delete_watched_items(
         delete_ids.append(watched.id)
         event_raw: dict[str, object] = {
             "watched_id": watched.id,
-            "previous_watched_at": watched.watched_at.isoformat()
-            if watched.watched_at
-            else None,
+            "previous_watched_at": watched.watched_at.isoformat() if watched.watched_at else None,
             "bulk_delete": True,
         }
         if payload.delete_integrations:
@@ -1052,9 +1032,7 @@ def _normalize_rating(value: object | None) -> float | None:
     try:
         return normalize_star_rating(value)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 def _has_episode_fields(payload: WatchedItemCreateIn) -> bool:
@@ -1167,18 +1145,22 @@ async def _is_rewatch(
 ) -> bool:
     if media_item_id:
         result = await db.execute(
-            select(WatchedItem.id).where(
+            select(WatchedItem.id)
+            .where(
                 WatchedItem.user_id == user_id,
                 WatchedItem.media_item_id == media_item_id,
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.scalars().first() is not None
     if episode_item_id:
         result = await db.execute(
-            select(WatchedItem.id).where(
+            select(WatchedItem.id)
+            .where(
                 WatchedItem.user_id == user_id,
                 WatchedItem.episode_item_id == episode_item_id,
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.scalars().first() is not None
     return False
@@ -1234,8 +1216,7 @@ def _merge_history_items(items: list[dict]) -> list[dict]:
         for item in group_items:
             title = item.get("title")
             if title and (
-                not merged_item.get("title")
-                or len(title) > len(str(merged_item.get("title")))
+                not merged_item.get("title") or len(title) > len(str(merged_item.get("title")))
             ):
                 merged_item["title"] = title
         merged.append(merged_item)
@@ -1270,20 +1251,14 @@ def _history_merge_keys(item: dict) -> list[str]:
             ):
                 value = item.get(label)
                 if value:
-                    keys.append(
-                        f"d:{date_key}:episode:{label}:{value}:s{season}e{episode}"
-                    )
+                    keys.append(f"d:{date_key}:episode:{label}:{value}:s{season}e{episode}")
             for label in ("imdb_id", "tmdb_id", "tvdb_id", "tvmaze_id"):
                 value = item.get(label)
                 if value:
-                    keys.append(
-                        f"d:{date_key}:show:{label}:{value}:s{season}e{episode}"
-                    )
+                    keys.append(f"d:{date_key}:show:{label}:{value}:s{season}e{episode}")
             title_key = _title_key(item.get("title"), item.get("year"))
             if title_key:
-                keys.append(
-                    f"d:{date_key}:show:title:{title_key}:s{season}e{episode}"
-                )
+                keys.append(f"d:{date_key}:show:title:{title_key}:s{season}e{episode}")
     if not keys:
         fallback_id = item.get("id") or "unknown"
         keys.append(f"d:{date_key}:id:{fallback_id}")
@@ -1420,9 +1395,7 @@ async def _find_media_item_by_ids(
         item = candidate
 
     if ids.get("imdb_id"):
-        result = await db.execute(
-            select(MediaItem).where(MediaItem.imdb_id == ids["imdb_id"])
-        )
+        result = await db.execute(select(MediaItem).where(MediaItem.imdb_id == ids["imdb_id"]))
         _set_item(result.scalars().first())
     if ids.get("tmdb_id"):
         result = await db.execute(
@@ -1497,19 +1470,13 @@ async def _find_episode_item_by_ids(
         item = candidate
 
     if ids.get("imdb_id"):
-        result = await db.execute(
-            select(EpisodeItem).where(EpisodeItem.imdb_id == ids["imdb_id"])
-        )
+        result = await db.execute(select(EpisodeItem).where(EpisodeItem.imdb_id == ids["imdb_id"]))
         _set_item(result.scalars().first())
     if ids.get("tmdb_id"):
-        result = await db.execute(
-            select(EpisodeItem).where(EpisodeItem.tmdb_id == ids["tmdb_id"])
-        )
+        result = await db.execute(select(EpisodeItem).where(EpisodeItem.tmdb_id == ids["tmdb_id"]))
         _set_item(result.scalars().first())
     if ids.get("tvdb_id"):
-        result = await db.execute(
-            select(EpisodeItem).where(EpisodeItem.tvdb_id == ids["tvdb_id"])
-        )
+        result = await db.execute(select(EpisodeItem).where(EpisodeItem.tvdb_id == ids["tvdb_id"]))
         _set_item(result.scalars().first())
     if ids.get("tvmaze_id"):
         result = await db.execute(

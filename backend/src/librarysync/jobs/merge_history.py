@@ -3,31 +3,77 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from librarysync.core.import_all import (
     DEFAULT_IMPORT_QUEUE_ORDER,
     IMPORT_ALL_PROVIDER,
     get_import_queue_order,
+    import_all_active,
+)
+from librarysync.core.import_control import (
+    MERGE_REQUIRED_AT_KEY,
+    mark_merge_completed,
+    mark_merge_failed,
+    merge_pending,
+    quick_import_active,
+)
+from librarysync.core.import_history import update_import_history_merge
+from librarysync.core.import_schedule import parse_datetime
+from librarysync.core.scheduler import (
+    claim_scheduled_job,
+    complete_scheduled_job,
+    extend_scheduled_job,
+    release_scheduled_job,
 )
 from librarysync.db.models import (
+    EpisodeItem,
     Integration,
     MediaItem,
     OutboxJob,
+    ScheduledJob,
+    User,
     WatchedItem,
     WatchSync,
 )
+from librarysync.db.session import SessionLocal, init_session_factory
 
 logger = logging.getLogger(__name__)
+MERGE_ALL_HISTORY_JOB = "merge_all_history"
+MERGE_ALL_HISTORY_INTERVAL = timedelta(days=1)
+MERGE_ALL_HISTORY_LEASE = timedelta(hours=2)
+MERGE_ALL_HISTORY_RETRY_DELAY = timedelta(hours=1)
+MERGE_PENDING_JOB = "merge_history"
+MERGE_PENDING_INTERVAL = timedelta(minutes=5)
+MERGE_PENDING_LEASE = timedelta(hours=1)
+MERGE_PENDING_RETRY_DELAY = timedelta(minutes=10)
+
+
+async def enqueue_merge_history(db: AsyncSession, now: datetime | None = None) -> None:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(ScheduledJob).where(ScheduledJob.name == MERGE_PENDING_JOB).with_for_update()
+    )
+    job = result.scalars().first()
+    if not job:
+        job = ScheduledJob(name=MERGE_PENDING_JOB, next_run_at=now)
+        db.add(job)
+        return
+    if job.next_run_at is None or job.next_run_at > now:
+        job.next_run_at = now
+        job.updated_at = now
 
 
 @dataclass
 class WatchedRow:
     watched: WatchedItem
     media: MediaItem
+    episode: EpisodeItem | None = None
 
 
 async def merge_history_for_user(db: AsyncSession, user_id: str) -> int:
@@ -42,37 +88,70 @@ async def merge_history_for_user(db: AsyncSession, user_id: str) -> int:
     if not queue_order:
         queue_order = list(DEFAULT_IMPORT_QUEUE_ORDER)
     priority_map = {provider: index for index, provider in enumerate(queue_order)}
+    show_item = aliased(MediaItem)
     result = await db.execute(
-        select(WatchedItem, MediaItem)
-        .join(MediaItem, WatchedItem.media_item_id == MediaItem.id)
-        .where(
-            WatchedItem.user_id == user_id,
-            MediaItem.media_type == "movie",
-        )
+        select(WatchedItem, MediaItem, show_item, EpisodeItem)
+        .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
+        .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .outerjoin(show_item, EpisodeItem.show_media_item_id == show_item.id)
+        .where(WatchedItem.user_id == user_id)
         .order_by(WatchedItem.watched_at)
     )
-    rows = [WatchedRow(watched, media) for watched, media in result.all()]
+    rows = [
+        WatchedRow(
+            watched,
+            (show or media) if episode is not None else media,
+            episode,
+        )
+        for watched, media, show, episode in result.all()
+    ]
     if not rows:
         return 0
-    merged_count = await _merge_movie_history(db, rows, priority_map)
+    merged_count = await _merge_history(db, rows, priority_map)
     if merged_count:
         logger.info("Merged %s watched entries for user %s", merged_count, user_id)
     return merged_count
 
 
-async def _merge_movie_history(
+async def _merge_history(
     db: AsyncSession,
     rows: list[WatchedRow],
     priority_map: dict[str, int],
 ) -> int:
-    grouped: dict[tuple[str, date], list[WatchedRow]] = {}
-    for row in rows:
-        watched_date = row.watched.watched_at.date()
-        key = (row.watched.user_id, watched_date)
-        grouped.setdefault(key, []).append(row)
+    movie_rows = [row for row in rows if row.episode is None]
+    tv_rows = [row for row in rows if row.episode is not None]
 
     merged = 0
-    for (user_id, watched_date), day_rows in grouped.items():
+    # Merge movies (same-day)
+    movie_grouped: dict[tuple[str, date], list[WatchedRow]] = {}
+    for row in movie_rows:
+        watched_date = row.watched.watched_at.date()
+        key = (row.watched.user_id, watched_date)
+        movie_grouped.setdefault(key, []).append(row)
+
+    for (user_id, watched_date), day_rows in movie_grouped.items():
+        clusters = _cluster_rows(day_rows)
+        for cluster in clusters:
+            if len(cluster) < 2:
+                continue
+            merged += await _merge_cluster(
+                db,
+                user_id,
+                watched_date,
+                cluster,
+                priority_map,
+            )
+
+    # Merge TV episodes (same-day per episode)
+    tv_grouped: dict[tuple[str, date, int, int], list[WatchedRow]] = {}
+    for row in tv_rows:
+        watched_date = row.watched.watched_at.date()
+        season = row.episode.season_number
+        episode = row.episode.episode_number
+        key = (row.watched.user_id, watched_date, season, episode)
+        tv_grouped.setdefault(key, []).append(row)
+
+    for (user_id, watched_date, season, episode), day_rows in tv_grouped.items():
         clusters = _cluster_rows(day_rows)
         for cluster in clusters:
             if len(cluster) < 2:
@@ -118,9 +197,7 @@ async def _merge_cluster(
 ) -> int:
     primary = max(cluster, key=lambda row: _row_sort_key(row, priority_map))
     if primary.watched.source == "letterboxd":
-        logger.debug(
-            "Merging letterboxd item on %s for user %s", watched_date, user_id
-        )
+        logger.debug("Merging letterboxd item on %s for user %s", watched_date, user_id)
     primary_media = primary.media
     primary_watched = primary.watched
 
@@ -148,13 +225,31 @@ async def _merge_cluster(
 def _merge_keys(row: WatchedRow) -> list[str]:
     media = row.media
     keys: list[str] = []
-    for label in ("imdb_id", "tmdb_id", "tvdb_id"):
-        value = getattr(media, label)
-        if value:
-            keys.append(f"id:{label}:{value}")
-    title_key = _title_key(media.title, media.year)
-    if title_key:
-        keys.append(f"title:{title_key}")
+    if row.episode:
+        # TV episode
+        episode = row.episode
+        for label in ("imdb_id", "tmdb_id", "tvdb_id", "tvmaze_id"):
+            value = getattr(episode, label)
+            if value:
+                keys.append(f"episode:id:{label}:{value}")
+        for label in ("imdb_id", "tmdb_id", "tvdb_id", "tvmaze_id"):
+            value = getattr(media, label)
+            if value:
+                keys.append(f"show:id:{label}:{value}")
+        title_key = _title_key(media.title, media.year)
+        if title_key:
+            season = episode.season_number
+            ep_num = episode.episode_number
+            keys.append(f"show:title:{title_key}:s{season}e{ep_num}")
+    else:
+        # Movie
+        for label in ("imdb_id", "tmdb_id", "tvdb_id"):
+            value = getattr(media, label)
+            if value:
+                keys.append(f"id:{label}:{value}")
+        title_key = _title_key(media.title, media.year)
+        if title_key:
+            keys.append(f"title:{title_key}")
     if not keys:
         keys.append(f"id:{row.watched.id}")
     return keys
@@ -163,12 +258,29 @@ def _merge_keys(row: WatchedRow) -> list[str]:
 def _row_sort_key(row: WatchedRow, priority_map: dict[str, int]) -> tuple[int, int]:
     score = 0
     media = row.media
-    if media.imdb_id:
-        score += 6
-    if media.tmdb_id:
-        score += 5
-    if media.tvdb_id:
-        score += 4
+    if row.episode:
+        episode = row.episode
+        if episode.imdb_id:
+            score += 6
+        if episode.tmdb_id:
+            score += 5
+        if episode.tvdb_id:
+            score += 4
+        if episode.tvmaze_id:
+            score += 3
+        if media.imdb_id:
+            score += 3
+        if media.tmdb_id:
+            score += 2
+        if media.tvdb_id:
+            score += 2
+    else:
+        if media.imdb_id:
+            score += 6
+        if media.tmdb_id:
+            score += 5
+        if media.tvdb_id:
+            score += 4
     if row.watched.source in {"trakt", "simkl"}:
         score += 4
     elif row.watched.source == "manual":
@@ -196,9 +308,7 @@ def _merge_media(primary: MediaItem, others: list[MediaItem]) -> None:
             primary.year = other.year
         if not primary.poster_url and other.poster_url:
             primary.poster_url = other.poster_url
-        if other.title and (
-            not primary.title or len(other.title) > len(primary.title)
-        ):
+        if other.title and (not primary.title or len(other.title) > len(primary.title)):
             primary.title = other.title
         if isinstance(primary.raw, dict) and isinstance(other.raw, dict):
             for key, value in other.raw.items():
@@ -232,12 +342,8 @@ def _is_midnight(value: datetime) -> bool:
     return value.time().hour == 0 and value.time().minute == 0 and value.time().second == 0
 
 
-async def _load_syncs(
-    db: AsyncSession, watched_ids: list[str]
-) -> list[WatchSync]:
-    result = await db.execute(
-        select(WatchSync).where(WatchSync.watched_item_id.in_(watched_ids))
-    )
+async def _load_syncs(db: AsyncSession, watched_ids: list[str]) -> list[WatchSync]:
+    result = await db.execute(select(WatchSync).where(WatchSync.watched_item_id.in_(watched_ids)))
     return result.scalars().all()
 
 
@@ -252,11 +358,7 @@ def _select_syncs(
     to_delete: list[WatchSync] = []
     for provider, provider_syncs in by_provider.items():
         primary_sync = next(
-            (
-                sync
-                for sync in provider_syncs
-                if sync.watched_item_id == primary_watched_id
-            ),
+            (sync for sync in provider_syncs if sync.watched_item_id == primary_watched_id),
             None,
         )
         if primary_sync:
@@ -321,17 +423,9 @@ async def _repoint_outbox_jobs(
         return
     criteria = []
     if sync_map:
-        criteria.append(
-            OutboxJob.payload["watch_sync_id"]
-            .as_string()
-            .in_(list(sync_map.keys()))
-        )
+        criteria.append(OutboxJob.payload["watch_sync_id"].as_string().in_(list(sync_map.keys())))
     if duplicate_watched_ids:
-        criteria.append(
-            OutboxJob.payload["watched_item_id"]
-            .as_string()
-            .in_(duplicate_watched_ids)
-        )
+        criteria.append(OutboxJob.payload["watched_item_id"].as_string().in_(duplicate_watched_ids))
     result = await db.execute(select(OutboxJob).where(or_(*criteria)))
     jobs = result.scalars().all()
     duplicate_set = set(duplicate_watched_ids)
@@ -354,3 +448,91 @@ def _title_key(title: object, year: object) -> str | None:
         return None
     year_value = str(year) if isinstance(year, int) else ""
     return f"{cleaned}:{year_value}" if year_value else cleaned
+
+
+async def process_merge_history_once() -> int:
+    init_session_factory()
+    async with SessionLocal() as db:
+        job = await claim_scheduled_job(
+            db,
+            MERGE_PENDING_JOB,
+            MERGE_PENDING_INTERVAL,
+            MERGE_PENDING_LEASE,
+        )
+        if not job:
+            return 0
+        try:
+            total = await run_merge_history(db, job)
+        except Exception:
+            logger.exception("Merge history failed")
+            await release_scheduled_job(db, job, MERGE_PENDING_RETRY_DELAY)
+            return 0
+        await complete_scheduled_job(db, job, MERGE_PENDING_INTERVAL)
+        return total
+
+
+async def run_merge_history(db: AsyncSession, job: ScheduledJob) -> int:
+    logger.info("Starting merge history")
+    result = await db.execute(
+        select(Integration).where(Integration.provider == IMPORT_ALL_PROVIDER)
+    )
+    integrations = result.scalars().all()
+    total = 0
+    now = datetime.now(timezone.utc)
+    for integration in integrations:
+        config = dict(integration.config or {})
+        if not merge_pending(config):
+            continue
+        if import_all_active(config) or quick_import_active(config):
+            continue
+        required_at = parse_datetime(config.get(MERGE_REQUIRED_AT_KEY))
+        try:
+            await merge_history_for_user(db, integration.user_id)
+            config = mark_merge_completed(config, now)
+            config = update_import_history_merge(config, required_at, now, None)
+        except Exception as exc:
+            await db.rollback()
+            error = str(exc)[:500]
+            config = mark_merge_failed(config, now, error)
+            config = update_import_history_merge(config, required_at, now, error)
+        integration.config = config
+        integration.updated_at = now
+        db.add(integration)
+        await db.commit()
+        total += 1
+        await extend_scheduled_job(db, job, MERGE_PENDING_LEASE)
+    logger.info("Finished merge history (users=%s)", total)
+    return total
+
+
+async def process_merge_all_history_once() -> int:
+    init_session_factory()
+    async with SessionLocal() as db:
+        job = await claim_scheduled_job(
+            db,
+            MERGE_ALL_HISTORY_JOB,
+            MERGE_ALL_HISTORY_INTERVAL,
+            MERGE_ALL_HISTORY_LEASE,
+        )
+        if not job:
+            return 0
+        try:
+            total = await run_merge_all_history(db, job)
+        except Exception:
+            logger.exception("Merge-all history failed")
+            await release_scheduled_job(db, job, MERGE_ALL_HISTORY_RETRY_DELAY)
+            return 0
+        await complete_scheduled_job(db, job, MERGE_ALL_HISTORY_INTERVAL)
+        return total
+
+
+async def run_merge_all_history(db: AsyncSession, job: ScheduledJob) -> int:
+    logger.info("Starting merge-all history")
+    result = await db.execute(select(User.id))
+    users = [row[0] for row in result.all()]
+    total = 0
+    for uid in users:
+        total += await merge_history_for_user(db, uid)
+        await extend_scheduled_job(db, job, MERGE_ALL_HISTORY_LEASE)
+    logger.info("Finished merge-all history (merged=%s)", total)
+    return total
