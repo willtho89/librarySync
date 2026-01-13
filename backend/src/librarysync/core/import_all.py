@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,7 @@ from librarysync.connectors.services.simkl import has_required_simkl_fields
 from librarysync.connectors.services.stremio import has_required_stremio_fields
 from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.import_schedule import parse_datetime
+from librarysync.core.import_state import coerce_int, coerce_str, normalize_queue
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.db.models import Integration
 
@@ -71,8 +72,8 @@ def parse_import_all_state(config: dict | None) -> ImportAllState:
     config = config or {}
     status_raw = config.get(IMPORT_ALL_STATUS_KEY)
     status = str(status_raw) if status_raw is not None else None
-    queue = _normalize_queue(config.get(IMPORT_ALL_QUEUE_KEY))
-    index = _coerce_int(config.get(IMPORT_ALL_INDEX_KEY)) or 0
+    queue = normalize_queue(config.get(IMPORT_ALL_QUEUE_KEY))
+    index = coerce_int(config.get(IMPORT_ALL_INDEX_KEY)) or 0
     return ImportAllState(
         status=status,
         queue=queue,
@@ -80,7 +81,7 @@ def parse_import_all_state(config: dict | None) -> ImportAllState:
         requested_at=parse_datetime(config.get(IMPORT_ALL_REQUESTED_KEY)),
         started_at=parse_datetime(config.get(IMPORT_ALL_STARTED_KEY)),
         completed_at=parse_datetime(config.get(IMPORT_ALL_COMPLETED_KEY)),
-        error=_coerce_str(config.get(IMPORT_ALL_ERROR_KEY)),
+        error=coerce_str(config.get(IMPORT_ALL_ERROR_KEY)),
     )
 
 
@@ -220,12 +221,6 @@ async def load_active_import_all_users(db: AsyncSession) -> set[str]:
     return active
 
 
-def _normalize_queue(value: object) -> list[str]:
-    if isinstance(value, list):
-        return [str(entry) for entry in value if entry]
-    return []
-
-
 def normalize_import_queue_order(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -272,25 +267,3 @@ def apply_import_queue_order(
         if provider not in ordered:
             ordered.append(provider)
     return ordered
-
-
-def _coerce_int(value: Any) -> int | None:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if cleaned.isdigit():
-            try:
-                return int(cleaned)
-            except ValueError:
-                return None
-    return None
-
-
-def _coerce_str(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    cleaned = value.strip()
-    return cleaned or None
