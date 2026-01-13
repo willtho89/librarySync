@@ -29,7 +29,6 @@ from librarysync.core.import_control import (
     QUICK_IMPORT_STATUS_IN_PROGRESS,
     QUICK_IMPORT_STATUS_PENDING,
     build_quick_import_config,
-    mark_merge_completed,
     mark_merge_failed,
     mark_merge_required,
     mark_quick_import_completed,
@@ -50,7 +49,7 @@ from librarysync.jobs.aiostreams_import import AIOStreamsImportStrategy
 from librarysync.jobs.anilist_import import AniListImportStrategy
 from librarysync.jobs.import_base import ImportContext, ImportStrategyRegistry
 from librarysync.jobs.letterboxd_import import LetterboxdImportStrategy
-from librarysync.jobs.merge_history import merge_history_for_user
+from librarysync.jobs.merge_history import enqueue_merge_history
 from librarysync.jobs.simkl_import import SimklImportStrategy
 from librarysync.jobs.stremio_import import StremioImportStrategy
 from librarysync.jobs.trakt_import import TraktImportStrategy
@@ -380,9 +379,9 @@ async def _finalize_merge(
     history_event_type: str | None = None,
     history_parser: callable | None = None,
 ) -> None:
+    run.config = mark_merge_required(run.config, now)
     try:
-        await merge_history_for_user(db, run.user_id)
-        run.config = mark_merge_completed(run.config, now)
+        await enqueue_merge_history(db, now)
         if finalize_run is not None:
             run.config = finalize_run(run.config, now)
         if history_event_type and history_parser:

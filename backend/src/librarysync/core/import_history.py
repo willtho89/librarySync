@@ -50,6 +50,30 @@ def append_import_history(config: dict | None, entry: dict) -> dict:
     return updated
 
 
+def update_import_history_merge(
+    config: dict | None,
+    required_at: datetime | None,
+    completed_at: datetime | None,
+    error: str | None,
+) -> dict | None:
+    if not isinstance(config, dict) or required_at is None:
+        return config
+    history = config.get(IMPORT_HISTORY_KEY)
+    if not isinstance(history, list):
+        return config
+    target_required = required_at.isoformat()
+    for entry in reversed(history):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("merge_required_at") != target_required:
+            continue
+        entry["merge_completed_at"] = completed_at.isoformat() if completed_at else None
+        entry["merge_error"] = error
+        break
+    config[IMPORT_HISTORY_KEY] = history
+    return config
+
+
 def parse_import_history(config: dict | None) -> list[dict]:
     config = config or {}
     history = config.get(IMPORT_HISTORY_KEY)

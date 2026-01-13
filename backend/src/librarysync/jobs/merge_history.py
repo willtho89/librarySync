@@ -13,7 +13,17 @@ from librarysync.core.import_all import (
     DEFAULT_IMPORT_QUEUE_ORDER,
     IMPORT_ALL_PROVIDER,
     get_import_queue_order,
+    import_all_active,
 )
+from librarysync.core.import_control import (
+    MERGE_REQUIRED_AT_KEY,
+    mark_merge_completed,
+    mark_merge_failed,
+    merge_pending,
+    quick_import_active,
+)
+from librarysync.core.import_history import update_import_history_merge
+from librarysync.core.import_schedule import parse_datetime
 from librarysync.core.scheduler import (
     claim_scheduled_job,
     complete_scheduled_job,
@@ -33,10 +43,30 @@ from librarysync.db.models import (
 from librarysync.db.session import SessionLocal, init_session_factory
 
 logger = logging.getLogger(__name__)
-MERGE_HISTORY_JOB = "merge_all_history"
-MERGE_HISTORY_INTERVAL = timedelta(days=1)
-MERGE_HISTORY_LEASE = timedelta(hours=2)
-MERGE_HISTORY_RETRY_DELAY = timedelta(hours=1)
+MERGE_ALL_HISTORY_JOB = "merge_all_history"
+MERGE_ALL_HISTORY_INTERVAL = timedelta(days=1)
+MERGE_ALL_HISTORY_LEASE = timedelta(hours=2)
+MERGE_ALL_HISTORY_RETRY_DELAY = timedelta(hours=1)
+MERGE_PENDING_JOB = "merge_history"
+MERGE_PENDING_INTERVAL = timedelta(minutes=5)
+MERGE_PENDING_LEASE = timedelta(hours=1)
+MERGE_PENDING_RETRY_DELAY = timedelta(minutes=10)
+
+
+async def enqueue_merge_history(db: AsyncSession, now: datetime | None = None) -> None:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(ScheduledJob).where(ScheduledJob.name == MERGE_PENDING_JOB).with_for_update()
+    )
+    job = result.scalars().first()
+    if not job:
+        job = ScheduledJob(name=MERGE_PENDING_JOB, next_run_at=now)
+        db.add(job)
+        return
+    if job.next_run_at is None or job.next_run_at > now:
+        job.next_run_at = now
+        job.updated_at = now
 
 
 @dataclass
@@ -416,14 +446,69 @@ def _title_key(title: object, year: object) -> str | None:
     return f"{cleaned}:{year_value}" if year_value else cleaned
 
 
+async def process_merge_history_once() -> int:
+    init_session_factory()
+    async with SessionLocal() as db:
+        job = await claim_scheduled_job(
+            db,
+            MERGE_PENDING_JOB,
+            MERGE_PENDING_INTERVAL,
+            MERGE_PENDING_LEASE,
+        )
+        if not job:
+            return 0
+        try:
+            total = await run_merge_history(db, job)
+        except Exception:
+            logger.exception("Merge history failed")
+            await release_scheduled_job(db, job, MERGE_PENDING_RETRY_DELAY)
+            return 0
+        await complete_scheduled_job(db, job, MERGE_PENDING_INTERVAL)
+        return total
+
+
+async def run_merge_history(db: AsyncSession, job: ScheduledJob) -> int:
+    logger.info("Starting merge history")
+    result = await db.execute(
+        select(Integration).where(Integration.provider == IMPORT_ALL_PROVIDER)
+    )
+    integrations = result.scalars().all()
+    total = 0
+    now = datetime.now(timezone.utc)
+    for integration in integrations:
+        config = dict(integration.config or {})
+        if not merge_pending(config):
+            continue
+        if import_all_active(config) or quick_import_active(config):
+            continue
+        required_at = parse_datetime(config.get(MERGE_REQUIRED_AT_KEY))
+        try:
+            await merge_history_for_user(db, integration.user_id)
+            config = mark_merge_completed(config, now)
+            config = update_import_history_merge(config, required_at, now, None)
+        except Exception as exc:
+            await db.rollback()
+            error = str(exc)[:500]
+            config = mark_merge_failed(config, now, error)
+            config = update_import_history_merge(config, required_at, now, error)
+        integration.config = config
+        integration.updated_at = now
+        db.add(integration)
+        await db.commit()
+        total += 1
+        await extend_scheduled_job(db, job, MERGE_PENDING_LEASE)
+    logger.info("Finished merge history (users=%s)", total)
+    return total
+
+
 async def process_merge_all_history_once() -> int:
     init_session_factory()
     async with SessionLocal() as db:
         job = await claim_scheduled_job(
             db,
-            MERGE_HISTORY_JOB,
-            MERGE_HISTORY_INTERVAL,
-            MERGE_HISTORY_LEASE,
+            MERGE_ALL_HISTORY_JOB,
+            MERGE_ALL_HISTORY_INTERVAL,
+            MERGE_ALL_HISTORY_LEASE,
         )
         if not job:
             return 0
@@ -431,9 +516,9 @@ async def process_merge_all_history_once() -> int:
             total = await run_merge_all_history(db, job)
         except Exception:
             logger.exception("Merge-all history failed")
-            await release_scheduled_job(db, job, MERGE_HISTORY_RETRY_DELAY)
+            await release_scheduled_job(db, job, MERGE_ALL_HISTORY_RETRY_DELAY)
             return 0
-        await complete_scheduled_job(db, job, MERGE_HISTORY_INTERVAL)
+        await complete_scheduled_job(db, job, MERGE_ALL_HISTORY_INTERVAL)
         return total
 
 
@@ -444,6 +529,6 @@ async def run_merge_all_history(db: AsyncSession, job: ScheduledJob) -> int:
     total = 0
     for uid in users:
         total += await merge_history_for_user(db, uid)
-        await extend_scheduled_job(db, job, MERGE_HISTORY_LEASE)
+        await extend_scheduled_job(db, job, MERGE_ALL_HISTORY_LEASE)
     logger.info("Finished merge-all history (merged=%s)", total)
     return total

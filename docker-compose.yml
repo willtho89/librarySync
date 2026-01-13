@@ -98,13 +98,13 @@ services:
       LIBRARYSYNC_WORKER_MODES: metadata_cache
 
   worker-metadata-backfill:
-    <<: *worker
+    <<: *worker-base
     profiles: ["scaled-workers"]
     environment:
       LIBRARYSYNC_WORKER_MODES: metadata_backfill
 
   worker-history-merge:
-    <<: *worker
+    <<: *worker-base
     profiles: ["scaled-workers"]
     environment:
       LIBRARYSYNC_WORKER_MODES: merge_all_history
