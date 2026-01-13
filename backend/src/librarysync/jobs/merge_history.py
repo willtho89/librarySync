@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,11 +14,18 @@ from librarysync.core.import_all import (
     IMPORT_ALL_PROVIDER,
     get_import_queue_order,
 )
+from librarysync.core.scheduler import (
+    claim_scheduled_job,
+    complete_scheduled_job,
+    extend_scheduled_job,
+    release_scheduled_job,
+)
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
     MediaItem,
     OutboxJob,
+    ScheduledJob,
     User,
     WatchedItem,
     WatchSync,
@@ -26,6 +33,10 @@ from librarysync.db.models import (
 from librarysync.db.session import SessionLocal, init_session_factory
 
 logger = logging.getLogger(__name__)
+MERGE_HISTORY_JOB = "merge_all_history"
+MERGE_HISTORY_INTERVAL = timedelta(days=1)
+MERGE_HISTORY_LEASE = timedelta(hours=2)
+MERGE_HISTORY_RETRY_DELAY = timedelta(hours=1)
 
 
 @dataclass
@@ -408,9 +419,31 @@ def _title_key(title: object, year: object) -> str | None:
 async def process_merge_all_history_once() -> int:
     init_session_factory()
     async with SessionLocal() as db:
-        result = await db.execute(select(User.id))
-        users = [row[0] for row in result.all()]
-        total = 0
-        for uid in users:
-            total += await merge_history_for_user(db, uid)
+        job = await claim_scheduled_job(
+            db,
+            MERGE_HISTORY_JOB,
+            MERGE_HISTORY_INTERVAL,
+            MERGE_HISTORY_LEASE,
+        )
+        if not job:
+            return 0
+        try:
+            total = await run_merge_all_history(db, job)
+        except Exception:
+            logger.exception("Merge-all history failed")
+            await release_scheduled_job(db, job, MERGE_HISTORY_RETRY_DELAY)
+            return 0
+        await complete_scheduled_job(db, job, MERGE_HISTORY_INTERVAL)
         return total
+
+
+async def run_merge_all_history(db: AsyncSession, job: ScheduledJob) -> int:
+    logger.info("Starting merge-all history")
+    result = await db.execute(select(User.id))
+    users = [row[0] for row in result.all()]
+    total = 0
+    for uid in users:
+        total += await merge_history_for_user(db, uid)
+        await extend_scheduled_job(db, job, MERGE_HISTORY_LEASE)
+    logger.info("Finished merge-all history (merged=%s)", total)
+    return total

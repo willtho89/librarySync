@@ -345,6 +345,7 @@ async def merge_history(
             total_merged += merged
             user_results.append({"user_id": uid, "merged_count": merged})
         except Exception as e:
+            await db.rollback()
             user_results.append({"user_id": uid, "error": str(e)})
 
     return JSONResponse(
