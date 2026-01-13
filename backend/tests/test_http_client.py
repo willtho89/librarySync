@@ -6,7 +6,6 @@ from importlib import metadata
 from unittest.mock import patch
 
 import httpx
-
 from librarysync.core.http_client import get_app_version, get_http_client
 
 

@@ -56,6 +56,7 @@ from librarysync.jobs.simkl_import import SimklImportStrategy
 from librarysync.jobs.stremio_import import StremioImportStrategy
 from librarysync.jobs.trakt_import import TraktImportStrategy
 
+
 class ImportRunState(Protocol):
     queue: list[str]
     index: int
