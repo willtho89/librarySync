@@ -17,17 +17,6 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      matrix:
-        include:
-          - name: backend
-            dockerfile: backend/Dockerfile
-            image: librarysync-backend
-            cache_scope: backend
-          - name: worker
-            dockerfile: worker/Dockerfile
-            image: librarysync-worker
-            cache_scope: worker
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -52,7 +41,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}
+          images: ghcr.io/${{ env.IMAGE_NAMESPACE }}/librarysync
           tags: |
             type=raw,value=${{ github.event.release.tag_name }}
             type=raw,value=latest,enable=${{ github.event.release.prerelease == false }}
@@ -62,10 +51,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: backend/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.cache_scope }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+          cache-from: type=gha,scope=librarysync
+          cache-to: type=gha,mode=max,scope=librarysync

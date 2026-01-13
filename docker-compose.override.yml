@@ -1,42 +1,36 @@
+x-app-base: &app-base
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  image: librarysync:local
+
 services:
   api:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    image: librarysync-backend:local
+    <<: *app-base
 
   worker:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    image: librarysync-worker:local
+    <<: *app-base
 
   worker-outbox:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    image: librarysync-worker:local
+    <<: *app-base
 
   worker-metadata:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    image: librarysync-worker:local
+    <<: *app-base
 
   worker-import-quick:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    image: librarysync-worker:local
+    <<: *app-base
 
   worker-import-all:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    image: librarysync-worker:local
+    <<: *app-base
 
   worker-watchlist:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    image: librarysync-worker:local
+    <<: *app-base
+
+  worker-metadata-cache:
+    <<: *app-base
+
+  worker-metadata-backfill:
+    <<: *app-base
+
+  worker-history-merge:
+    <<: *app-base

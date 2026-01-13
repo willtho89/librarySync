@@ -1,7 +1,7 @@
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Callable, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
@@ -180,34 +180,141 @@ def _merge_watchlist_import_config(
     return updated
 
 
-async def _load_letterboxd_integration(
-    db: AsyncSession, user_id: str
+async def _get_integration(
+    db: AsyncSession,
+    user_id: str,
+    provider: str,
+) -> Integration | None:
+    result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == user_id,
+            Integration.provider == provider,
+        )
+    )
+    return result.scalars().first()
+
+
+async def _load_integration(
+    db: AsyncSession, user_id: str, provider: str
 ) -> tuple[Integration | None, dict[str, object] | None]:
-    return await load_integration_with_secrets(db, user_id, "letterboxd")
+    return await load_integration_with_secrets(db, user_id, provider)
 
 
-async def _load_trakt_integration(
-    db: AsyncSession, user_id: str
-) -> tuple[Integration | None, dict[str, object] | None]:
-    return await load_integration_with_secrets(db, user_id, "trakt")
+async def _delete_integration_secret(
+    db: AsyncSession, integration: Integration
+) -> None:
+    result = await db.execute(
+        select(IntegrationSecret).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    secret = result.scalars().first()
+    if secret:
+        await db.delete(secret)
 
 
-async def _load_simkl_integration(
-    db: AsyncSession, user_id: str
-) -> tuple[Integration | None, dict[str, object] | None]:
-    return await load_integration_with_secrets(db, user_id, "simkl")
+async def _upsert_integration_secret(
+    db: AsyncSession, integration: Integration, payload: dict[str, object]
+) -> None:
+    encrypted = encrypt_value(json.dumps(payload))
+    result = await db.execute(
+        select(IntegrationSecret).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    secret = result.scalars().first()
+    if not secret:
+        secret = IntegrationSecret(
+            integration_id=integration.id,
+            secret_data=encrypted,
+        )
+    else:
+        secret.secret_data = encrypted
+    db.add(secret)
 
 
-async def _load_anilist_integration(
-    db: AsyncSession, user_id: str
-) -> tuple[Integration | None, dict[str, object] | None]:
-    return await load_integration_with_secrets(db, user_id, "anilist")
+def _set_oauth_state(config: dict[str, object]) -> str:
+    state = secrets.token_urlsafe(16)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    config["oauth_state"] = state
+    config["oauth_state_expires_at"] = expires_at.isoformat()
+    return state
 
 
-async def _load_aiostreams_integration(
-    db: AsyncSession, user_id: str
-) -> tuple[Integration | None, dict[str, object] | None]:
-    return await load_integration_with_secrets(db, user_id, "aiostreams")
+def _clear_oauth_state(config: dict[str, object]) -> None:
+    config.pop("oauth_state", None)
+    config.pop("oauth_state_expires_at", None)
+
+
+def _validate_oauth_state(
+    config: dict[str, object],
+    state: str,
+    parse_expires: Callable[[str | None], datetime | None],
+) -> None:
+    stored_state = config.get("oauth_state")
+    stored_expires = parse_expires(config.get("oauth_state_expires_at"))
+    if stored_state is None or stored_state != state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid OAuth state",
+        )
+    if stored_expires and stored_expires < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth state expired",
+        )
+
+
+async def _start_oauth_flow(
+    *,
+    db: AsyncSession,
+    user_id: str,
+    provider: str,
+    build_url: Callable[[str], str],
+) -> RedirectResponse:
+    integration = await _get_integration(db, user_id, provider)
+    if not integration:
+        integration = Integration(
+            user_id=user_id,
+            provider=provider,
+            status="pending",
+        )
+    config = dict(integration.config or {})
+    state = _set_oauth_state(config)
+    integration.config = config
+    integration.status = "pending"
+    try:
+        redirect_url = build_url(state)
+        db.add(integration)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    return RedirectResponse(url=redirect_url)
+
+
+async def _disconnect_integration(
+    db: AsyncSession,
+    user_id: str,
+    provider: str,
+    cleanup: Callable[[dict[str, object]], None] | None = None,
+) -> dict:
+    integration = await _get_integration(db, user_id, provider)
+    if not integration:
+        return {"status": "ok"}
+    try:
+        await _delete_integration_secret(db, integration)
+        integration.status = "disconnected"
+        config = dict(integration.config or {})
+        if cleanup:
+            cleanup(config)
+        integration.config = config
+        db.add(integration)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    return {"status": "ok"}
 
 
 def _require_trakt_settings() -> tuple[str, str, str]:
@@ -304,13 +411,7 @@ async def update_watchlist_import_settings(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == provider,
-        )
-    )
-    integration = result.scalars().first()
+    integration = await _get_integration(db, current_user.id, provider)
     if not integration:
         integration = Integration(
             user_id=current_user.id,
@@ -336,13 +437,7 @@ async def save_letterboxd(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "letterboxd",
-        )
-    )
-    integration = result.scalars().first()
+    integration = await _get_integration(db, current_user.id, "letterboxd")
     is_new = integration is None
     if not integration:
         integration = Integration(
@@ -420,15 +515,7 @@ async def save_letterboxd(
 
     has_secrets = False
     if updated:
-        encrypted = encrypt_value(json.dumps(updated))
-        if not secret:
-            secret = IntegrationSecret(
-                integration_id=integration.id,
-                secret_data=encrypted,
-            )
-        else:
-            secret.secret_data = encrypted
-        db.add(secret)
+        await _upsert_integration_secret(db, integration, updated)
         has_secrets = True
 
     await db.commit()
@@ -444,7 +531,7 @@ async def test_letterboxd(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    integration, secret_data = await _load_letterboxd_integration(db, current_user.id)
+    integration, secret_data = await _load_integration(db, current_user.id, "letterboxd")
     if not integration or not secret_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -514,31 +601,12 @@ async def letterboxd_disconnect(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "letterboxd",
-        )
+    return await _disconnect_integration(
+        db,
+        current_user.id,
+        "letterboxd",
+        cleanup=_clear_letterboxd_profile,
     )
-    integration = result.scalars().first()
-    if not integration:
-        return {"status": "ok"}
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if secret:
-        await db.delete(secret)
-    integration.status = "disconnected"
-    config = dict(integration.config or {})
-    config.pop("member_id", None)
-    config.pop("member_name", None)
-    integration.config = config
-    db.add(integration)
-    await db.commit()
-    return {"status": "ok"}
 
 
 @router.post(
@@ -675,35 +743,17 @@ async def trakt_start(
     db: AsyncSession = Depends(get_db),
 ):
     client_id, client_secret, redirect_uri = _require_trakt_settings()
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "trakt",
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="trakt",
-            status="pending",
-        )
-    state = secrets.token_urlsafe(16)
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    config = dict(integration.config or {})
-    config["oauth_state"] = state
-    config["oauth_state_expires_at"] = expires_at.isoformat()
-    integration.config = config
-    integration.status = "pending"
-    db.add(integration)
-    await db.commit()
     client = TraktClient(
         client_id=client_id,
         client_secret=client_secret,
         authorize_url=TRAKT_OAUTH_AUTHORIZE_URL,
     )
-    redirect_url = client.build_authorize_url(redirect_uri, state)
-    return RedirectResponse(url=redirect_url)
+    return await _start_oauth_flow(
+        db=db,
+        user_id=current_user.id,
+        provider="trakt",
+        build_url=lambda state: client.build_authorize_url(redirect_uri, state),
+    )
 
 
 @router.get(
@@ -723,25 +773,14 @@ async def trakt_callback(
             detail="Missing OAuth code or state",
         )
     client_id, client_secret, redirect_uri = _require_trakt_settings()
-    integration, _ = await _load_trakt_integration(db, current_user.id)
+    integration, _ = await _load_integration(db, current_user.id, "trakt")
     if not integration:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Trakt integration not initialized",
         )
     config = dict(integration.config or {})
-    stored_state = config.get("oauth_state")
-    stored_expires = parse_expires_at(config.get("oauth_state_expires_at"))
-    if stored_state is None or stored_state != state:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid OAuth state",
-        )
-    if stored_expires and stored_expires < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OAuth state expired",
-        )
+    _validate_oauth_state(config, state, parse_expires_at)
     client = TraktClient(client_id=client_id, client_secret=client_secret)
     try:
         token = await client.exchange_code(code, redirect_uri)
@@ -751,24 +790,9 @@ async def trakt_callback(
         ) from exc
 
     secret_payload = token_to_secret_payload(token)
-    encrypted = encrypt_value(json.dumps(secret_payload))
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(
-            integration_id=integration.id,
-            secret_data=encrypted,
-        )
-    else:
-        secret.secret_data = encrypted
-    db.add(secret)
+    await _upsert_integration_secret(db, integration, secret_payload)
 
-    config.pop("oauth_state", None)
-    config.pop("oauth_state_expires_at", None)
+    _clear_oauth_state(config)
     integration.status = "connected"
     integration.config = config
 
@@ -795,32 +819,12 @@ async def trakt_disconnect(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "trakt",
-        )
+    return await _disconnect_integration(
+        db,
+        current_user.id,
+        "trakt",
+        cleanup=_clear_trakt_profile,
     )
-    integration = result.scalars().first()
-    if not integration:
-        return {"status": "ok"}
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if secret:
-        await db.delete(secret)
-    integration.status = "disconnected"
-    config = dict(integration.config or {})
-    config.pop("trakt_username", None)
-    config.pop("oauth_state", None)
-    config.pop("oauth_state_expires_at", None)
-    integration.config = config
-    db.add(integration)
-    await db.commit()
-    return {"status": "ok"}
 
 
 @router.get(
@@ -833,35 +837,17 @@ async def simkl_start(
     db: AsyncSession = Depends(get_db),
 ):
     client_id, client_secret, redirect_uri = _require_simkl_settings()
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "simkl",
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="simkl",
-            status="pending",
-        )
-    state = secrets.token_urlsafe(16)
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    config = dict(integration.config or {})
-    config["oauth_state"] = state
-    config["oauth_state_expires_at"] = expires_at.isoformat()
-    integration.config = config
-    integration.status = "pending"
-    db.add(integration)
-    await db.commit()
     client = SimklClient(
         client_id=client_id,
         client_secret=client_secret,
         authorize_url=SIMKL_OAUTH_AUTHORIZE_URL,
     )
-    redirect_url = client.build_authorize_url(redirect_uri, state)
-    return RedirectResponse(url=redirect_url)
+    return await _start_oauth_flow(
+        db=db,
+        user_id=current_user.id,
+        provider="simkl",
+        build_url=lambda state: client.build_authorize_url(redirect_uri, state),
+    )
 
 
 @router.get(
@@ -881,25 +867,14 @@ async def simkl_callback(
             detail="Missing OAuth code or state",
         )
     client_id, client_secret, redirect_uri = _require_simkl_settings()
-    integration, _ = await _load_simkl_integration(db, current_user.id)
+    integration, _ = await _load_integration(db, current_user.id, "simkl")
     if not integration:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="SIMKL integration not initialized",
         )
     config = dict(integration.config or {})
-    stored_state = config.get("oauth_state")
-    stored_expires = parse_simkl_expires_at(config.get("oauth_state_expires_at"))
-    if stored_state is None or stored_state != state:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid OAuth state",
-        )
-    if stored_expires and stored_expires < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OAuth state expired",
-        )
+    _validate_oauth_state(config, state, parse_simkl_expires_at)
     client = SimklClient(client_id=client_id, client_secret=client_secret)
     try:
         token = await client.exchange_code(code, redirect_uri)
@@ -909,24 +884,9 @@ async def simkl_callback(
         ) from exc
 
     secret_payload = simkl_token_to_secret_payload(token)
-    encrypted = encrypt_value(json.dumps(secret_payload))
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(
-            integration_id=integration.id,
-            secret_data=encrypted,
-        )
-    else:
-        secret.secret_data = encrypted
-    db.add(secret)
+    await _upsert_integration_secret(db, integration, secret_payload)
 
-    config.pop("oauth_state", None)
-    config.pop("oauth_state_expires_at", None)
+    _clear_oauth_state(config)
     integration.status = "connected"
     integration.config = config
 
@@ -952,32 +912,12 @@ async def simkl_disconnect(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "simkl",
-        )
+    return await _disconnect_integration(
+        db,
+        current_user.id,
+        "simkl",
+        cleanup=_clear_simkl_profile,
     )
-    integration = result.scalars().first()
-    if not integration:
-        return {"status": "ok"}
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if secret:
-        await db.delete(secret)
-    integration.status = "disconnected"
-    config = dict(integration.config or {})
-    config.pop("simkl_username", None)
-    config.pop("oauth_state", None)
-    config.pop("oauth_state_expires_at", None)
-    integration.config = config
-    db.add(integration)
-    await db.commit()
-    return {"status": "ok"}
 
 
 @router.get(
@@ -989,32 +929,13 @@ async def anilist_start(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    client_id, client_secret, redirect_uri = _require_anilist_settings()
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "anilist",
-        )
+    client_id, _client_secret, redirect_uri = _require_anilist_settings()
+    return await _start_oauth_flow(
+        db=db,
+        user_id=current_user.id,
+        provider="anilist",
+        build_url=lambda state: build_anilist_oauth_url(client_id, redirect_uri, state),
     )
-    integration = result.scalars().first()
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="anilist",
-            status="pending",
-        )
-    state = secrets.token_urlsafe(16)
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    config = dict(integration.config or {})
-    config["oauth_state"] = state
-    config["oauth_state_expires_at"] = expires_at.isoformat()
-    integration.config = config
-    integration.status = "pending"
-    db.add(integration)
-    await db.commit()
-    
-    redirect_url = build_anilist_oauth_url(client_id, redirect_uri, state)
-    return RedirectResponse(url=redirect_url)
 
 
 @router.get(
@@ -1034,31 +955,15 @@ async def anilist_callback(
             detail="Missing OAuth code or state",
         )
     client_id, client_secret, redirect_uri = _require_anilist_settings()
-    integration, _ = await _load_anilist_integration(db, current_user.id)
+    integration, _ = await _load_integration(db, current_user.id, "anilist")
     if not integration:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="AniList integration not initialized",
         )
     config = dict(integration.config or {})
-    stored_state = config.get("oauth_state")
-    stored_expires_str = config.get("oauth_state_expires_at")
-    
-    if stored_state is None or stored_state != state:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid OAuth state",
-        )
-    
-    # Parse expiry time using helper function
-    stored_expires = parse_anilist_expires_at(stored_expires_str)
-    
-    if stored_expires and stored_expires < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OAuth state expired",
-        )
-    
+    _validate_oauth_state(config, state, parse_anilist_expires_at)
+
     try:
         token = await exchange_anilist_code(code, client_id, client_secret, redirect_uri)
     except AniListError as exc:
@@ -1066,8 +971,7 @@ async def anilist_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"AniList OAuth error: {exc}",
         ) from exc
-    
-    # Get user info to verify token
+
     try:
         client = AniListClient(access_token=token.access_token)
         viewer = await client.get_viewer()
@@ -1077,38 +981,18 @@ async def anilist_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to get AniList user info: {exc}",
         ) from exc
-    
-    # Store token
     token_payload = anilist_token_to_secret_payload(token)
-    encrypted = encrypt_value(json.dumps(token_payload))
-    
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(
-            integration_id=integration.id,
-            secret_data=encrypted,
-        )
-    else:
-        secret.secret_data = encrypted
-    
-    db.add(secret)
-    
-    # Update integration status
+    await _upsert_integration_secret(db, integration, token_payload)
+
     integration.status = "active"
     config = dict(integration.config or {})
     config["anilist_username"] = anilist_username
-    config.pop("oauth_state", None)
-    config.pop("oauth_state_expires_at", None)
+    _clear_oauth_state(config)
     integration.config = config
     db.add(integration)
-    
+
     await db.commit()
-    
+
     return RedirectResponse(url="/settings?anilist=connected")
 
 
@@ -1121,32 +1005,12 @@ async def anilist_disconnect(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "anilist",
-        )
+    return await _disconnect_integration(
+        db,
+        current_user.id,
+        "anilist",
+        cleanup=_clear_anilist_profile,
     )
-    integration = result.scalars().first()
-    if not integration:
-        return {"status": "ok"}
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if secret:
-        await db.delete(secret)
-    integration.status = "disconnected"
-    config = dict(integration.config or {})
-    config.pop("anilist_username", None)
-    config.pop("oauth_state", None)
-    config.pop("oauth_state_expires_at", None)
-    integration.config = config
-    db.add(integration)
-    await db.commit()
-    return {"status": "ok"}
 
 
 @router.post(
@@ -1167,13 +1031,7 @@ async def aiostreams_connect(
     api_base_url = _normalize_optional(payload.api_base_url)
     username = _normalize_optional(payload.username)
 
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "aiostreams",
-        )
-    )
-    integration = result.scalars().first()
+    integration = await _get_integration(db, current_user.id, "aiostreams")
     existing_base = None
     if integration and integration.config:
         existing_base = integration.config.get("api_base_url")
@@ -1206,21 +1064,7 @@ async def aiostreams_connect(
     await db.flush()
 
     secret_payload = {"auth": auth}
-    encrypted = encrypt_value(json.dumps(secret_payload))
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(
-            integration_id=integration.id,
-            secret_data=encrypted,
-        )
-    else:
-        secret.secret_data = encrypted
-    db.add(secret)
+    await _upsert_integration_secret(db, integration, secret_payload)
 
     await db.commit()
     return _integration_to_out(integration, True).model_dump()
@@ -1235,7 +1079,7 @@ async def aiostreams_test(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    integration, secret_data = await _load_aiostreams_integration(db, current_user.id)
+    integration, secret_data = await _load_integration(db, current_user.id, "aiostreams")
     if not integration or not secret_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1286,30 +1130,12 @@ async def aiostreams_disconnect(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "aiostreams",
-        )
+    return await _disconnect_integration(
+        db,
+        current_user.id,
+        "aiostreams",
+        cleanup=_clear_aiostreams_profile,
     )
-    integration = result.scalars().first()
-    if not integration:
-        return {"status": "ok"}
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if secret:
-        await db.delete(secret)
-    integration.status = "disconnected"
-    config = dict(integration.config or {})
-    config.pop("username", None)
-    integration.config = config
-    db.add(integration)
-    await db.commit()
-    return {"status": "ok"}
 
 
 @router.post(
@@ -1334,13 +1160,7 @@ async def stremio_login(
         )
     api_base_url = _normalize_optional(payload.api_base_url)
 
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "stremio",
-        )
-    )
-    integration = result.scalars().first()
+    integration = await _get_integration(db, current_user.id, "stremio")
     existing_base = None
     if integration and integration.config:
         existing_base = integration.config.get("api_base_url")
@@ -1372,21 +1192,7 @@ async def stremio_login(
     await db.flush()
 
     secret_payload = {"auth_key": login.auth_key}
-    encrypted = encrypt_value(json.dumps(secret_payload))
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(
-            integration_id=integration.id,
-            secret_data=encrypted,
-        )
-    else:
-        secret.secret_data = encrypted
-    db.add(secret)
+    await _upsert_integration_secret(db, integration, secret_payload)
 
     await db.commit()
     return _integration_to_out(integration, True).model_dump()
@@ -1401,30 +1207,12 @@ async def stremio_disconnect(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == current_user.id,
-            Integration.provider == "stremio",
-        )
+    return await _disconnect_integration(
+        db,
+        current_user.id,
+        "stremio",
+        cleanup=_clear_stremio_profile,
     )
-    integration = result.scalars().first()
-    if not integration:
-        return {"status": "ok"}
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
-    secret = result.scalars().first()
-    if secret:
-        await db.delete(secret)
-    integration.status = "disconnected"
-    config = dict(integration.config or {})
-    _clear_stremio_profile(config)
-    integration.config = config
-    db.add(integration)
-    await db.commit()
-    return {"status": "ok"}
 
 
 def _extract_simkl_username(payload: object) -> str | None:
@@ -1463,6 +1251,30 @@ def _shorten_text(value: str, limit: int = 300) -> str:
     if len(trimmed) > limit:
         return f"{trimmed[:limit]}..."
     return trimmed
+
+
+def _clear_letterboxd_profile(config: dict[str, object]) -> None:
+    config.pop("member_id", None)
+    config.pop("member_name", None)
+
+
+def _clear_trakt_profile(config: dict[str, object]) -> None:
+    config.pop("trakt_username", None)
+    _clear_oauth_state(config)
+
+
+def _clear_simkl_profile(config: dict[str, object]) -> None:
+    config.pop("simkl_username", None)
+    _clear_oauth_state(config)
+
+
+def _clear_anilist_profile(config: dict[str, object]) -> None:
+    config.pop("anilist_username", None)
+    _clear_oauth_state(config)
+
+
+def _clear_aiostreams_profile(config: dict[str, object]) -> None:
+    config.pop("username", None)
 
 
 def _apply_stremio_profile(

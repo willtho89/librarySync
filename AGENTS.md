@@ -52,6 +52,7 @@ librarySync/
     pyproject.toml
     src/librarysync/
       main.py                  # FastAPI app entry
+      worker.py                # Async worker entrypoint
       config.py                # env/config handling
       db/
         models.py
@@ -69,16 +70,18 @@ librarySync/
         auth.py
         watch_pipeline.py
         import_schedule.py
+        import_control.py
+        import_state.py
         import_all.py
+        import_history.py
         metadata_lookup_engine.py
         metadata_enrichment.py
         metadata_providers.py
         rate_limiter.py
         ratings.py
         security.py
-        outbox.py
-        dedupe.py
-        matching.py
+        watchlist.py
+        watchlist_sync.py
       connectors/
         services/
           trakt.py
@@ -127,11 +130,6 @@ librarySync/
          watchlist.html
          offline.html
 
-  worker/
-    Dockerfile
-    pyproject.toml
-    src/librarysync_worker/
-      main.py
 ```
 
 ---

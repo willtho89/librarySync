@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Callable, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,6 +56,28 @@ from librarysync.jobs.simkl_import import SimklImportStrategy
 from librarysync.jobs.stremio_import import StremioImportStrategy
 from librarysync.jobs.trakt_import import TraktImportStrategy
 
+
+class ImportRunState(Protocol):
+    queue: list[str]
+    index: int
+    requested_at: datetime | None
+    status: str | None
+    completed_at: datetime | None
+    error: str | None
+
+
+@dataclass(frozen=True)
+class ImportRunSpec:
+    name: str
+    registry: ImportStrategyRegistry
+    parse_state: Callable[[dict | None], ImportRunState]
+    mark_completed: Callable[[dict | None, datetime], dict]
+    mark_failed: Callable[[dict | None, datetime, str], dict]
+    index_key: str
+    error_key: str
+    history_event_type: str
+
+
 QUICK_IMPORT_LOOKBACK_DAYS = 7
 IMPORT_ALL_LOOKBACK_DAYS = settings.history_lookback_days
 
@@ -73,6 +97,27 @@ def _build_registry(lookback_days: int) -> ImportStrategyRegistry:
 
 QUICK_IMPORT_REGISTRY = _build_registry(QUICK_IMPORT_LOOKBACK_DAYS)
 IMPORT_ALL_REGISTRY = _build_registry(IMPORT_ALL_LOOKBACK_DAYS)
+
+QUICK_IMPORT_SPEC = ImportRunSpec(
+    name="quick_import",
+    registry=QUICK_IMPORT_REGISTRY,
+    parse_state=parse_quick_import_state,
+    mark_completed=mark_quick_import_completed,
+    mark_failed=mark_quick_import_failed,
+    index_key=QUICK_IMPORT_INDEX_KEY,
+    error_key=QUICK_IMPORT_ERROR_KEY,
+    history_event_type="quick_import",
+)
+IMPORT_ALL_SPEC = ImportRunSpec(
+    name="import_all",
+    registry=IMPORT_ALL_REGISTRY,
+    parse_state=parse_import_all_state,
+    mark_completed=mark_import_all_completed,
+    mark_failed=mark_import_all_failed,
+    index_key=IMPORT_ALL_INDEX_KEY,
+    error_key=IMPORT_ALL_ERROR_KEY,
+    history_event_type="import_all",
+)
 
 
 async def process_quick_import_once(limit: int = 1) -> int:
@@ -178,124 +223,43 @@ async def _claim_import_all_runs(db: AsyncSession, limit: int) -> list[Integrati
 async def _process_quick_import_run(
     db: AsyncSession, run: Integration, now: datetime
 ) -> int:
-    state = parse_quick_import_state(run.config)
-    queue = list(state.queue)
-    if not queue or state.index >= len(queue):
-        run.config = dict(run.config or {})
-        run.config[QUICK_IMPORT_ERROR_KEY] = None
-        run.config[QUICK_IMPORT_INDEX_KEY] = len(queue)
-        await _finalize_merge(
-            db,
-            run,
-            now,
-            mark_quick_import_completed,
-            history_event_type="quick_import",
-            history_parser=parse_quick_import_state,
-        )
-        return 1
-
-    provider = queue[state.index]
-    strategy = QUICK_IMPORT_REGISTRY.get(provider)
-    if not strategy:
-        return await _advance_quick_import_run(db, run, queue, state.index + 1, now)
-
-    result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == run.user_id,
-            Integration.provider == provider,
-        )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        return await _advance_quick_import_run(db, run, queue, state.index + 1, now)
-
-    next_index: int | None = None
-    try:
-        await strategy.import_for_integration(
-            ImportContext(db=db, now=now),
-            integration,
-            state.requested_at,
-        )
-        run.config = dict(run.config or {})
-        run.config[QUICK_IMPORT_ERROR_KEY] = None
-        next_index = state.index + 1
-        run.config[QUICK_IMPORT_INDEX_KEY] = next_index
-        if next_index >= len(queue):
-            await _finalize_merge(
-                db,
-                run,
-                now,
-                mark_quick_import_completed,
-                history_event_type="quick_import",
-                history_parser=parse_quick_import_state,
-            )
-            return 1
-        db.add(run)
-        await db.commit()
-        return 1
-    except Exception as exc:
-        run.config = mark_quick_import_failed(run.config, now, str(exc)[:500])
-        run.config[QUICK_IMPORT_INDEX_KEY] = (
-            next_index if next_index is not None else state.index
-        )
-        await _finalize_merge(
-            db,
-            run,
-            now,
-            None,
-            history_event_type="quick_import",
-            history_parser=parse_quick_import_state,
-        )
-        return 1
+    return await _process_import_run(db, run, now, QUICK_IMPORT_SPEC)
 
 
-async def _advance_quick_import_run(
-    db: AsyncSession,
-    run: Integration,
-    queue: list[str],
-    next_index: int,
-    now: datetime,
-) -> int:
-    run.config = dict(run.config or {})
-    run.config[QUICK_IMPORT_INDEX_KEY] = next_index
-    if next_index >= len(queue):
-        await _finalize_merge(
-            db,
-            run,
-            now,
-            mark_quick_import_completed,
-            history_event_type="quick_import",
-            history_parser=parse_quick_import_state,
-        )
-        return 1
-    db.add(run)
-    await db.commit()
-    return 1
 
 
 async def _process_import_all_run(
     db: AsyncSession, run: Integration, now: datetime
 ) -> int:
-    state = parse_import_all_state(run.config)
+    return await _process_import_run(db, run, now, IMPORT_ALL_SPEC)
+
+
+async def _process_import_run(
+    db: AsyncSession,
+    run: Integration,
+    now: datetime,
+    spec: ImportRunSpec,
+) -> int:
+    state = spec.parse_state(run.config)
     queue = list(state.queue)
     if not queue or state.index >= len(queue):
         run.config = dict(run.config or {})
-        run.config[IMPORT_ALL_ERROR_KEY] = None
-        run.config[IMPORT_ALL_INDEX_KEY] = len(queue)
+        run.config[spec.error_key] = None
+        run.config[spec.index_key] = len(queue)
         await _finalize_merge(
             db,
             run,
             now,
-            mark_import_all_completed,
-            history_event_type="import_all",
-            history_parser=parse_import_all_state,
+            spec.mark_completed,
+            history_event_type=spec.history_event_type,
+            history_parser=spec.parse_state,
         )
         return 1
 
     provider = queue[state.index]
-    strategy = IMPORT_ALL_REGISTRY.get(provider)
+    strategy = spec.registry.get(provider)
     if not strategy:
-        return await _advance_import_all_run(db, run, queue, state.index + 1, now)
+        return await _advance_import_run(db, run, queue, state.index + 1, now, spec)
 
     result = await db.execute(
         select(Integration).where(
@@ -305,7 +269,7 @@ async def _process_import_all_run(
     )
     integration = result.scalars().first()
     if not integration:
-        return await _advance_import_all_run(db, run, queue, state.index + 1, now)
+        return await _advance_import_run(db, run, queue, state.index + 1, now, spec)
 
     next_index: int | None = None
     try:
@@ -315,55 +279,54 @@ async def _process_import_all_run(
             state.requested_at,
         )
         run.config = dict(run.config or {})
-        run.config[IMPORT_ALL_ERROR_KEY] = None
+        run.config[spec.error_key] = None
         next_index = state.index + 1
-        run.config[IMPORT_ALL_INDEX_KEY] = next_index
+        run.config[spec.index_key] = next_index
         if next_index >= len(queue):
             await _finalize_merge(
                 db,
                 run,
                 now,
-                mark_import_all_completed,
-                history_event_type="import_all",
-                history_parser=parse_import_all_state,
+                spec.mark_completed,
+                history_event_type=spec.history_event_type,
+                history_parser=spec.parse_state,
             )
             return 1
         db.add(run)
         await db.commit()
         return 1
     except Exception as exc:
-        run.config = mark_import_all_failed(run.config, now, str(exc)[:500])
-        run.config[IMPORT_ALL_INDEX_KEY] = (
-            next_index if next_index is not None else state.index
-        )
+        run.config = spec.mark_failed(run.config, now, str(exc)[:500])
+        run.config[spec.index_key] = next_index if next_index is not None else state.index
         await _finalize_merge(
             db,
             run,
             now,
             None,
-            history_event_type="import_all",
-            history_parser=parse_import_all_state,
+            history_event_type=spec.history_event_type,
+            history_parser=spec.parse_state,
         )
         return 1
 
 
-async def _advance_import_all_run(
+async def _advance_import_run(
     db: AsyncSession,
     run: Integration,
     queue: list[str],
     next_index: int,
     now: datetime,
+    spec: ImportRunSpec,
 ) -> int:
     run.config = dict(run.config or {})
-    run.config[IMPORT_ALL_INDEX_KEY] = next_index
+    run.config[spec.index_key] = next_index
     if next_index >= len(queue):
         await _finalize_merge(
             db,
             run,
             now,
-            mark_import_all_completed,
-            history_event_type="import_all",
-            history_parser=parse_import_all_state,
+            spec.mark_completed,
+            history_event_type=spec.history_event_type,
+            history_parser=spec.parse_state,
         )
         return 1
     db.add(run)

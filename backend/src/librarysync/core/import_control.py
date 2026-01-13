@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +11,7 @@ from librarysync.core.import_all import (
     import_all_active,
 )
 from librarysync.core.import_schedule import normalize_interval_seconds, parse_datetime
+from librarysync.core.import_state import coerce_int, coerce_str, normalize_queue
 from librarysync.db.models import Integration
 
 QUICK_IMPORT_STATUS_PENDING = "pending"
@@ -56,8 +56,8 @@ def parse_quick_import_state(config: dict | None) -> QuickImportState:
     config = config or {}
     status_raw = config.get(QUICK_IMPORT_STATUS_KEY)
     status = str(status_raw) if status_raw is not None else None
-    queue = _normalize_queue(config.get(QUICK_IMPORT_QUEUE_KEY))
-    index = _coerce_int(config.get(QUICK_IMPORT_INDEX_KEY)) or 0
+    queue = normalize_queue(config.get(QUICK_IMPORT_QUEUE_KEY))
+    index = coerce_int(config.get(QUICK_IMPORT_INDEX_KEY)) or 0
     interval_seconds = normalize_interval_seconds(config.get(QUICK_IMPORT_INTERVAL_KEY))
     return QuickImportState(
         status=status,
@@ -66,7 +66,7 @@ def parse_quick_import_state(config: dict | None) -> QuickImportState:
         requested_at=parse_datetime(config.get(QUICK_IMPORT_REQUESTED_KEY)),
         started_at=parse_datetime(config.get(QUICK_IMPORT_STARTED_KEY)),
         completed_at=parse_datetime(config.get(QUICK_IMPORT_COMPLETED_KEY)),
-        error=_coerce_str(config.get(QUICK_IMPORT_ERROR_KEY)),
+        error=coerce_str(config.get(QUICK_IMPORT_ERROR_KEY)),
         interval_seconds=interval_seconds,
         last_run_at=parse_datetime(config.get(QUICK_IMPORT_LAST_RUN_KEY)),
     )
@@ -176,7 +176,7 @@ def merge_pending(config: dict | None) -> bool:
     config = config or {}
     required_at = parse_datetime(config.get(MERGE_REQUIRED_AT_KEY))
     completed_at = parse_datetime(config.get(MERGE_COMPLETED_AT_KEY))
-    error = _coerce_str(config.get(MERGE_ERROR_KEY))
+    error = coerce_str(config.get(MERGE_ERROR_KEY))
     if not required_at:
         return False
     if not completed_at:
@@ -197,31 +197,3 @@ async def load_blocked_outbox_users(db: AsyncSession) -> set[str]:
         if import_all_active(config) or quick_import_active(config) or merge_pending(config):
             blocked.add(str(user_id))
     return blocked
-
-
-def _normalize_queue(value: object) -> list[str]:
-    if isinstance(value, list):
-        return [str(entry) for entry in value if entry]
-    return []
-
-
-def _coerce_int(value: Any) -> int | None:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if cleaned.isdigit():
-            try:
-                return int(cleaned)
-            except ValueError:
-                return None
-    return None
-
-
-def _coerce_str(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    cleaned = value.strip()
-    return cleaned or None

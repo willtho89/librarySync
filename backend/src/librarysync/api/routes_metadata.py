@@ -1,7 +1,7 @@
 import logging
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Awaitable, Callable, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
@@ -24,6 +24,7 @@ from librarysync.core.metadata_providers import (
     KitsuProviderSettings,
     MetadataProviderService,
     MyAnimeListProviderSettings,
+    ProviderState,
     TmdbProviderSettings,
     TvdbProviderSettings,
     TvmazeProviderSettings,
@@ -43,6 +44,25 @@ router = APIRouter(prefix="/api/metadata", tags=["metadata"])
 IMDB_ID_RE = re.compile(r"^tt\d+$", re.IGNORECASE)
 TMDB_ID_RE = re.compile(r"^\d+$")
 logger = logging.getLogger(__name__)
+
+PROVIDER_LABELS = {
+    "tmdb": "TMDB",
+    "tvdb": "TVDB",
+    "kitsu": "Kitsu",
+    "tvmaze": "TVMaze",
+    "imdb": "IMDb",
+    "myanimelist": "MyAnimeList",
+    "anilist": "AniList",
+}
+PROVIDER_UNAVAILABLE_DETAILS = {
+    "tmdb": "TMDB provider is not enabled or missing API key",
+    "tvdb": "TVDB provider is not enabled or missing API key",
+    "kitsu": "Kitsu provider is not enabled",
+    "tvmaze": "TVMaze provider is not enabled",
+    "imdb": "IMDb provider is not enabled",
+    "myanimelist": "MyAnimeList provider is not enabled",
+    "anilist": "AniList provider is not enabled",
+}
 
 
 class ProviderOut(BaseModel):
@@ -117,6 +137,75 @@ class LocalLookupOut(BaseModel):
 
 def _normalize_title_key(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", title.lower()).strip()
+
+
+def _provider_label(provider: str) -> str:
+    return PROVIDER_LABELS.get(provider, provider.upper())
+
+
+def _provider_unavailable_detail(provider: str) -> str:
+    return PROVIDER_UNAVAILABLE_DETAILS.get(
+        provider, f"{_provider_label(provider)} provider is not enabled"
+    )
+
+
+def _provider_out(state: ProviderState) -> dict:
+    return ProviderOut(
+        provider=state.provider,
+        enabled=state.enabled,
+        config=state.config,
+        has_credentials=state.has_credentials,
+    ).model_dump()
+
+
+async def _save_provider_settings(
+    provider: str,
+    payload: BaseModel,
+    current_user: User,
+    db: AsyncSession,
+    validator: Callable[[BaseModel], Awaitable[None]] | None = None,
+) -> dict:
+    if validator:
+        await validator(payload)
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    state = await service.save_provider_settings(provider, payload)
+    return _provider_out(state)
+
+
+async def _test_provider(
+    provider: str,
+    current_user: User,
+    db: AsyncSession,
+) -> dict:
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    provider_instance = await service.load_provider(provider)
+    if not provider_instance:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_provider_unavailable_detail(provider),
+        )
+    try:
+        await provider_instance.validate_credentials()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"{_provider_label(provider)} error: {exc}",
+        ) from exc
+    return {"status": "ok"}
+
+
+async def _maybe_validate_tmdb(payload: BaseModel) -> None:
+    if not isinstance(payload, TmdbProviderSettings):
+        return
+    if "api_key" in payload.model_fields_set and payload.api_key:
+        await _validate_tmdb_credentials(payload.api_key, payload.language, payload.region)
+
+
+async def _maybe_validate_tvdb(payload: BaseModel) -> None:
+    if not isinstance(payload, TvdbProviderSettings):
+        return
+    if "api_key" in payload.model_fields_set and payload.api_key:
+        await _validate_tvdb_credentials(payload.api_key, payload.pin, payload.language)
 
 
 def _candidate_imdb_id(candidate: MetadataLookupCandidate) -> str | None:
@@ -465,16 +554,7 @@ async def list_providers(
 ) -> dict:
     service = MetadataProviderService(db, _current_user.id, METADATA_PROVIDER_REGISTRY)
     states = await service.list_provider_states()
-    providers = [
-        ProviderOut(
-            provider=state.provider,
-            enabled=state.enabled,
-            config=state.config,
-            has_credentials=state.has_credentials,
-        ).model_dump()
-        for state in states
-    ]
-    return {"providers": providers}
+    return {"providers": [_provider_out(state) for state in states]}
 
 
 @router.post(
@@ -487,16 +567,13 @@ async def save_tmdb_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    if "api_key" in payload.model_fields_set and payload.api_key:
-        await _validate_tmdb_credentials(payload.api_key, payload.language, payload.region)
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    state = await service.save_provider_settings("tmdb", payload)
-    return ProviderOut(
-        provider=state.provider,
-        enabled=state.enabled,
-        config=state.config,
-        has_credentials=state.has_credentials,
-    ).model_dump()
+    return await _save_provider_settings(
+        "tmdb",
+        payload,
+        current_user,
+        db,
+        validator=_maybe_validate_tmdb,
+    )
 
 
 @router.post(
@@ -508,20 +585,7 @@ async def test_tmdb_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    provider = await service.load_provider("tmdb")
-    if not provider:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="TMDB provider is not enabled or missing API key",
-        )
-    try:
-        await provider.validate_credentials()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TMDB error: {exc}"
-        ) from exc
-    return {"status": "ok"}
+    return await _test_provider("tmdb", current_user, db)
 
 
 @router.post(
@@ -534,16 +598,13 @@ async def save_tvdb_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    if "api_key" in payload.model_fields_set and payload.api_key:
-        await _validate_tvdb_credentials(payload.api_key, payload.pin, payload.language)
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    state = await service.save_provider_settings("tvdb", payload)
-    return ProviderOut(
-        provider=state.provider,
-        enabled=state.enabled,
-        config=state.config,
-        has_credentials=state.has_credentials,
-    ).model_dump()
+    return await _save_provider_settings(
+        "tvdb",
+        payload,
+        current_user,
+        db,
+        validator=_maybe_validate_tvdb,
+    )
 
 
 @router.post(
@@ -555,20 +616,7 @@ async def test_tvdb_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    provider = await service.load_provider("tvdb")
-    if not provider:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="TVDB provider is not enabled or missing API key",
-        )
-    try:
-        await provider.validate_credentials()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TVDB error: {exc}"
-        ) from exc
-    return {"status": "ok"}
+    return await _test_provider("tvdb", current_user, db)
 
 
 @router.post(
@@ -581,14 +629,7 @@ async def save_kitsu_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    state = await service.save_provider_settings("kitsu", payload)
-    return ProviderOut(
-        provider=state.provider,
-        enabled=state.enabled,
-        config=state.config,
-        has_credentials=state.has_credentials,
-    ).model_dump()
+    return await _save_provider_settings("kitsu", payload, current_user, db)
 
 
 @router.post(
@@ -600,20 +641,7 @@ async def test_kitsu_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    provider = await service.load_provider("kitsu")
-    if not provider:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Kitsu provider is not enabled",
-        )
-    try:
-        await provider.validate_credentials()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Kitsu error: {exc}"
-        ) from exc
-    return {"status": "ok"}
+    return await _test_provider("kitsu", current_user, db)
 
 
 @router.post(
@@ -626,14 +654,7 @@ async def save_tvmaze_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    state = await service.save_provider_settings("tvmaze", payload)
-    return ProviderOut(
-        provider=state.provider,
-        enabled=state.enabled,
-        config=state.config,
-        has_credentials=state.has_credentials,
-    ).model_dump()
+    return await _save_provider_settings("tvmaze", payload, current_user, db)
 
 
 @router.post(
@@ -645,20 +666,7 @@ async def test_tvmaze_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    provider = await service.load_provider("tvmaze")
-    if not provider:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="TVMaze provider is not enabled",
-        )
-    try:
-        await provider.validate_credentials()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TVMaze error: {exc}"
-        ) from exc
-    return {"status": "ok"}
+    return await _test_provider("tvmaze", current_user, db)
 
 
 @router.post(
@@ -671,14 +679,7 @@ async def save_imdb_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    state = await service.save_provider_settings("imdb", payload)
-    return ProviderOut(
-        provider=state.provider,
-        enabled=state.enabled,
-        config=state.config,
-        has_credentials=state.has_credentials,
-    ).model_dump()
+    return await _save_provider_settings("imdb", payload, current_user, db)
 
 
 @router.post(
@@ -690,20 +691,7 @@ async def test_imdb_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    provider = await service.load_provider("imdb")
-    if not provider:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="IMDb provider is not enabled",
-        )
-    try:
-        await provider.validate_credentials()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"IMDb error: {exc}"
-        ) from exc
-    return {"status": "ok"}
+    return await _test_provider("imdb", current_user, db)
 
 
 @router.post(
@@ -716,14 +704,7 @@ async def save_myanimelist_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    state = await service.save_provider_settings("myanimelist", payload)
-    return ProviderOut(
-        provider=state.provider,
-        enabled=state.enabled,
-        config=state.config,
-        has_credentials=state.has_credentials,
-    ).model_dump()
+    return await _save_provider_settings("myanimelist", payload, current_user, db)
 
 
 @router.post(
@@ -735,21 +716,7 @@ async def test_myanimelist_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    provider = await service.load_provider("myanimelist")
-    if not provider:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="MyAnimeList provider is not enabled",
-        )
-    try:
-        await provider.validate_credentials()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"MyAnimeList error: {exc}",
-        ) from exc
-    return {"status": "ok"}
+    return await _test_provider("myanimelist", current_user, db)
 
 
 @router.post(
@@ -762,14 +729,7 @@ async def save_anilist_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    state = await service.save_provider_settings("anilist", payload)
-    return ProviderOut(
-        provider=state.provider,
-        enabled=state.enabled,
-        config=state.config,
-        has_credentials=state.has_credentials,
-    ).model_dump()
+    return await _save_provider_settings("anilist", payload, current_user, db)
 
 
 @router.post(
@@ -781,21 +741,7 @@ async def test_anilist_provider(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
-    provider = await service.load_provider("anilist")
-    if not provider:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="AniList provider is not enabled",
-        )
-    try:
-        await provider.validate_credentials()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"AniList error: {exc}",
-        ) from exc
-    return {"status": "ok"}
+    return await _test_provider("anilist", current_user, db)
 
 
 @router.post(
