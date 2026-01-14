@@ -690,10 +690,10 @@ function bindWatchlistUi() {
 async function handleWatchlistRefreshMetadata(item) {
   await window.refreshMediaItemMetadata(item.media_item_id, {
     onSuccess: async () => {
-      alert("Metadata refreshed successfully.");
+      showToast("Metadata refreshed successfully.");
       await loadWatchlist();
     },
-    onError: (error) => alert(error),
+    onError: (error) => showToast(error, true),
   });
 }
 

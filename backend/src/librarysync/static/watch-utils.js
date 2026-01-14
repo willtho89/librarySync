@@ -327,7 +327,19 @@ function openMetadataModal(item) {
 
   const mediaItemId = metadata.media_item_id || (item.provider === "local" ? item.id : null);
 
-  title.textContent = `Metadata for ${item.title}`;
+  let titleText = `Metadata for ${item.title}`;
+  if (hasEpisode) {
+    const season = item.season_number;
+    const episode = item.episode_number;
+    const episodeTitle = item.episode_title;
+    const sxe = `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
+    if (episodeTitle) {
+      titleText = `${sxe} - ${episodeTitle}`;
+    } else {
+      titleText = `${item.title} - ${sxe}`;
+    }
+  }
+  title.textContent = titleText;
   body.innerHTML = "";
 
   // Add poster if available
@@ -373,6 +385,19 @@ function openMetadataModal(item) {
       value: formatMetadataValue(metadata.episode_item_id),
     });
   }
+  // Add episode details section if this is an episode
+  if (hasEpisode) {
+    const episodeRows = [
+      { label: "Episode Title", value: formatMetadataValue(item.episode_title) },
+      { label: "Season & Episode", value: `S${item.season_number.toString().padStart(2, '0')}E${item.episode_number.toString().padStart(2, '0')}` },
+      { label: "Air Date", value: formatReleaseDate(item.episode_air_date) },
+    ];
+    if (item.episode_overview) {
+      episodeRows.push({ label: "Overview", value: item.episode_overview, fullWidth: true });
+    }
+    body.appendChild(renderMetadataSection("Episode Details", episodeRows));
+  }
+
   body.appendChild(renderMetadataSection("Library IDs", systemRows));
 
   // Media details section
@@ -520,7 +545,7 @@ async function refreshMediaItemMetadata(mediaItemId, options = {}) {
 async function handleMetadataModalRefresh(mediaItemId, item) {
   await refreshMediaItemMetadata(mediaItemId, {
     onSuccess: async (updatedCandidate) => {
-      alert("Metadata refreshed successfully.");
+      showToast("Metadata refreshed successfully.");
       if (typeof window.librarysyncOnMetadataRefresh === "function") {
         await window.librarysyncOnMetadataRefresh(updatedCandidate);
       } else if (typeof window.librarysyncLoadHistory === "function") {
@@ -529,6 +554,6 @@ async function handleMetadataModalRefresh(mediaItemId, item) {
         await window.librarysyncLoadWatchlist();
       }
     },
-    onError: (error) => alert(error),
+    onError: (error) => showToast(error, true),
   });
 }

@@ -1440,7 +1440,7 @@ async def refresh_local_metadata(
                 if first_http_error is None:
                     first_http_error = exc
                 continue
-            except Exception as exc:
+            except Exception:
                 logger.exception(
                     "Failed to refresh metadata from %s for media item %s",
                     provider_name,

@@ -100,6 +100,8 @@ class WatchedItemOut(BaseModel):
     season_number: int | None
     episode_number: int | None
     episode_title: str | None
+    episode_air_date: datetime | None = None
+    episode_overview: str | None = None
     episode_imdb_id: str | None
     episode_tmdb_id: str | None
     episode_tvdb_id: str | None
@@ -566,6 +568,10 @@ async def list_watched_items(
                 season_number=episode_item.season_number if episode_item else None,
                 episode_number=episode_item.episode_number if episode_item else None,
                 episode_title=episode_item.title if episode_item else None,
+                episode_air_date=episode_item.air_date if episode_item else None,
+                episode_overview=episode_item.raw.get("overview")
+                if episode_item and episode_item.raw
+                else None,
                 episode_imdb_id=episode_item.imdb_id if episode_item else None,
                 episode_tmdb_id=episode_item.tmdb_id if episode_item else None,
                 episode_tvdb_id=episode_item.tvdb_id if episode_item else None,
