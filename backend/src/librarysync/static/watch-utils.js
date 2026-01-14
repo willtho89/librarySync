@@ -332,7 +332,7 @@ function openMetadataModal(item) {
     const season = item.season_number;
     const episode = item.episode_number;
     const episodeTitle = item.episode_title;
-    const sxe = `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
+    const sxe = formatSeasonEpisode(season, episode);
     if (episodeTitle) {
       titleText = `${sxe} - ${episodeTitle}`;
     } else {
@@ -389,7 +389,7 @@ function openMetadataModal(item) {
   if (hasEpisode) {
     const episodeRows = [
       { label: "Episode Title", value: formatMetadataValue(item.episode_title) },
-      { label: "Season & Episode", value: `S${item.season_number.toString().padStart(2, '0')}E${item.episode_number.toString().padStart(2, '0')}` },
+      { label: "Season & Episode", value: formatSeasonEpisode(item.season_number, item.episode_number) },
       { label: "Air Date", value: formatReleaseDate(item.episode_air_date) },
     ];
     if (item.episode_overview) {
