@@ -132,7 +132,26 @@ def _needs_media_enrichment(media_item: MediaItem, episode_item: EpisodeItem | N
         and bool(media_item.tmdb_id)
         and not episode_item.tmdb_id
     )
-    return missing_ids or poster_missing or missing_year or episode_needs_tmdb
+    missing_overview = not media_item.overview
+    missing_genres = not media_item.genres
+    missing_runtime = media_item.runtime_in_seconds is None
+    missing_release_date = not media_item.release_date and media_item.media_type == "movie"
+    missing_air_dates = (
+        not media_item.first_air_date or not media_item.last_air_date
+    ) and media_item.media_type == "tv"
+    missing_raw = not media_item.raw
+    return (
+        missing_ids
+        or poster_missing
+        or missing_year
+        or episode_needs_tmdb
+        or missing_overview
+        or missing_genres
+        or missing_runtime
+        or missing_release_date
+        or missing_air_dates
+        or missing_raw
+    )
 
 
 def _should_lookup_by_title(media_item: MediaItem) -> bool:
