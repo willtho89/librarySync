@@ -607,19 +607,19 @@ def _candidate_group_to_out(group: dict) -> CandidateOut:
 
 def _media_item_to_candidate_out(item: MediaItem) -> CandidateOut:
     raw = item.raw if isinstance(item.raw, dict) else {}
-    overview = raw.get("overview") or raw.get("description") or raw.get("plot")
-    genres = raw.get("genres")
-    if isinstance(genres, list):
-        genres = [g for g in genres if isinstance(g, str)]
-    else:
-        genres = None
-    runtime_in_seconds = raw.get("runtime_in_seconds") or raw.get("runtime")
-    if isinstance(runtime_in_seconds, str):
-        try:
-            runtime_in_seconds = int(runtime_in_seconds)
-        except ValueError:
-            runtime_in_seconds = None
-    release_date = raw.get("release_date") or raw.get("first_air_date") or raw.get("premiered")
+    # Prioritize direct model fields, fall back to raw dict extraction using helper functions
+    overview = item.overview if item.overview is not None else _extract_overview(raw)
+    genres = item.genres if item.genres is not None else _extract_genres(raw)
+    runtime_in_seconds = (
+        item.runtime_in_seconds
+        if item.runtime_in_seconds is not None
+        else _extract_runtime(raw)
+    )
+    release_date = (
+        item.release_date
+        if getattr(item, "release_date", None) is not None
+        else _extract_release_date(raw)
+    )
     return CandidateOut(
         id=item.id,
         provider="local",
