@@ -243,9 +243,7 @@ def _candidate_tmdb_id(candidate: MetadataLookupCandidate) -> str | None:
     return None
 
 
-def _candidate_raw_id(
-    candidate: MetadataLookupCandidate, keys: tuple[str, ...]
-) -> str | None:
+def _candidate_raw_id(candidate: MetadataLookupCandidate, keys: tuple[str, ...]) -> str | None:
     raw = candidate.raw if isinstance(candidate.raw, dict) else {}
     for key in keys:
         value = raw.get(key)
@@ -297,9 +295,7 @@ def _candidate_ids(candidate: MetadataLookupCandidate) -> dict[str, str]:
     )
     if myanimelist_id:
         ids.setdefault("myanimelist_id", myanimelist_id)
-    anilist_id = _candidate_raw_id(
-        candidate, ("anilist_id", "anilistId", "anilistID")
-    )
+    anilist_id = _candidate_raw_id(candidate, ("anilist_id", "anilistId", "anilistID"))
     if anilist_id:
         ids.setdefault("anilist_id", anilist_id)
     return ids
@@ -323,13 +319,33 @@ def _candidate_keys(candidate: MetadataLookupCandidate) -> list[tuple[str, str]]
     return keys
 
 
+def _candidate_unique_id_keys(candidate: MetadataLookupCandidate) -> list[tuple[str, str]]:
+    """Extract only unique identifier keys (IMDB, TMDB, TVDB) from a candidate."""
+    keys: list[tuple[str, str]] = []
+    imdb_id = _candidate_imdb_id(candidate)
+    if imdb_id:
+        keys.append(("imdb", imdb_id))
+
+    ids = _candidate_ids(candidate)
+    for key, value in ids.items():
+        if value and key in {
+            "tmdb_id",
+            "tvdb_id",
+            "tvmaze_id",
+            "kitsu_id",
+            "myanimelist_id",
+            "anilist_id",
+        }:
+            keys.append((key, value))
+
+    return keys
+
+
 def _rank_value(candidate: MetadataLookupCandidate) -> int:
     return candidate.rank if candidate.rank is not None else 1_000_000
 
 
-def _init_candidate_group(
-    candidate: MetadataLookupCandidate, keys: list[tuple[str, str]]
-) -> dict:
+def _init_candidate_group(candidate: MetadataLookupCandidate, keys: list[tuple[str, str]]) -> dict:
     return {
         "primary": candidate,
         "members": [candidate],
@@ -395,10 +411,12 @@ def _merge_lookup_candidates(
     groups: list[dict] = []
     key_to_group: dict[tuple[str, str], dict] = {}
     for candidate in candidates:
-        keys = _candidate_keys(candidate)
+        unique_id_keys = _candidate_unique_id_keys(candidate)
+        all_keys = _candidate_keys(candidate)
         matched_groups: list[dict] = []
         seen_groups: set[int] = set()
-        for key in keys:
+
+        for key in unique_id_keys:
             group = key_to_group.get(key)
             if not group:
                 continue
@@ -407,8 +425,9 @@ def _merge_lookup_candidates(
                 continue
             matched_groups.append(group)
             seen_groups.add(group_id)
+
         if not matched_groups:
-            group = _init_candidate_group(candidate, keys)
+            group = _init_candidate_group(candidate, all_keys)
             groups.append(group)
         else:
             group = min(matched_groups, key=lambda g: g["rank"])
@@ -420,9 +439,11 @@ def _merge_lookup_candidates(
                     groups.remove(other)
                 for key in other["keys"]:
                     key_to_group[key] = group
-            _add_candidate_to_group(group, candidate, keys)
-        for key in keys:
+            _add_candidate_to_group(group, candidate, all_keys)
+
+        for key in all_keys:
             key_to_group[key] = group
+
     _merge_anime_groups(groups)
     groups.sort(key=lambda g: g["rank"])
     return groups
@@ -757,9 +778,7 @@ async def create_lookup(
 ) -> LookupCreateOut:
     query = payload.query.strip()
     if not query:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Query is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Query is required")
     query_type, normalized = _classify_query(query)
     request = MetadataLookupRequest(
         user_id=current_user.id,
@@ -839,9 +858,7 @@ async def lookup_local(
         .outerjoin(watch_counts, watch_counts.c.media_item_id == MediaItem.id)
         .outerjoin(watchlist_counts, watchlist_counts.c.media_item_id == MediaItem.id)
         .where(*criteria)
-        .order_by(
-            interaction_count.desc(), MediaItem.year.desc(), MediaItem.title
-        )
+        .order_by(interaction_count.desc(), MediaItem.year.desc(), MediaItem.title)
         .offset(offset)
         .limit(limit + 1)
     )
@@ -1233,9 +1250,7 @@ async def _validate_tmdb_credentials(
         ) from exc
 
 
-async def _validate_tvdb_credentials(
-    api_key: str, pin: str | None, language: str | None
-) -> None:
+async def _validate_tvdb_credentials(api_key: str, pin: str | None, language: str | None) -> None:
     try:
         provider = TvdbMetadataProvider.from_settings(
             {"language": language},
