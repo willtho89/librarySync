@@ -372,7 +372,19 @@
   }
 
   .candidate-meta {
-    @apply space-y-1;
+    @apply relative space-y-1 pr-10;
+  }
+
+  .candidate-menu-container {
+    @apply absolute right-0 top-0 z-10;
+  }
+
+  .candidate-menu-container .menu-button {
+    @apply opacity-60 transition-opacity duration-150;
+  }
+
+  .candidate-option:hover .candidate-menu-container .menu-button {
+    @apply opacity-100;
   }
 
   .candidate-meta h3 {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import re
 
 import httpx
 
@@ -103,6 +104,23 @@ class TvmazeMetadataProvider(MetadataProvider[TvmazeConfig, None]):
         poster_url = _poster_url(raw.get("image"))
         externals = raw.get("externals") or {}
         imdb_id = externals.get("imdb") if isinstance(externals, dict) else None
+
+        # Extract runtime (convert minutes to seconds)
+        runtime_in_seconds = None
+        if raw.get("runtime"):
+            runtime_in_seconds = int(raw["runtime"]) * 60
+
+        # Extract genres
+        genres = None
+        if raw.get("genres"):
+            genres = raw["genres"]
+
+        # Extract overview (summary field in TVMaze)
+        overview = raw.get("summary")
+        if overview:
+            # Remove HTML tags from summary
+            overview = re.sub(r"<[^>]+>", "", overview)
+
         return MediaCandidate(
             provider=self.provider,
             provider_id=str(tvmaze_id) if tvmaze_id is not None else "",
@@ -111,5 +129,8 @@ class TvmazeMetadataProvider(MetadataProvider[TvmazeConfig, None]):
             year=year,
             poster_url=poster_url,
             imdb_id=imdb_id,
+            runtime_in_seconds=runtime_in_seconds,
+            genres=genres,
+            overview=overview,
             raw=raw,
         )

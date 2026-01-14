@@ -144,6 +144,22 @@ class KitsuMetadataProvider(MetadataProvider[KitsuConfig, None]):
         )
         poster_url = _poster_url(attributes.get("posterImage") or attributes.get("poster_image"))
         imdb_id = attributes.get("imdbId") or attributes.get("imdb_id")
+
+        # Extract runtime (convert minutes to seconds)
+        runtime_in_seconds = None
+        if attributes.get("episodeLength"):
+            runtime_in_seconds = int(attributes["episodeLength"]) * 60
+
+        # Extract genres
+        genres = None
+        if attributes.get("genres"):
+            genres_data = attributes["genres"]
+            if isinstance(genres_data, list):
+                genres = [genre.get("name") for genre in genres_data if genre.get("name")]
+
+        # Extract overview
+        overview = attributes.get("synopsis")
+
         return MediaCandidate(
             provider=self.provider,
             provider_id=str(kitsu_id) if kitsu_id is not None else "",
@@ -152,5 +168,8 @@ class KitsuMetadataProvider(MetadataProvider[KitsuConfig, None]):
             year=year,
             poster_url=poster_url,
             imdb_id=imdb_id,
+            runtime_in_seconds=runtime_in_seconds,
+            genres=genres,
+            overview=overview,
             raw=raw,
         )

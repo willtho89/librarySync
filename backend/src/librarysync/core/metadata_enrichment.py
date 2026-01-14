@@ -443,14 +443,26 @@ async def _fetch_provider_candidate(
     return None
 
 
-def _external_ids_for_provider(
-    provider: MetadataProvider, media_item: MediaItem
-) -> list[str]:
+def _external_ids_for_provider(provider: MetadataProvider, media_item: MediaItem) -> list[str]:
     if media_item.imdb_id:
         return [media_item.imdb_id.lower()]
     if provider.provider == "tvdb" and media_item.tmdb_id:
         return [media_item.tmdb_id]
     return []
+
+
+async def _apply_candidate_ids(
+    db: AsyncSession,
+    media_item: MediaItem,
+    ids: dict[str, str],
+) -> None:
+    await _set_media_id(db, media_item, "imdb_id", ids.get("imdb_id"), normalize=True)
+    await _set_media_id(db, media_item, "tmdb_id", ids.get("tmdb_id"))
+    await _set_media_id(db, media_item, "tvdb_id", ids.get("tvdb_id"))
+    await _set_media_id(db, media_item, "tvmaze_id", ids.get("tvmaze_id"))
+    await _set_media_id(db, media_item, "kitsu_id", ids.get("kitsu_id"))
+    await _set_media_id(db, media_item, "myanimelist_id", ids.get("myanimelist_id"))
+    await _set_media_id(db, media_item, "anilist_id", ids.get("anilist_id"))
 
 
 async def _apply_candidate_to_media_item(
@@ -460,9 +472,7 @@ async def _apply_candidate_to_media_item(
     update_poster: bool = True,
 ) -> None:
     ids = _extract_candidate_ids(candidate)
-    await _set_media_id(db, media_item, "imdb_id", ids.get("imdb_id"), normalize=True)
-    await _set_media_id(db, media_item, "tmdb_id", ids.get("tmdb_id"))
-    await _set_media_id(db, media_item, "tvdb_id", ids.get("tvdb_id"))
+    await _apply_candidate_ids(db, media_item, ids)
     if (
         update_poster
         and candidate.poster_url
@@ -480,13 +490,77 @@ async def _apply_candidate_to_media_item(
         media_item.last_air_date = _parse_date(candidate.last_air_date)
 
 
+async def apply_refresh_candidate(
+    db: AsyncSession,
+    media_item: MediaItem,
+    candidate: MediaCandidate,
+    *,
+    overwrite: bool = True,
+) -> None:
+    ids = _extract_candidate_ids(candidate)
+    await _apply_candidate_ids(db, media_item, ids)
+    if overwrite:
+        if candidate.title:
+            media_item.title = candidate.title
+        if candidate.year is not None:
+            media_item.year = candidate.year
+        if candidate.poster_url:
+            media_item.poster_url = candidate.poster_url
+        if candidate.release_date:
+            parsed = _parse_date(candidate.release_date)
+            if parsed:
+                media_item.release_date = parsed
+        if candidate.first_air_date:
+            parsed = _parse_date(candidate.first_air_date)
+            if parsed:
+                media_item.first_air_date = parsed
+        if candidate.last_air_date:
+            parsed = _parse_date(candidate.last_air_date)
+            if parsed:
+                media_item.last_air_date = parsed
+        if candidate.runtime_in_seconds is not None:
+            media_item.runtime_in_seconds = candidate.runtime_in_seconds
+        if candidate.genres:
+            media_item.genres = candidate.genres
+        if candidate.overview:
+            media_item.overview = candidate.overview
+        if candidate.raw:
+            media_item.raw = candidate.raw
+        return
+
+    if candidate.title and not media_item.title:
+        media_item.title = candidate.title
+    if candidate.year is not None and media_item.year is None:
+        media_item.year = candidate.year
+    if candidate.poster_url and not media_item.poster_url:
+        media_item.poster_url = candidate.poster_url
+    if candidate.release_date and not media_item.release_date:
+        parsed = _parse_date(candidate.release_date)
+        if parsed:
+            media_item.release_date = parsed
+    if candidate.first_air_date and not media_item.first_air_date:
+        parsed = _parse_date(candidate.first_air_date)
+        if parsed:
+            media_item.first_air_date = parsed
+    if candidate.last_air_date and not media_item.last_air_date:
+        parsed = _parse_date(candidate.last_air_date)
+        if parsed:
+            media_item.last_air_date = parsed
+    if candidate.runtime_in_seconds is not None and media_item.runtime_in_seconds is None:
+        media_item.runtime_in_seconds = candidate.runtime_in_seconds
+    if candidate.genres and not media_item.genres:
+        media_item.genres = candidate.genres
+    if candidate.overview and not media_item.overview:
+        media_item.overview = candidate.overview
+    if candidate.raw and not media_item.raw:
+        media_item.raw = candidate.raw
+
+
 async def _apply_anime_candidate(
     db: AsyncSession, media_item: MediaItem, candidate: MediaCandidate
 ) -> None:
     ids = _extract_anime_candidate_ids(candidate)
-    await _set_media_id(db, media_item, "anilist_id", ids.get("anilist_id"))
-    await _set_media_id(db, media_item, "kitsu_id", ids.get("kitsu_id"))
-    await _set_media_id(db, media_item, "myanimelist_id", ids.get("myanimelist_id"))
+    await _apply_candidate_ids(db, media_item, ids)
     if candidate.poster_url and not media_item.poster_url:
         media_item.poster_url = candidate.poster_url
     if media_item.year is None and candidate.year is not None:
@@ -586,6 +660,12 @@ async def _can_assign_id(
                 MediaItem.tvdb_id == value, MediaItem.media_type == media_item.media_type
             )
         )
+    elif field == "tvmaze_id":
+        result = await db.execute(
+            select(MediaItem.id).where(
+                MediaItem.tvmaze_id == value, MediaItem.media_type == media_item.media_type
+            )
+        )
     elif field == "kitsu_id":
         result = await db.execute(
             select(MediaItem.id).where(
@@ -668,6 +748,14 @@ def _extract_candidate_ids(candidate: MediaCandidate) -> dict[str, str]:
         ids["tmdb_id"] = candidate.provider_id
     if candidate.provider == "tvdb" and candidate.provider_id:
         ids["tvdb_id"] = candidate.provider_id
+    if candidate.provider == "tvmaze" and candidate.provider_id:
+        ids["tvmaze_id"] = candidate.provider_id
+    if candidate.provider == "kitsu" and candidate.provider_id:
+        ids["kitsu_id"] = candidate.provider_id
+    if candidate.provider == "myanimelist" and candidate.provider_id:
+        ids["myanimelist_id"] = candidate.provider_id
+    if candidate.provider == "anilist" and candidate.provider_id:
+        ids["anilist_id"] = candidate.provider_id
     if candidate.provider == "imdb" and candidate.provider_id:
         ids["imdb_id"] = candidate.provider_id
     if candidate.imdb_id:
@@ -680,6 +768,21 @@ def _extract_candidate_ids(candidate: MediaCandidate) -> dict[str, str]:
     tvdb_id = _extract_raw_id(raw, ("tvdb_id", "tvdbId", "tvdbID"))
     if tvdb_id:
         ids.setdefault("tvdb_id", tvdb_id)
+    tvmaze_id = _extract_raw_id(raw, ("tvmaze_id", "tvmazeId", "tvmazeID"))
+    if tvmaze_id:
+        ids.setdefault("tvmaze_id", tvmaze_id)
+    kitsu_id = _extract_raw_id(raw, ("kitsu_id", "kitsuId", "kitsuID"))
+    if kitsu_id:
+        ids.setdefault("kitsu_id", kitsu_id)
+    myanimelist_id = _extract_raw_id(
+        raw,
+        ("myanimelist_id", "myanimelistId", "myanimelistID", "mal_id", "malId", "malID"),
+    )
+    if myanimelist_id:
+        ids.setdefault("myanimelist_id", myanimelist_id)
+    anilist_id = _extract_raw_id(raw, ("anilist_id", "anilistId", "anilistID"))
+    if anilist_id:
+        ids.setdefault("anilist_id", anilist_id)
     imdb_id = _extract_raw_id(raw, ("imdb_id", "imdbId", "imdbID"))
     if imdb_id:
         ids.setdefault("imdb_id", imdb_id)

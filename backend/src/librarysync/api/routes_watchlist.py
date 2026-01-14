@@ -106,8 +106,15 @@ class WatchlistItemOut(BaseModel):
     imdb_id: str | None
     tmdb_id: str | None
     tvdb_id: str | None
+    tvmaze_id: str | None = None
+    kitsu_id: str | None = None
+    myanimelist_id: str | None = None
+    anilist_id: str | None = None
     release_date: str | None = None
     first_air_date: str | None = None
+    overview: str | None = None
+    genres: list[str] | None = None
+    runtime_in_seconds: int | None = None
     progress: dict | None = None
     sources: list[WatchlistItemSourceOut] = []
 
@@ -651,8 +658,15 @@ async def list_watchlist_items(
                 imdb_id=media.imdb_id,
                 tmdb_id=media.tmdb_id,
                 tvdb_id=media.tvdb_id,
+                tvmaze_id=media.tvmaze_id,
+                kitsu_id=media.kitsu_id,
+                myanimelist_id=media.myanimelist_id,
+                anilist_id=media.anilist_id,
                 release_date=media.release_date.isoformat() if media.release_date else None,
                 first_air_date=media.first_air_date.isoformat() if media.first_air_date else None,
+                overview=media.overview,
+                genres=media.genres,
+                runtime_in_seconds=media.runtime_in_seconds,
                 progress=progress,
                 sources=[source.model_dump() for source in source_map.get(item.id, [])],
             ).model_dump()
@@ -781,7 +795,7 @@ async def mark_watchlist_item_watched(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="All released episodes are already watched",
             )
-        target_media = None # For shows, we set media to None in WatchedItem
+        target_media = None  # For shows, we set media to None in WatchedItem
     # 3. Create WatchedItem
     # Check if rewatch (only for movies, shows handle individual eps)
     is_rewatch = False

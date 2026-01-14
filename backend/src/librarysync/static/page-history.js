@@ -655,6 +655,14 @@ async function loadHistory() {
     metadataButton.textContent = "View metadata";
     metadataButton.setAttribute("role", "menuitem");
 
+    let refreshMetadataButton = null;
+    if (item.metadata && item.metadata.media_item_id) {
+      refreshMetadataButton = document.createElement("button");
+      refreshMetadataButton.type = "button";
+      refreshMetadataButton.textContent = "Refresh metadata";
+      refreshMetadataButton.setAttribute("role", "menuitem");
+    }
+
     const externalLinks = buildExternalMenuLinks(item);
 
     const deleteButton = document.createElement("button");
@@ -668,6 +676,9 @@ async function loadHistory() {
       menuPanel.appendChild(addToWatchlistButton);
     }
     menuPanel.appendChild(metadataButton);
+    if (refreshMetadataButton) {
+      menuPanel.appendChild(refreshMetadataButton);
+    }
     externalLinks.forEach((link) => menuPanel.appendChild(link));
     menuPanel.appendChild(deleteButton);
 
@@ -719,6 +730,13 @@ async function loadHistory() {
       closeHistoryMenus();
       openMetadataModal(item);
     });
+
+    if (refreshMetadataButton) {
+      refreshMetadataButton.addEventListener("click", async () => {
+        closeHistoryMenus();
+        await handleHistoryRefreshMetadata(item);
+      });
+    }
 
     cancelButton.addEventListener("click", () => {
       editInput.value = formatDateTimeInput(item.watched_at);
@@ -829,6 +847,22 @@ async function loadIntegrationsForHistory() {
   } catch (error) {
     console.error("failed to load integrations", error);
   }
+}
+
+async function handleHistoryRefreshMetadata(item) {
+  if (!item.metadata || !item.metadata.media_item_id) {
+    setMessage("history-message", "Cannot refresh: missing media item ID.", true);
+    return;
+  }
+  const mediaItemId = item.metadata.media_item_id;
+  await window.refreshMediaItemMetadata(mediaItemId, {
+    onStart: () => setMessage("history-message", "Refreshing metadata..."),
+    onSuccess: async () => {
+      setMessage("history-message", "Metadata refreshed successfully.");
+      await loadHistory();
+    },
+    onError: (error) => setMessage("history-message", error, true),
+  });
 }
 
 window.librarysyncLoadHistory = loadHistory;

@@ -392,6 +392,15 @@ async function pollLookupStatus(lookupId, requestVersion, cacheKey) {
   }
 }
 
+function closeLookupMenus() {
+  document.querySelectorAll("[data-menu-panel].is-open").forEach((panel) => {
+    panel.classList.remove("is-open");
+  });
+  document.querySelectorAll("[data-menu-button]").forEach((button) => {
+    button.setAttribute("aria-expanded", "false");
+  });
+}
+
 function renderCandidates(candidates) {
   const resultsCard = document.getElementById("lookup-results");
   const candidatesEl = document.getElementById("candidate-list");
@@ -442,6 +451,68 @@ function renderCandidates(candidates) {
 
       meta.appendChild(title);
       meta.appendChild(detail);
+
+      if (candidate.provider === "local") {
+        const menuButton = document.createElement("button");
+        menuButton.type = "button";
+        menuButton.className = "menu-button menu-button-inline";
+        menuButton.setAttribute("aria-haspopup", "true");
+        menuButton.setAttribute("aria-expanded", "false");
+        menuButton.setAttribute("aria-label", "More options");
+        menuButton.setAttribute("data-menu-button", "true");
+
+        const dotStack = document.createElement("span");
+        dotStack.className = "menu-dots";
+        for (let i = 0; i < 3; i += 1) {
+          const dot = document.createElement("span");
+          dot.className = "menu-dot";
+          dotStack.appendChild(dot);
+        }
+        menuButton.appendChild(dotStack);
+
+        const menuPanel = document.createElement("div");
+        menuPanel.className = "menu-panel";
+        menuPanel.setAttribute("role", "menu");
+        menuPanel.setAttribute("data-menu-panel", "true");
+
+        const viewMetadataButton = document.createElement("button");
+        viewMetadataButton.type = "button";
+        viewMetadataButton.textContent = "View metadata";
+        viewMetadataButton.setAttribute("role", "menuitem");
+        viewMetadataButton.addEventListener("click", () => {
+          closeLookupMenus();
+          openMetadataModal(candidate);
+        });
+
+        const refreshMetadataButton = document.createElement("button");
+        refreshMetadataButton.type = "button";
+        refreshMetadataButton.textContent = "Refresh metadata";
+        refreshMetadataButton.setAttribute("role", "menuitem");
+        refreshMetadataButton.addEventListener("click", async () => {
+          closeLookupMenus();
+          await handleRefreshMetadata(candidate.id, candidate);
+        });
+
+        menuPanel.appendChild(viewMetadataButton);
+        menuPanel.appendChild(refreshMetadataButton);
+
+        const menuContainer = document.createElement("div");
+        menuContainer.className = "candidate-menu-container";
+        menuContainer.appendChild(menuButton);
+        menuContainer.appendChild(menuPanel);
+        meta.appendChild(menuContainer);
+
+        menuButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const isOpen = menuPanel.classList.contains("is-open");
+          closeLookupMenus();
+          if (!isOpen) {
+            menuPanel.classList.add("is-open");
+            menuButton.setAttribute("aria-expanded", "true");
+          }
+        });
+      }
+
       label.appendChild(input);
       label.appendChild(poster);
       label.appendChild(meta);
@@ -842,13 +913,49 @@ function bindWatchlistButton() {
   });
 }
 
+async function handleRefreshMetadata(mediaItemId, candidate) {
+  await window.refreshMediaItemMetadata(mediaItemId, {
+    onStart: () => setMessage("confirm-message", "Refreshing metadata..."),
+    onSuccess: async (updatedCandidate) => {
+      setMessage("confirm-message", "Metadata refreshed successfully.");
+      const index = lookupState.candidates.findIndex((c) => c.id === candidate.id);
+      if (index !== -1) {
+        lookupState.candidates[index] = { ...lookupState.candidates[index], ...updatedCandidate };
+        renderCandidates(lookupState.candidates);
+      }
+    },
+    onError: (error) => setMessage("confirm-message", error, true),
+  });
+}
+
 window.librarysyncPageInit = () => {
+  const modal = document.getElementById("metadata-modal");
+  if (modal) {
+    modal.querySelectorAll("[data-modal-close]").forEach((button) => {
+      button.addEventListener("click", closeMetadataModal);
+    });
+  }
+
   bindForm("lookup-form", handleLookupSubmit);
   bindForm("confirm-form", handleLookupConfirm);
   bindRatingClearControls();
   bindLookupAutoSearch();
   bindWatchlistButton();
   updateLookupActions();
+
+  document.addEventListener("click", (event) => {
+    if (event.target && event.target.closest("[data-menu-button]")) {
+      return;
+    }
+    closeLookupMenus();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeLookupMenus();
+      closeMetadataModal();
+    }
+  });
 
   const candidateList = document.getElementById("candidate-list");
   if (candidateList) {

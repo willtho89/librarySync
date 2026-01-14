@@ -75,6 +75,7 @@ class HistoryItemMetadata(BaseModel):
     watched_created_at: datetime | None = None
     first_sync_at: datetime | None = None
     last_sync_at: datetime | None = None
+    raw: dict | None = None
 
 
 class WatchedItemOut(BaseModel):
@@ -92,6 +93,10 @@ class WatchedItemOut(BaseModel):
     myanimelist_id: str | None
     anilist_id: str | None
     poster_url: str | None
+    release_date: datetime | None = None
+    runtime_in_seconds: int | None = None
+    genres: list[str] | None = None
+    overview: str | None = None
     season_number: int | None
     episode_number: int | None
     episode_title: str | None
@@ -536,6 +541,7 @@ async def list_watched_items(
             watched_created_at=watched.created_at,
             first_sync_at=first_sync_at,
             last_sync_at=last_sync_at,
+            raw=base_item.raw,
         )
         items.append(
             WatchedItemOut(
@@ -553,6 +559,10 @@ async def list_watched_items(
                 myanimelist_id=base_item.myanimelist_id,
                 anilist_id=base_item.anilist_id,
                 poster_url=base_item.poster_url,
+                release_date=base_item.release_date,
+                runtime_in_seconds=base_item.runtime_in_seconds,
+                genres=base_item.genres,
+                overview=base_item.overview,
                 season_number=episode_item.season_number if episode_item else None,
                 episode_number=episode_item.episode_number if episode_item else None,
                 episode_title=episode_item.title if episode_item else None,

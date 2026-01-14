@@ -226,6 +226,19 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
             "type": "anime",
         }
 
+        # Extract runtime (convert minutes to seconds)
+        runtime_in_seconds = None
+        if raw.get("duration"):
+            runtime_in_seconds = int(raw["duration"]) * 60
+
+        # Extract genres
+        genres = None
+        if raw.get("genres"):
+            genres = raw["genres"]
+
+        # Extract overview
+        overview = raw.get("description")
+
         return MediaCandidate(
             provider=self.provider,
             provider_id=anilist_id,
@@ -234,6 +247,9 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
             year=year,
             poster_url=poster,
             imdb_id=None,
+            runtime_in_seconds=runtime_in_seconds,
+            genres=genres,
+            overview=overview,
             raw=enriched_raw,
         )
 

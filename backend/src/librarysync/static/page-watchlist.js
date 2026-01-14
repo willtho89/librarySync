@@ -397,6 +397,13 @@ async function loadWatchlist() {
         const modalItem = {
             id: item.id,
             title: item.title,
+            poster_url: item.poster_url,
+            media_type: item.media_type,
+            year: item.year,
+            release_date: item.release_date,
+            runtime_in_seconds: item.runtime_in_seconds,
+            genres: item.genres,
+            overview: item.overview,
             season_number: null,
             episode_number: null,
             imdb_id: item.imdb_id,
@@ -408,6 +415,10 @@ async function loadWatchlist() {
                     imdb_id: item.imdb_id,
                     tmdb_id: item.tmdb_id,
                     tvdb_id: item.tvdb_id,
+                    tvmaze_id: item.tvmaze_id,
+                    kitsu_id: item.kitsu_id,
+                    myanimelist_id: item.myanimelist_id,
+                    anilist_id: item.anilist_id,
                 },
                 watched_created_at: item.created_at,
                 media_created_at: null, // Not available
@@ -417,6 +428,15 @@ async function loadWatchlist() {
             }
         };
         openMetadataModal(modalItem);
+    });
+
+    const refreshMetadataButton = document.createElement("button");
+    refreshMetadataButton.type = "button";
+    refreshMetadataButton.textContent = "Refresh metadata";
+    refreshMetadataButton.setAttribute("role", "menuitem");
+    refreshMetadataButton.addEventListener("click", async () => {
+        closeWatchlistMenus();
+        await handleWatchlistRefreshMetadata(item);
     });
 
     const externalLinks = buildExternalMenuLinks(item);
@@ -438,6 +458,7 @@ async function loadWatchlist() {
     });
 
     menuPanel.appendChild(metadataButton);
+    menuPanel.appendChild(refreshMetadataButton);
     externalLinks.forEach((link) => menuPanel.appendChild(link));
     menuPanel.appendChild(deleteButton);
     
@@ -664,6 +685,16 @@ function bindWatchlistUi() {
     });
 
     watchlistUiBound = true;
+}
+
+async function handleWatchlistRefreshMetadata(item) {
+  await window.refreshMediaItemMetadata(item.media_item_id, {
+    onSuccess: async () => {
+      alert("Metadata refreshed successfully.");
+      await loadWatchlist();
+    },
+    onError: (error) => alert(error),
+  });
 }
 
 window.librarysyncPageInit = async ({ user }) => {
