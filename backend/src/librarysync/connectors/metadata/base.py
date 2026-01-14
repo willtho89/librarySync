@@ -4,14 +4,15 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Generic, Mapping, TypeVar
 
+from pydantic import BaseModel, Field, field_validator
+
 MEDIA_SCOPE_ALL = "all"
 MEDIA_SCOPE_MOVIE = "movie"
 MEDIA_SCOPE_TV = "tv"
 MEDIA_SCOPE_ANIME = "anime"
 
 
-@dataclass(frozen=True)
-class MediaCandidate:
+class MediaCandidate(BaseModel):
     provider: str
     provider_id: str
     media_type: str
@@ -25,7 +26,16 @@ class MediaCandidate:
     runtime_in_seconds: int | None = None
     genres: list[str] | None = None
     overview: str | None = None
-    raw: dict = field(default_factory=dict)
+    raw: dict = Field(default_factory=dict)
+
+    @field_validator("genres", mode="before")
+    @classmethod
+    def normalize_genres(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return [g["name"] if isinstance(g, dict) and "name" in g else str(g) for g in v if g]
+        return None
 
 
 @dataclass(frozen=True)
