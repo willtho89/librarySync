@@ -372,7 +372,19 @@
   }
 
   .candidate-meta {
-    @apply space-y-1;
+    @apply relative space-y-1 pr-10;
+  }
+
+  .candidate-menu-container {
+    @apply absolute right-0 top-0 z-10;
+  }
+
+  .candidate-menu-container .menu-button {
+    @apply opacity-60 transition-opacity duration-150;
+  }
+
+  .candidate-option:hover .candidate-menu-container .menu-button {
+    @apply opacity-100;
   }
 
   .candidate-meta h3 {
@@ -604,6 +616,38 @@
 
   .metadata-section {
     @apply space-y-2 rounded-xl border border-line/60 bg-elevated/70 p-4;
+  }
+
+  .metadata-poster-section {
+    @apply mb-4 flex justify-center;
+  }
+
+  .metadata-poster {
+    @apply max-w-full h-auto rounded-lg shadow-md max-h-32 md:max-h-48;
+  }
+
+  .metadata-row {
+    @apply grid grid-cols-[auto,1fr] items-start gap-4 py-1 text-sm leading-5 md:grid-cols-[6rem,1fr];
+  }
+
+  .metadata-row span:first-child {
+    @apply font-medium text-muted;
+  }
+
+  .metadata-row span:last-child {
+    @apply break-words text-right;
+  }
+
+  .metadata-row-full {
+    @apply flex-col gap-1;
+  }
+
+  .metadata-row-full span:first-child {
+    @apply min-w-0;
+  }
+
+  .metadata-row-full span:last-child {
+    @apply text-left leading-6;
   }
 
   .metadata-grid {
@@ -884,5 +928,44 @@
 
   .stat-meta {
     @apply text-xs text-muted;
+  }
+
+  .toast {
+    @apply flex items-center justify-between gap-3 rounded-xl border bg-surface p-4 text-sm shadow-card backdrop-blur transition-all duration-300;
+    transform: translateY(-100%);
+    opacity: 0;
+    max-width: 400px;
+    min-width: 300px;
+  }
+
+  .toast-visible {
+    transform: translateY(0);
+    opacity: 1;
+  }
+
+  .toast-success {
+    @apply border-emerald-500/20 bg-emerald-500/5 text-emerald-400;
+  }
+
+  .toast-error {
+    @apply border-red-500/20 bg-red-500/5 text-red-400;
+  }
+
+  .toast-content {
+    @apply flex items-center gap-2;
+  }
+
+  .toast-icon {
+    @apply text-lg;
+  }
+
+  .toast-message {
+    @apply flex-1;
+  }
+
+  .toast-close {
+    @apply flex h-5 w-5 items-center justify-center rounded-full text-muted transition-colors hover:bg-elevated hover:text-ink;
+    font-size: 16px;
+    line-height: 1;
   }
 }

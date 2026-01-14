@@ -212,9 +212,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             if fallback_episodes:
                 seen = {entry.get("episode_number") for entry in episodes}
                 episodes.extend(
-                    entry
-                    for entry in fallback_episodes
-                    if entry.get("episode_number") not in seen
+                    entry for entry in fallback_episodes if entry.get("episode_number") not in seen
                 )
         summaries: list[EpisodeSummary] = []
         for entry in episodes:
@@ -339,6 +337,24 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
         year = _year_for_type(raw, normalized_type)
         poster_url = _poster_url(raw.get("poster_path"))
         imdb_id = raw.get("imdb_id")
+
+        # Extract runtime (convert minutes to seconds)
+        runtime_in_seconds = None
+        if normalized_type == MEDIA_TYPE_MOVIE and raw.get("runtime"):
+            runtime_in_seconds = raw["runtime"] * 60
+        elif normalized_type == MEDIA_TYPE_TV and raw.get("episode_run_time"):
+            episode_run_times = raw["episode_run_time"]
+            if episode_run_times and len(episode_run_times) > 0:
+                runtime_in_seconds = episode_run_times[0] * 60
+
+        # Extract genres
+        genres = None
+        if raw.get("genres"):
+            genres = [genre["name"] for genre in raw["genres"] if genre.get("name")]
+
+        # Extract overview
+        overview = raw.get("overview")
+
         return MediaCandidate(
             provider=self.provider,
             provider_id=str(tmdb_id) if tmdb_id is not None else "",
@@ -350,5 +366,8 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             release_date=raw.get("release_date") if normalized_type == MEDIA_TYPE_MOVIE else None,
             first_air_date=raw.get("first_air_date") if normalized_type == MEDIA_TYPE_TV else None,
             last_air_date=raw.get("last_air_date") if normalized_type == MEDIA_TYPE_TV else None,
+            runtime_in_seconds=runtime_in_seconds,
+            genres=genres,
+            overview=overview,
             raw=raw,
         )

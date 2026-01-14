@@ -222,6 +222,9 @@ class MediaItem(Base):
     release_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
     first_air_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
     last_air_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    runtime_in_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    genres: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    overview: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     metadata_refreshed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

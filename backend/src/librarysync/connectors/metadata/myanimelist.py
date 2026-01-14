@@ -108,6 +108,28 @@ class MyAnimeListMetadataProvider(MetadataProvider[MyAnimeListConfig, None]):
         if year is None:
             year = _extract_year(raw.get("aired", {}).get("from"))
         poster_url = _poster_url(raw.get("images"))
+
+        # Extract runtime (parse duration string)
+        runtime_in_seconds = None
+        duration_str = raw.get("duration")
+        if duration_str:
+            # Parse strings like "24 min", "1 hr 30 min"
+            import re
+
+            hours_match = re.search(r"(\d+)\s*hr", duration_str, re.IGNORECASE)
+            hours = int(hours_match.group(1)) if hours_match else 0
+            minutes_match = re.search(r"(\d+)\s*min", duration_str, re.IGNORECASE)
+            minutes = int(minutes_match.group(1)) if minutes_match else 0
+            runtime_in_seconds = (hours * 60 + minutes) * 60
+
+        # Extract genres
+        genres = None
+        if raw.get("genres"):
+            genres = [genre["name"] for genre in raw["genres"] if genre.get("name")]
+
+        # Extract overview
+        overview = raw.get("synopsis")
+
         return MediaCandidate(
             provider=self.provider,
             provider_id=str(mal_id) if mal_id is not None else "",
@@ -116,5 +138,8 @@ class MyAnimeListMetadataProvider(MetadataProvider[MyAnimeListConfig, None]):
             year=year,
             poster_url=poster_url,
             imdb_id=None,
+            runtime_in_seconds=runtime_in_seconds,
+            genres=genres,
+            overview=overview,
             raw=raw,
         )

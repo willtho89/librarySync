@@ -22,6 +22,9 @@ class MediaCandidate:
     release_date: str | None = None
     first_air_date: str | None = None
     last_air_date: str | None = None
+    runtime_in_seconds: int | None = None
+    genres: list[str] | None = None
+    overview: str | None = None
     raw: dict = field(default_factory=dict)
 
 

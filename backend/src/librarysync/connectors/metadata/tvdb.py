@@ -271,6 +271,20 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
         normalized_raw = dict(raw)
         if tmdb_id:
             normalized_raw.setdefault("tmdb_id", tmdb_id)
+
+        # Extract runtime (convert minutes to seconds)
+        runtime_in_seconds = None
+        if raw.get("runtime"):
+            runtime_in_seconds = int(raw["runtime"]) * 60
+
+        # Extract genres
+        genres = None
+        if raw.get("genres"):
+            genres = raw["genres"]
+
+        # Extract overview
+        overview = raw.get("overview")
+
         return MediaCandidate(
             provider=self.provider,
             provider_id=tvdb_id or "",
@@ -285,5 +299,8 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
             first_air_date=raw.get("firstAired") or raw.get("releaseDate")
             if normalized == MEDIA_TYPE_TV
             else None,
+            runtime_in_seconds=runtime_in_seconds,
+            genres=genres,
+            overview=overview,
             raw=normalized_raw,
         )

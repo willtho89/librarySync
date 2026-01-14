@@ -124,6 +124,36 @@ function formatMetadataDate(value) {
   return date.toLocaleString();
 }
 
+function formatReleaseDate(value) {
+  if (!value) {
+    return "—";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return "—";
+  }
+  return date.toLocaleDateString();
+}
+
+function formatRuntime(runtimeInSeconds) {
+  if (!runtimeInSeconds || runtimeInSeconds <= 0) {
+    return "—";
+  }
+  const hours = Math.floor(runtimeInSeconds / 3600);
+  const minutes = Math.floor((runtimeInSeconds % 3600) / 60);
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m`;
+}
+
+function formatGenres(genres) {
+  if (!genres || !Array.isArray(genres) || genres.length === 0) {
+    return "—";
+  }
+  return genres.join(", ");
+}
+
 function normalizeExternalIds(item) {
   const metadataIds = item && item.metadata && item.metadata.ids ? item.metadata.ids : {};
   return {
@@ -239,7 +269,11 @@ function renderMetadataSection(title, rows) {
   section.appendChild(header);
   rows.forEach((row) => {
     const line = document.createElement("div");
-    line.className = "metadata-row";
+    if (row.fullWidth) {
+      line.className = "metadata-row metadata-row-full";
+    } else {
+      line.className = "metadata-row";
+    }
     const label = document.createElement("span");
     label.textContent = row.label;
     const value = document.createElement("span");
@@ -290,14 +324,59 @@ function openMetadataModal(item) {
       (metadata.episode_ids && metadata.episode_ids.tvmaze_id) ||
       item.episode_tvmaze_id,
   };
-  title.textContent = `Metadata for ${item.title}`;
+
+  const mediaItemId = metadata.media_item_id || (item.provider === "local" ? item.id : null);
+
+  let titleText = `Metadata for ${item.title}`;
+  if (hasEpisode) {
+    const season = item.season_number;
+    const episode = item.episode_number;
+    const episodeTitle = item.episode_title;
+    const sxe = formatSeasonEpisode(season, episode);
+    if (episodeTitle) {
+      titleText = `${sxe} - ${episodeTitle}`;
+    } else {
+      titleText = `${item.title} - ${sxe}`;
+    }
+  }
+  title.textContent = titleText;
   body.innerHTML = "";
 
+  // Add poster if available
+  if (item.poster_url) {
+    const posterSection = document.createElement("div");
+    posterSection.className = "metadata-poster-section";
+    const posterImg = document.createElement("img");
+    posterImg.src = item.poster_url;
+    posterImg.alt = `${item.title} poster`;
+    posterImg.className = "metadata-poster";
+    posterSection.appendChild(posterImg);
+    body.appendChild(posterSection);
+  }
+
+  const header = modal.querySelector(".metadata-header");
+  header
+    .querySelectorAll(".secondary-button")
+    .forEach((btn) => btn.remove());
+
+  if (mediaItemId) {
+    const refreshButton = document.createElement("button");
+    refreshButton.type = "button";
+    refreshButton.className = "secondary-button";
+    refreshButton.textContent = "Refresh metadata";
+    refreshButton.addEventListener("click", async () => {
+      closeMetadataModal();
+      await handleMetadataModalRefresh(mediaItemId, item);
+    });
+    header.insertBefore(refreshButton, header.lastElementChild);
+  }
+
+  const isHistoryItem = !!item.metadata;
   const systemRows = [
-    { label: "Watched entry ID", value: formatMetadataValue(item.id) },
+    { label: isHistoryItem ? "Watched entry ID" : "Candidate ID", value: formatMetadataValue(item.id) },
     {
       label: "Media item ID",
-      value: formatMetadataValue(metadata.media_item_id),
+      value: formatMetadataValue(mediaItemId),
     },
   ];
   if (hasEpisode || metadata.episode_item_id) {
@@ -306,7 +385,38 @@ function openMetadataModal(item) {
       value: formatMetadataValue(metadata.episode_item_id),
     });
   }
+  // Add episode details section if this is an episode
+  if (hasEpisode) {
+    const episodeRows = [
+      { label: "Episode Title", value: formatMetadataValue(item.episode_title) },
+      { label: "Season & Episode", value: formatSeasonEpisode(item.season_number, item.episode_number) },
+      { label: "Air Date", value: formatReleaseDate(item.episode_air_date) },
+    ];
+    if (item.episode_overview) {
+      episodeRows.push({ label: "Overview", value: item.episode_overview, fullWidth: true });
+    }
+    body.appendChild(renderMetadataSection("Episode Details", episodeRows));
+  }
+
   body.appendChild(renderMetadataSection("Library IDs", systemRows));
+
+  // Media details section
+  const mediaDetailsRows = [
+    { label: "Title", value: formatMetadataValue(item.title) },
+    { label: "Type", value: formatMediaType(item.media_type) },
+    { label: "Year", value: formatMetadataValue(item.year) },
+    { label: "Release Date", value: formatReleaseDate(item.release_date) },
+    { label: "Runtime", value: formatRuntime(item.runtime_in_seconds) },
+    { label: "Genres", value: formatGenres(item.genres) },
+  ];
+
+  // Add overview if available
+  const overview = (metadata.raw && metadata.raw.overview) || item.overview;
+  if (overview) {
+    mediaDetailsRows.push({ label: "Overview", value: overview, fullWidth: true });
+  }
+
+  body.appendChild(renderMetadataSection("Media Details", mediaDetailsRows));
 
   const externalRows = [
     { label: "IMDb", value: formatMetadataValue(ids.imdb_id) },
@@ -379,4 +489,71 @@ function closeMetadataModal() {
     return;
   }
   modal.setAttribute("hidden", "");
+}
+
+window.librarysyncOnMetadataRefresh = null;
+
+async function refreshMediaItemMetadata(mediaItemId, options = {}) {
+  const { onSuccess, onError, onStart } = options;
+  if (!mediaItemId) {
+    const error = "Cannot refresh: missing media item ID.";
+    if (onError) {
+      onError(error);
+    } else {
+      alert(error);
+    }
+    return;
+  }
+  try {
+    if (onStart) {
+      onStart();
+    }
+    const response = await requestJSON(
+      `/api/metadata/local/${encodeURIComponent(mediaItemId)}/refresh`,
+      {
+        method: "POST",
+      }
+    );
+    const updatedCandidate = response.candidate || response;
+    if (!updatedCandidate) {
+      const error = "Refresh returned no data.";
+      if (onError) {
+        onError(error);
+      } else {
+        alert(error);
+      }
+      return;
+    }
+    if (onSuccess) {
+      await onSuccess(updatedCandidate);
+    } else if (typeof window.librarysyncOnMetadataRefresh === "function") {
+      await window.librarysyncOnMetadataRefresh(updatedCandidate);
+    } else if (typeof window.librarysyncLoadHistory === "function") {
+      await window.librarysyncLoadHistory();
+    } else if (typeof window.librarysyncLoadWatchlist === "function") {
+      await window.librarysyncLoadWatchlist();
+    }
+  } catch (error) {
+    if (onError) {
+      onError(error.message);
+    } else {
+      alert(error.message);
+    }
+  }
+}
+
+async function handleMetadataModalRefresh(mediaItemId, item) {
+  await refreshMediaItemMetadata(mediaItemId, {
+    onSuccess: async (updatedCandidate) => {
+      showToast("Metadata refreshed successfully.");
+      if (typeof window.librarysyncOnMetadataRefresh === "function") {
+        await window.librarysyncOnMetadataRefresh(updatedCandidate);
+      } else if (typeof window.librarysyncLoadHistory === "function") {
+        await window.librarysyncLoadHistory();
+      } else if (typeof window.librarysyncLoadWatchlist === "function") {
+        await window.librarysyncLoadWatchlist();
+      }
+    },
+    onError: (error) => showToast(error, true),
+  });
 }

@@ -138,9 +138,12 @@
             <!-- <button ... > -->
           </div>
         </div>
-      </header>
+       </header>
 
-      <!-- Mobile Menu Overlay -->
+       <!-- Toast Container -->
+       <div id="toast-container" class="fixed top-20 left-1/2 z-50 -translate-x-1/2 space-y-2"></div>
+
+       <!-- Mobile Menu Overlay -->
       <div
         class="fixed inset-0 z-50 bg-slate/60 backdrop-blur-sm transition-opacity duration-300 opacity-0 pointer-events-none"
         data-mobile-menu-backdrop
@@ -245,11 +248,13 @@
         </div>
       </nav>
 
-      <main class="flex-1">
-        <div class="mx-auto w-full max-w-6xl px-4 pb-20 pt-8">
-          {% block content %}{% endblock %}
-        </div>
-      </main>
+       <main class="flex-1">
+         <div class="mx-auto w-full max-w-6xl px-4 pb-20 pt-8">
+           {% block content %}{% endblock %}
+         </div>
+       </main>
+
+       {% include "modals.html" %}
       <footer class="border-t border-line/60 bg-surface/70 pb-20 md:pb-6">
         <div class="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-muted">
           <span>librarySync is a self-hosted sync hub for watch history and ratings.</span>

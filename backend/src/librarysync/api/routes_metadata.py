@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Awaitable, Callable, Literal
 
 import httpx
@@ -17,6 +17,7 @@ from librarysync.connectors.metadata.base import (
 )
 from librarysync.connectors.metadata.tmdb import TmdbMetadataProvider
 from librarysync.connectors.metadata.tvdb import TvdbMetadataProvider
+from librarysync.core.metadata_enrichment import apply_refresh_candidate
 from librarysync.core.metadata_providers import (
     METADATA_PROVIDER_REGISTRY,
     AniListProviderSettings,
@@ -91,6 +92,10 @@ class CandidateOut(BaseModel):
     title: str
     year: int | None
     poster_url: str | None
+    overview: str | None = None
+    genres: list[str] | None = None
+    runtime_in_seconds: int | None = None
+    release_date: str | None = None
     imdb_id: str | None
     tmdb_id: str | None = None
     tvdb_id: str | None = None
@@ -243,19 +248,72 @@ def _candidate_tmdb_id(candidate: MetadataLookupCandidate) -> str | None:
     return None
 
 
-def _candidate_raw_id(candidate: MetadataLookupCandidate, keys: tuple[str, ...]) -> str | None:
-    raw = candidate.raw if isinstance(candidate.raw, dict) else {}
-    for key in keys:
-        value = raw.get(key)
-        if value:
-            return str(value)
+def _extract_ids_from_raw_dict(raw: dict) -> dict[str, str]:
+    ids: dict[str, str] = {}
+    for key, id_key in [
+        ("tvdb_id", "tvdb_id"),
+        ("tvdbId", "tvdb_id"),
+        ("tvdbID", "tvdb_id"),
+        ("tvmaze_id", "tvmaze_id"),
+        ("tvmazeId", "tvmaze_id"),
+        ("tvmazeID", "tvmaze_id"),
+        ("kitsu_id", "kitsu_id"),
+        ("kitsuId", "kitsu_id"),
+        ("kitsuID", "kitsu_id"),
+        ("myanimelist_id", "myanimelist_id"),
+        ("myanimelistId", "myanimelist_id"),
+        ("myanimelistID", "myanimelist_id"),
+        ("anilist_id", "anilist_id"),
+        ("anilistId", "anilist_id"),
+        ("anilistID", "anilist_id"),
+        ("tmdb_id", "tmdb_id"),
+        ("tmdbId", "tmdb_id"),
+        ("tmdbID", "tmdb_id"),
+    ]:
+        if key in raw and raw[key]:
+            ids.setdefault(id_key, str(raw[key]))
     nested = raw.get("ids")
     if isinstance(nested, dict):
-        for key in keys:
-            value = nested.get(key)
-            if value:
-                return str(value)
+        for id_key in [
+            "tvdb_id",
+            "tvmaze_id",
+            "kitsu_id",
+            "myanimelist_id",
+            "anilist_id",
+            "tmdb_id",
+        ]:
+            if id_key in nested and nested[id_key]:
+                ids.setdefault(id_key, str(nested[id_key]))
+    return ids
+
+
+def _extract_overview(raw: dict) -> str | None:
+    return raw.get("overview") or raw.get("description") or raw.get("plot")
+
+
+def _extract_genres(raw: dict) -> list[str] | None:
+    genres = raw.get("genres") or raw.get("genre")
+    if isinstance(genres, list):
+        return [g for g in genres if isinstance(g, str)]
+    if isinstance(genres, str):
+        return [genres]
     return None
+
+
+def _extract_runtime(raw: dict) -> int | None:
+    runtime = raw.get("runtime_in_seconds") or raw.get("runtime")
+    if isinstance(runtime, int):
+        return runtime
+    if isinstance(runtime, str):
+        try:
+            return int(runtime)
+        except ValueError:
+            pass
+    return None
+
+
+def _extract_release_date(raw: dict) -> str | None:
+    return raw.get("release_date") or raw.get("first_air_date") or raw.get("premiered")
 
 
 def _candidate_ids(candidate: MetadataLookupCandidate) -> dict[str, str]:
@@ -281,23 +339,9 @@ def _candidate_ids(candidate: MetadataLookupCandidate) -> dict[str, str]:
         ids.setdefault("tmdb_id", tmdb_id)
     if candidate.imdb_id:
         ids.setdefault("imdb_id", candidate.imdb_id)
-    tvdb_id = _candidate_raw_id(candidate, ("tvdb_id", "tvdbId", "tvdbID"))
-    if tvdb_id:
-        ids.setdefault("tvdb_id", tvdb_id)
-    tvmaze_id = _candidate_raw_id(candidate, ("tvmaze_id", "tvmazeId", "tvmazeID"))
-    if tvmaze_id:
-        ids.setdefault("tvmaze_id", tvmaze_id)
-    kitsu_id = _candidate_raw_id(candidate, ("kitsu_id", "kitsuId", "kitsuID"))
-    if kitsu_id:
-        ids.setdefault("kitsu_id", kitsu_id)
-    myanimelist_id = _candidate_raw_id(
-        candidate, ("myanimelist_id", "myanimelistId", "myanimelistID")
-    )
-    if myanimelist_id:
-        ids.setdefault("myanimelist_id", myanimelist_id)
-    anilist_id = _candidate_raw_id(candidate, ("anilist_id", "anilistId", "anilistID"))
-    if anilist_id:
-        ids.setdefault("anilist_id", anilist_id)
+    raw = candidate.raw if isinstance(candidate.raw, dict) else {}
+    if isinstance(raw, dict):
+        ids.update(_extract_ids_from_raw_dict(raw))
     return ids
 
 
@@ -346,6 +390,11 @@ def _rank_value(candidate: MetadataLookupCandidate) -> int:
 
 
 def _init_candidate_group(candidate: MetadataLookupCandidate, keys: list[tuple[str, str]]) -> dict:
+    raw = candidate.raw if isinstance(candidate.raw, dict) else {}
+    overview = _extract_overview(raw)
+    genres = _extract_genres(raw)
+    runtime_in_seconds = _extract_runtime(raw)
+    release_date = _extract_release_date(raw)
     return {
         "primary": candidate,
         "members": [candidate],
@@ -358,6 +407,10 @@ def _init_candidate_group(candidate: MetadataLookupCandidate, keys: list[tuple[s
         "year": candidate.year,
         "media_type": candidate.media_type,
         "poster_url": candidate.poster_url,
+        "overview": overview,
+        "genres": genres,
+        "runtime_in_seconds": runtime_in_seconds,
+        "release_date": release_date,
     }
 
 
@@ -377,6 +430,14 @@ def _merge_group_data(target: dict, other: dict) -> None:
         target["media_type"] = other["media_type"]
     if not target["poster_url"] and other["poster_url"]:
         target["poster_url"] = other["poster_url"]
+    if not target["overview"] and other["overview"]:
+        target["overview"] = other["overview"]
+    if not target["genres"] and other["genres"]:
+        target["genres"] = other["genres"]
+    if target["runtime_in_seconds"] is None and other["runtime_in_seconds"] is not None:
+        target["runtime_in_seconds"] = other["runtime_in_seconds"]
+    if not target["release_date"] and other["release_date"]:
+        target["release_date"] = other["release_date"]
     if other["rank"] < target["rank"]:
         target["rank"] = other["rank"]
         target["primary"] = other["primary"]
@@ -385,6 +446,11 @@ def _merge_group_data(target: dict, other: dict) -> None:
 def _add_candidate_to_group(
     group: dict, candidate: MetadataLookupCandidate, keys: list[tuple[str, str]]
 ) -> None:
+    raw = candidate.raw if isinstance(candidate.raw, dict) else {}
+    overview = _extract_overview(raw)
+    genres = _extract_genres(raw)
+    runtime_in_seconds = _extract_runtime(raw)
+    release_date = _extract_release_date(raw)
     group["members"].append(candidate)
     group["member_ids"].add(candidate.id)
     group["providers"].add(candidate.provider)
@@ -400,6 +466,14 @@ def _add_candidate_to_group(
         group["media_type"] = candidate.media_type
     if not group["poster_url"] and candidate.poster_url:
         group["poster_url"] = candidate.poster_url
+    if not group["overview"] and overview:
+        group["overview"] = overview
+    if not group["genres"] and genres:
+        group["genres"] = genres
+    if group["runtime_in_seconds"] is None and runtime_in_seconds is not None:
+        group["runtime_in_seconds"] = runtime_in_seconds
+    if not group["release_date"] and release_date:
+        group["release_date"] = release_date
     if _rank_value(candidate) < group["rank"]:
         group["rank"] = _rank_value(candidate)
         group["primary"] = candidate
@@ -517,6 +591,10 @@ def _candidate_group_to_out(group: dict) -> CandidateOut:
         title=group["title"] or primary.title,
         year=group["year"] if group["year"] is not None else primary.year,
         poster_url=group["poster_url"] or primary.poster_url,
+        overview=group.get("overview"),
+        genres=group.get("genres"),
+        runtime_in_seconds=group.get("runtime_in_seconds"),
+        release_date=group.get("release_date"),
         imdb_id=ids.get("imdb_id"),
         tmdb_id=ids.get("tmdb_id"),
         tvdb_id=ids.get("tvdb_id"),
@@ -528,6 +606,20 @@ def _candidate_group_to_out(group: dict) -> CandidateOut:
 
 
 def _media_item_to_candidate_out(item: MediaItem) -> CandidateOut:
+    raw = item.raw if isinstance(item.raw, dict) else {}
+    # Prioritize direct model fields, fall back to raw dict extraction using helper functions
+    overview = item.overview if item.overview is not None else _extract_overview(raw)
+    genres = item.genres if item.genres is not None else _extract_genres(raw)
+    runtime_in_seconds = (
+        item.runtime_in_seconds
+        if item.runtime_in_seconds is not None
+        else _extract_runtime(raw)
+    )
+    release_date = (
+        item.release_date
+        if getattr(item, "release_date", None) is not None
+        else _extract_release_date(raw)
+    )
     return CandidateOut(
         id=item.id,
         provider="local",
@@ -537,6 +629,10 @@ def _media_item_to_candidate_out(item: MediaItem) -> CandidateOut:
         title=item.title,
         year=item.year,
         poster_url=item.poster_url,
+        overview=overview,
+        genres=genres,
+        runtime_in_seconds=runtime_in_seconds,
+        release_date=release_date,
         imdb_id=item.imdb_id,
         tmdb_id=item.tmdb_id,
         tvdb_id=item.tvdb_id,
@@ -545,23 +641,6 @@ def _media_item_to_candidate_out(item: MediaItem) -> CandidateOut:
         myanimelist_id=item.myanimelist_id,
         anilist_id=item.anilist_id,
     )
-
-
-def _apply_candidate_ids(item: MediaItem, ids: dict[str, str]) -> None:
-    if ids.get("imdb_id") and not item.imdb_id:
-        item.imdb_id = ids["imdb_id"]
-    if ids.get("tmdb_id") and not item.tmdb_id:
-        item.tmdb_id = ids["tmdb_id"]
-    if ids.get("tvdb_id") and not item.tvdb_id:
-        item.tvdb_id = ids["tvdb_id"]
-    if ids.get("tvmaze_id") and not item.tvmaze_id:
-        item.tvmaze_id = ids["tvmaze_id"]
-    if ids.get("kitsu_id") and not item.kitsu_id:
-        item.kitsu_id = ids["kitsu_id"]
-    if ids.get("myanimelist_id") and not item.myanimelist_id:
-        item.myanimelist_id = ids["myanimelist_id"]
-    if ids.get("anilist_id") and not item.anilist_id:
-        item.anilist_id = ids["anilist_id"]
 
 
 @router.get(
@@ -996,7 +1075,7 @@ async def list_tv_episodes(
     ]
 
 
-def _parse_air_date(value: str | None) -> datetime.date | None:
+def _parse_air_date(value: str | None) -> date | None:
     if not value:
         return None
     try:
@@ -1269,6 +1348,138 @@ async def _validate_tvdb_credentials(api_key: str, pin: str | None, language: st
         ) from exc
     except httpx.RequestError as exc:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="TVDB request failed",
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TVDB error: {exc}"
         ) from exc
+
+
+@router.post(
+    "/local/{media_item_id}/refresh",
+    response_model=CandidateOut,
+    summary="Refresh local media item metadata",
+    description="Fetch fresh metadata from external providers and update the local media item.",
+)
+async def refresh_local_metadata(
+    media_item_id: str = Path(..., description="Media item ID to refresh"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CandidateOut:
+    result = await db.execute(select(MediaItem).where(MediaItem.id == media_item_id))
+    media_item = result.scalars().first()
+    if not media_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Media item not found",
+        )
+
+    provider_order = [
+        ("imdb", "imdb_id"),
+        ("tmdb", "tmdb_id"),
+        ("tvdb", "tvdb_id"),
+        ("tvmaze", "tvmaze_id"),
+        ("kitsu", "kitsu_id"),
+        ("myanimelist", "myanimelist_id"),
+        ("anilist", "anilist_id"),
+    ]
+
+    if not any(getattr(media_item, field) for _, field in provider_order):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No external IDs found or no enabled metadata providers",
+        )
+
+    service = MetadataProviderService(db, current_user.id, METADATA_PROVIDER_REGISTRY)
+    states = await service.list_provider_states()
+    states_by_provider = {state.provider: state for state in states}
+
+    enabled_providers: list[str] = []
+    for provider_name, id_field in provider_order:
+        provider_id = getattr(media_item, id_field)
+        if not provider_id:
+            continue
+        provider_state = states_by_provider.get(provider_name)
+        if provider_state and provider_state.enabled:
+            enabled_providers.append(provider_name)
+
+    if not enabled_providers:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No external IDs found or no enabled metadata providers",
+        )
+
+    attempted: set[str] = set()
+    unavailable: list[str] = []
+    errors: list[str] = []
+    first_http_error: HTTPException | None = None
+    refreshed = False
+    attempted_details = 0
+
+    while True:
+        progress = False
+        for provider_name, id_field in provider_order:
+            if provider_name in attempted:
+                continue
+            provider_id = getattr(media_item, id_field)
+            if not provider_id:
+                continue
+            provider_state = states_by_provider.get(provider_name)
+            if not provider_state or not provider_state.enabled:
+                continue
+            provider_instance = await service.load_provider(provider_name)
+            attempted.add(provider_name)
+            progress = True
+            if not provider_instance:
+                unavailable.append(provider_name)
+                continue
+            attempted_details += 1
+            try:
+                candidate = await provider_instance.get_details(
+                    str(provider_id),
+                    media_item.media_type,
+                )
+            except HTTPException as exc:
+                if first_http_error is None:
+                    first_http_error = exc
+                continue
+            except Exception:
+                logger.exception(
+                    "Failed to refresh metadata from %s for media item %s",
+                    provider_name,
+                    media_item.id,
+                )
+                errors.append(provider_name)
+                continue
+            if not candidate:
+                continue
+            await apply_refresh_candidate(
+                db,
+                media_item,
+                candidate,
+                overwrite=not refreshed,
+            )
+            refreshed = True
+        if not progress:
+            break
+
+    if not refreshed:
+        if first_http_error:
+            raise first_http_error
+        if attempted_details == 0 and unavailable:
+            if len(unavailable) == 1:
+                detail = _provider_unavailable_detail(unavailable[0])
+            else:
+                detail = "No enabled metadata providers have valid credentials"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=detail,
+            )
+        detail = "No metadata providers returned results"
+        if errors:
+            detail = f"Failed to fetch metadata from providers: {', '.join(errors)}"
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=detail,
+        )
+
+    await db.commit()
+
+    return _media_item_to_candidate_out(media_item)

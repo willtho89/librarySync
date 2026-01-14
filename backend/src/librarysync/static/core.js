@@ -425,6 +425,46 @@ async function initBase() {
   registerServiceWorker();
 }
 
+function showToast(message, isError = false, duration = 3000) {
+  const container = document.getElementById("toast-container");
+  if (!container) {
+    console.warn("Toast container not found");
+    return;
+  }
+
+  const toast = document.createElement("div");
+  toast.className = `toast ${isError ? "toast-error" : "toast-success"}`;
+  toast.innerHTML = `
+    <div class="toast-content">
+      <span class="toast-icon">${isError ? "⚠️" : "✓"}</span>
+      <span class="toast-message">${message}</span>
+    </div>
+    <button class="toast-close" aria-label="Close notification">×</button>
+  `;
+
+  // Add close button functionality
+  const closeButton = toast.querySelector(".toast-close");
+  closeButton.addEventListener("click", () => {
+    toast.remove();
+  });
+
+  // Auto-hide after duration
+  if (duration > 0) {
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.remove();
+      }
+    }, duration);
+  }
+
+  container.appendChild(toast);
+
+  // Trigger animation
+  requestAnimationFrame(() => {
+    toast.classList.add("toast-visible");
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   initBase().catch((error) => {
     console.error("page bootstrap failed", error);
