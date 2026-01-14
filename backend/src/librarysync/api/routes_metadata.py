@@ -615,7 +615,11 @@ def _media_item_to_candidate_out(item: MediaItem) -> CandidateOut:
         if item.runtime_in_seconds is not None
         else _extract_runtime(raw)
     )
-    release_date = _extract_release_date(raw)
+    release_date = (
+        item.release_date
+        if getattr(item, "release_date", None) is not None
+        else _extract_release_date(raw)
+    )
     return CandidateOut(
         id=item.id,
         provider="local",
