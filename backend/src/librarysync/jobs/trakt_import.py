@@ -637,7 +637,7 @@ async def _get_or_create_movie_item(
         db, movie.imdb_id, movie.tmdb_id, movie.trakt_id, "movie"
     )
     if item:
-        _apply_movie_updates(item, movie)
+        await _apply_movie_updates(db, item, movie)
         return item
     if not movie.imdb_id and not movie.tmdb_id and not movie.trakt_id:
         return None
@@ -662,7 +662,7 @@ async def _get_or_create_show_item(
         db, show.imdb_id, show.tmdb_id, show.trakt_id, "tv"
     )
     if item:
-        _apply_show_updates(item, show)
+        await _apply_show_updates(db, item, show)
         return item
     if not show.imdb_id and not show.tmdb_id and not show.trakt_id and not show.tvdb_id:
         return None
@@ -686,7 +686,7 @@ async def _get_or_create_episode_item(
 ) -> EpisodeItem | None:
     item = await _find_episode_item(db, episode, show_item.id)
     if item:
-        _apply_episode_updates(item, episode)
+        await _apply_episode_updates(db, item, episode)
         return item
     item = EpisodeItem(
         show_media_item_id=show_item.id,
@@ -784,11 +784,13 @@ async def _find_episode_item(
     return item
 
 
-def _apply_movie_updates(item: MediaItem, movie: MovieSummary) -> None:
-    if movie.imdb_id and not item.imdb_id:
-        item.imdb_id = movie.imdb_id
-    if movie.tmdb_id and not item.tmdb_id:
-        item.tmdb_id = movie.tmdb_id
+async def _apply_movie_updates(
+    db: AsyncSession,
+    item: MediaItem,
+    movie: MovieSummary,
+) -> None:
+    await _maybe_set_media_id(db, item, "imdb_id", movie.imdb_id)
+    await _maybe_set_media_id(db, item, "tmdb_id", movie.tmdb_id)
     if movie.year is not None and item.year is None:
         item.year = movie.year
     if movie.title and item.title.startswith("Trakt movie"):
@@ -796,13 +798,14 @@ def _apply_movie_updates(item: MediaItem, movie: MovieSummary) -> None:
     item.raw = _merge_media_raw(item.raw, movie.trakt_id, movie.raw)
 
 
-def _apply_show_updates(item: MediaItem, show: ShowSummary) -> None:
-    if show.imdb_id and not item.imdb_id:
-        item.imdb_id = show.imdb_id
-    if show.tmdb_id and not item.tmdb_id:
-        item.tmdb_id = show.tmdb_id
-    if show.tvdb_id and not item.tvdb_id:
-        item.tvdb_id = show.tvdb_id
+async def _apply_show_updates(
+    db: AsyncSession,
+    item: MediaItem,
+    show: ShowSummary,
+) -> None:
+    await _maybe_set_media_id(db, item, "imdb_id", show.imdb_id)
+    await _maybe_set_media_id(db, item, "tmdb_id", show.tmdb_id)
+    await _maybe_set_media_id(db, item, "tvdb_id", show.tvdb_id)
     if show.year is not None and item.year is None:
         item.year = show.year
     if show.title and item.title.startswith("Trakt show"):
@@ -810,13 +813,14 @@ def _apply_show_updates(item: MediaItem, show: ShowSummary) -> None:
     item.raw = _merge_media_raw(item.raw, show.trakt_id, show.raw)
 
 
-def _apply_episode_updates(item: EpisodeItem, episode: EpisodeSummary) -> None:
-    if episode.imdb_id and not item.imdb_id:
-        item.imdb_id = episode.imdb_id
-    if episode.tmdb_id and not item.tmdb_id:
-        item.tmdb_id = episode.tmdb_id
-    if episode.tvdb_id and not item.tvdb_id:
-        item.tvdb_id = episode.tvdb_id
+async def _apply_episode_updates(
+    db: AsyncSession,
+    item: EpisodeItem,
+    episode: EpisodeSummary,
+) -> None:
+    await _maybe_set_episode_id(db, item, "imdb_id", episode.imdb_id)
+    await _maybe_set_episode_id(db, item, "tmdb_id", episode.tmdb_id)
+    await _maybe_set_episode_id(db, item, "tvdb_id", episode.tvdb_id)
     if episode.title and not item.title:
         item.title = episode.title
     item.raw = _merge_episode_raw(item.raw, episode.trakt_id, episode.raw)
@@ -842,6 +846,98 @@ def _merge_media_raw(
     if raw_payload and not raw.get("trakt"):
         raw["trakt"] = raw_payload
     return raw
+
+
+async def _maybe_set_media_id(
+    db: AsyncSession,
+    item: MediaItem,
+    field: str,
+    value: str | None,
+) -> None:
+    if not value or getattr(item, field):
+        return
+    if await _can_assign_media_id(db, item, field, value):
+        setattr(item, field, value)
+    else:
+        logger.warning(
+            "Skipping %s=%s for media item %s due to conflict",
+            field,
+            value,
+            item.id,
+        )
+
+
+async def _maybe_set_episode_id(
+    db: AsyncSession,
+    item: EpisodeItem,
+    field: str,
+    value: str | None,
+) -> None:
+    if not value or getattr(item, field):
+        return
+    if await _can_assign_episode_id(db, item, field, value):
+        setattr(item, field, value)
+    else:
+        logger.warning(
+            "Skipping %s=%s for episode item %s due to conflict",
+            field,
+            value,
+            item.id,
+        )
+
+
+async def _can_assign_media_id(
+    db: AsyncSession,
+    item: MediaItem,
+    field: str,
+    value: str,
+) -> bool:
+    if field == "imdb_id":
+        result = await db.execute(
+            select(MediaItem.id).where(MediaItem.imdb_id == value)
+        )
+    elif field == "tmdb_id":
+        result = await db.execute(
+            select(MediaItem.id).where(
+                MediaItem.tmdb_id == value,
+                MediaItem.media_type == item.media_type,
+            )
+        )
+    elif field == "tvdb_id":
+        result = await db.execute(
+            select(MediaItem.id).where(
+                MediaItem.tvdb_id == value,
+                MediaItem.media_type == item.media_type,
+            )
+        )
+    else:
+        return False
+    existing = result.scalars().first()
+    return existing is None or existing == item.id
+
+
+async def _can_assign_episode_id(
+    db: AsyncSession,
+    item: EpisodeItem,
+    field: str,
+    value: str,
+) -> bool:
+    if field == "imdb_id":
+        result = await db.execute(
+            select(EpisodeItem.id).where(EpisodeItem.imdb_id == value)
+        )
+    elif field == "tmdb_id":
+        result = await db.execute(
+            select(EpisodeItem.id).where(EpisodeItem.tmdb_id == value)
+        )
+    elif field == "tvdb_id":
+        result = await db.execute(
+            select(EpisodeItem.id).where(EpisodeItem.tvdb_id == value)
+        )
+    else:
+        return False
+    existing = result.scalars().first()
+    return existing is None or existing == item.id
 
 
 def _build_episode_raw(trakt_id: str | None, raw_payload: dict[str, Any]) -> dict:

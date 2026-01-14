@@ -171,6 +171,17 @@ async def upsert_watchlist_source_item(
 ) -> WatchlistSourceItem:
     if now is None:
         now = datetime.now(timezone.utc)
+    for pending in db.new:
+        if not isinstance(pending, WatchlistSourceItem):
+            continue
+        if pending.source_id != source.id:
+            continue
+        if pending.watchlist_item_id != watchlist_item.id:
+            continue
+        pending.last_seen_at = now
+        if external_item_id and not pending.external_item_id:
+            pending.external_item_id = external_item_id
+        return pending
     result = await db.execute(
         select(WatchlistSourceItem).where(
             WatchlistSourceItem.source_id == source.id,

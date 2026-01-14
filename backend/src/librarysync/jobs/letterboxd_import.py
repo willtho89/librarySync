@@ -499,7 +499,7 @@ async def _get_or_create_media_item(
 ) -> MediaItem | None:
     item = await _find_media_item(db, film)
     if item:
-        _apply_media_updates(item, film)
+        await _apply_media_updates(db, item, film)
         return item
     if not film.imdb_id and not film.tmdb_id and not film.film_id:
         return None
@@ -551,11 +551,13 @@ async def _find_media_item(db: AsyncSession, film: FilmSummary) -> MediaItem | N
     return item
 
 
-def _apply_media_updates(item: MediaItem, film: FilmSummary) -> None:
-    if film.imdb_id and not item.imdb_id:
-        item.imdb_id = film.imdb_id
-    if film.tmdb_id and not item.tmdb_id:
-        item.tmdb_id = film.tmdb_id
+async def _apply_media_updates(
+    db: AsyncSession,
+    item: MediaItem,
+    film: FilmSummary,
+) -> None:
+    await _maybe_set_media_id(db, item, "imdb_id", film.imdb_id)
+    await _maybe_set_media_id(db, item, "tmdb_id", film.tmdb_id)
     if film.year is not None and item.year is None:
         item.year = film.year
     if film.poster_url and not item.poster_url:
@@ -572,6 +574,48 @@ def _merge_media_raw(existing: dict | None, film: FilmSummary) -> dict:
     if film.raw and not raw.get("letterboxd"):
         raw["letterboxd"] = film.raw
     return raw
+
+
+async def _maybe_set_media_id(
+    db: AsyncSession,
+    item: MediaItem,
+    field: str,
+    value: str | None,
+) -> None:
+    if not value or getattr(item, field):
+        return
+    if await _can_assign_media_id(db, item, field, value):
+        setattr(item, field, value)
+    else:
+        logger.warning(
+            "Skipping %s=%s for media item %s due to conflict",
+            field,
+            value,
+            item.id,
+        )
+
+
+async def _can_assign_media_id(
+    db: AsyncSession,
+    item: MediaItem,
+    field: str,
+    value: str,
+) -> bool:
+    if field == "imdb_id":
+        result = await db.execute(
+            select(MediaItem.id).where(MediaItem.imdb_id == value)
+        )
+    elif field == "tmdb_id":
+        result = await db.execute(
+            select(MediaItem.id).where(
+                MediaItem.tmdb_id == value,
+                MediaItem.media_type == item.media_type,
+            )
+        )
+    else:
+        return False
+    existing = result.scalars().first()
+    return existing is None or existing == item.id
 
 
 def _build_media_raw(film: FilmSummary) -> dict:
