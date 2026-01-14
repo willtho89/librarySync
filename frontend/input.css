@@ -100,9 +100,17 @@
   body {
     @apply font-body bg-base text-ink;
     background-image:
-      radial-gradient(900px 500px at 15% -10%, rgba(13, 120, 211, 0.18), transparent 60%),
-      radial-gradient(800px 600px at 90% -5%, rgba(11, 138, 155, 0.18), transparent 55%),
-      radial-gradient(1200px 900px at 50% 120%, rgba(13, 120, 211, 0.12), transparent 60%);
+      linear-gradient(
+        180deg,
+        rgb(var(--color-base) / 0.92),
+        rgb(var(--color-base) / 0.65)
+      ),
+      radial-gradient(1000px 560px at 12% -12%, rgba(13, 120, 211, 0.2), transparent 62%),
+      radial-gradient(900px 640px at 92% -6%, rgba(11, 138, 155, 0.18), transparent 58%),
+      radial-gradient(1400px 980px at 50% 120%, rgba(13, 120, 211, 0.14), transparent 62%);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    background-size: 100% 100%, 1100px 700px, 1000px 720px, 1600px 1100px;
   }
 
   [hidden] {
