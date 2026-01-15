@@ -673,7 +673,7 @@ function bindWatchlistUi() {
             if (!confirm(`Remove ${selectedIds.length} items from watchlist?`)) return;
             
             const deleteIntegrations = confirm(
-                "Also delete these items from all connected integrations? " +
+                `Also delete these ${selectedIds.length} items from all connected integrations? ` +
                 "Click OK to remove them there too, or Cancel to delete locally only."
             );
             

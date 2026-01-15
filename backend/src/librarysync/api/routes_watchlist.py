@@ -717,8 +717,10 @@ async def remove_watchlist_item(
     if item.media_item_id:
         media_result = await db.execute(select(MediaItem).where(MediaItem.id == item.media_item_id))
         media_item = media_result.scalars().first()
-    if delete_integrations and media_item:
-        await enqueue_personal_watchlist_removal(db, item, media_item)
+    # Only enqueue provider removal jobs if user explicitly requested it
+    if delete_integrations:
+        if media_item:
+            await enqueue_personal_watchlist_removal(db, item, media_item)
     await db.delete(item)
     await db.commit()
     return {"status": "deleted"}
