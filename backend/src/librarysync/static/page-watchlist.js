@@ -46,6 +46,12 @@ function formatWatchlistSourceLabel(source) {
   return `${provider} watchlist`;
 }
 
+function buildWatchlistDeleteUrl(itemId, deleteIntegrations) {
+  return deleteIntegrations
+    ? `/api/watchlist/items/${itemId}?delete_integrations=true`
+    : `/api/watchlist/items/${itemId}`;
+}
+
 function formatWatchlistSources(sources) {
   if (!Array.isArray(sources) || sources.length === 0) return [];
   return sources.map((source) => formatWatchlistSourceLabel(source)).filter(Boolean);
@@ -454,12 +460,10 @@ async function loadWatchlist() {
             "Click OK to remove it there too, or Cancel to delete locally only."
         );
         try {
-            const url = deleteIntegrations
-                ? `/api/watchlist/items/${item.id}?delete_integrations=true`
-                : `/api/watchlist/items/${item.id}`;
+            const url = buildWatchlistDeleteUrl(item.id, deleteIntegrations);
             await requestJSON(url, { method: "DELETE" });
             await loadWatchlist();
-        } catch(e) {
+        } catch (e) {
             alert(e.message);
         }
     });
@@ -678,11 +682,8 @@ function bindWatchlistUi() {
             );
             
             try {
-                const url = deleteIntegrations
-                    ? (id) => `/api/watchlist/items/${id}?delete_integrations=true`
-                    : (id) => `/api/watchlist/items/${id}`;
                 await Promise.all(selectedIds.map(id => 
-                    requestJSON(url(id), { method: "DELETE" })
+                    requestJSON(buildWatchlistDeleteUrl(id, deleteIntegrations), { method: "DELETE" })
                 ));
                 await loadWatchlist();
             } catch (error) {
