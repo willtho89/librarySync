@@ -449,8 +449,15 @@ async function loadWatchlist() {
     deleteButton.addEventListener("click", async () => {
         closeWatchlistMenus();
         if (!confirm(`Remove "${item.title}" from watchlist?`)) return;
+        const deleteIntegrations = confirm(
+            "Also delete this item from all connected integrations? " +
+            "Click OK to remove it there too, or Cancel to delete locally only."
+        );
         try {
-            await requestJSON(`/api/watchlist/items/${item.id}`, { method: "DELETE" });
+            const url = deleteIntegrations
+                ? `/api/watchlist/items/${item.id}?delete_integrations=true`
+                : `/api/watchlist/items/${item.id}`;
+            await requestJSON(url, { method: "DELETE" });
             await loadWatchlist();
         } catch(e) {
             alert(e.message);
@@ -665,9 +672,17 @@ function bindWatchlistUi() {
             
             if (!confirm(`Remove ${selectedIds.length} items from watchlist?`)) return;
             
+            const deleteIntegrations = confirm(
+                "Also delete these items from all connected integrations? " +
+                "Click OK to remove them there too, or Cancel to delete locally only."
+            );
+            
             try {
+                const url = deleteIntegrations
+                    ? (id) => `/api/watchlist/items/${id}?delete_integrations=true`
+                    : (id) => `/api/watchlist/items/${id}`;
                 await Promise.all(selectedIds.map(id => 
-                    requestJSON(`/api/watchlist/items/${id}`, { method: "DELETE" })
+                    requestJSON(url(id), { method: "DELETE" })
                 ));
                 await loadWatchlist();
             } catch (error) {

@@ -690,6 +690,9 @@ async def list_watchlist_items(
 )
 async def remove_watchlist_item(
     watchlist_id: str,
+    delete_integrations: bool = Query(
+        False, description="Also delete the item from connected integrations."
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -705,12 +708,16 @@ async def remove_watchlist_item(
             status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
         )
 
-    await log_watchlist_event(db, current_user.id, item.media_item_id, "watchlist_removed", {})
+    event_raw = {}
+    if delete_integrations:
+        event_raw["delete_integrations"] = True
+
+    await log_watchlist_event(db, current_user.id, item.media_item_id, "watchlist_removed", event_raw)
     media_item = None
     if item.media_item_id:
         media_result = await db.execute(select(MediaItem).where(MediaItem.id == item.media_item_id))
         media_item = media_result.scalars().first()
-    if media_item:
+    if delete_integrations and media_item:
         await enqueue_personal_watchlist_removal(db, item, media_item)
     await db.delete(item)
     await db.commit()
