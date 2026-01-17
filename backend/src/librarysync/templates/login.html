@@ -56,7 +56,7 @@
         <p id="login-message" class="form-message" role="status" hidden></p>
       </form>
     </section>
-    {% if allow_registration %}
+    {% if allow_registration and not registration_full %}
     <section class="card">
       <div class="card-header">
         <div>
@@ -83,11 +83,18 @@
         <p id="register-message" class="form-message" role="status" hidden></p>
       </form>
     </section>
+    {% elif allow_registration and registration_full %}
+    <section class="card">
+      <h2 class="section-title">Registration full</h2>
+      <p class="mt-2 text-sm text-muted">
+        This server has reached its user limit.
+      </p>
+    </section>
     {% else %}
     <section class="card">
       <h2 class="section-title">Registrations closed</h2>
       <p class="mt-2 text-sm text-muted">
-        Registration is disabled on this server. Ask an admin to create your account.
+        Registration is disabled on this server.
       </p>
     </section>
     {% endif %}
