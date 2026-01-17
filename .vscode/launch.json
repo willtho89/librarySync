@@ -25,15 +25,16 @@
       "console": "integratedTerminal"
     },
     {
-      "name": "Worker: Run",
+      "name": "Worker: All",
       "type": "python",
       "request": "launch",
-      "module": "librarysync_worker.main",
-      "cwd": "${workspaceFolder}/worker",
+      "module": "librarysync.worker",
+      "cwd": "${workspaceFolder}/backend",
       "envFile": "${workspaceFolder}/.env",
       "env": {
-        "PYTHONPATH": "${workspaceFolder}/backend/src:${workspaceFolder}/worker/src",
-        "DATABASE_URL": "postgresql+psycopg://librarysync:librarysync@localhost:5432/librarysync"
+        "PYTHONPATH": "${workspaceFolder}/backend/src",
+        "DATABASE_URL": "postgresql+psycopg://librarysync:librarysync@localhost:5432/librarysync",
+        "LIBRARYSYNC_WORKER_MODES": "outbox,metadata,metadata_backfill,metadata_cache,quick_import,import_all,watchlist,merge_history,merge_all_history"
       },
       "justMyCode": true,
       "console": "integratedTerminal"
@@ -42,7 +43,7 @@
   "compounds": [
     {
       "name": "API + Worker",
-      "configurations": ["API: Uvicorn", "Worker: Run"],
+      "configurations": ["API: Uvicorn", "Worker: All"],
       "stopAll": true
     }
   ]
