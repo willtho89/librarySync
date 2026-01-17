@@ -111,10 +111,21 @@ def _apply_search_filter(query, search: str):
     return query.where(or_(*search_clauses))
 
 
-def _resolve_pagination(request: Request) -> tuple[int, int, str | None]:
+def _resolve_pagination(
+    request: Request,
+    extra_overrides: dict[str, str] | None = None,
+) -> tuple[int, int, str | None]:
     search = _extract_extra_param(request, "search")
-    skip = _parse_int_param(_extract_extra_param(request, "skip"), 0)
-    limit = _parse_int_param(_extract_extra_param(request, "limit"), 50)
+    if not search and extra_overrides:
+        search = extra_overrides.get("search")
+    skip_value = _extract_extra_param(request, "skip")
+    if not skip_value and extra_overrides:
+        skip_value = extra_overrides.get("skip")
+    limit_value = _extract_extra_param(request, "limit")
+    if not limit_value and extra_overrides:
+        limit_value = extra_overrides.get("limit")
+    skip = _parse_int_param(skip_value, 0)
+    limit = _parse_int_param(limit_value, 50)
     if skip < 0:
         skip = 0
     if limit <= 0:
@@ -122,6 +133,23 @@ def _resolve_pagination(request: Request) -> tuple[int, int, str | None]:
     if limit > MAX_LIMIT:
         limit = MAX_LIMIT
     return skip, limit, search
+
+
+def _parse_extra_path(extra_path: str | None) -> dict[str, str]:
+    if not extra_path:
+        return {}
+    extras: dict[str, str] = {}
+    for segment in extra_path.split("&"):
+        if "=" not in segment:
+            continue
+        key, value = segment.split("=", 1)
+        normalized = key.strip()
+        if normalized.startswith("extra[") and normalized.endswith("]"):
+            normalized = normalized[6:-1]
+        if not normalized:
+            continue
+        extras[normalized] = value
+    return extras
 
 
 def _normalize_catalogs(config_catalogs: list[dict] | None) -> list[dict]:
@@ -397,6 +425,33 @@ async def stremio_addon_catalog(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
+    return await _serve_catalog(addon_id, catalog_type, catalog_id, request, db, None)
+
+
+@router.get(
+    "/{addon_id}/catalog/{catalog_type}/{catalog_id}/{extra_path}.json",
+    include_in_schema=False,
+)
+async def stremio_addon_catalog_extra(
+    addon_id: str,
+    catalog_type: Literal["movie", "series"],
+    catalog_id: str,
+    extra_path: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    extras = _parse_extra_path(extra_path)
+    return await _serve_catalog(addon_id, catalog_type, catalog_id, request, db, extras)
+
+
+async def _serve_catalog(
+    addon_id: str,
+    catalog_type: Literal["movie", "series"],
+    catalog_id: str,
+    request: Request,
+    db: AsyncSession,
+    extra_overrides: dict[str, str] | None,
+) -> dict[str, Any]:
     config = await get_addon_config_by_id(db, addon_id)
     if not config or not config.is_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -425,7 +480,7 @@ async def stremio_addon_catalog(
         if expected_type != catalog_type:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog not found")
 
-    skip, limit, search = _resolve_pagination(request)
+    skip, limit, search = _resolve_pagination(request, extra_overrides)
 
     if custom_catalog:
         query = await _build_custom_catalog_query(custom_catalog, search)
