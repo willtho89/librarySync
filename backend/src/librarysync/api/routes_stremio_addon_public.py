@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from importlib import metadata
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_db
-from librarysync.core.catalog_ordering import apply_catalog_ordering
+from librarysync.core.catalog_ordering import apply_catalog_ordering, build_show_progress_subquery
 from librarysync.core.stremio_addon import (
     DEFAULT_PAGE_SIZE,
     DEFAULT_SHOW_IN_HOME,
@@ -17,11 +17,9 @@ from librarysync.core.stremio_addon import (
     normalize_default_catalogs,
 )
 from librarysync.db.models import (
-    EpisodeItem,
     MediaItem,
     StremioCustomCatalog,
     StremioCustomCatalogItem,
-    WatchedItem,
     WatchlistItem,
 )
 
@@ -41,23 +39,19 @@ def _get_app_version() -> str:
 def _resolve_meta_id(media_item: MediaItem) -> str | None:
     raw = media_item.raw if isinstance(media_item.raw, dict) else {}
     stremio_id = raw.get("stremio_id")
+
     if not stremio_id:
         stremio_payload = raw.get("stremio")
         if isinstance(stremio_payload, dict):
             stremio_id = stremio_payload.get("id") or stremio_payload.get("_id")
-    if stremio_id:
-        return str(stremio_id)
-    if media_item.imdb_id:
-        return media_item.imdb_id
-    return None
+
+    return str(stremio_id) if stremio_id else media_item.imdb_id
 
 
 def _resolve_stremio_type(media_type: str) -> Literal["movie", "series"] | None:
     if media_type == "movie":
         return "movie"
-    if media_type in {"tv", "anime", "series"}:
-        return "series"
-    return None
+    return "series" if media_type in {"tv", "anime", "series"} else None
 
 
 def _build_meta(media_item: MediaItem, catalog_type: str) -> dict[str, Any] | None:
@@ -85,10 +79,9 @@ def _parse_int_param(value: str | None, default: int) -> int:
     if not value:
         return default
     try:
-        parsed = int(value)
+        return int(value)
     except ValueError:
         return default
-    return parsed
 
 
 def _apply_search_filter(query, search: str):
@@ -115,23 +108,20 @@ def _resolve_pagination(
     request: Request,
     extra_overrides: dict[str, str] | None = None,
 ) -> tuple[int, int, str | None]:
-    search = _extract_extra_param(request, "search")
-    if not search and extra_overrides:
-        search = extra_overrides.get("search")
-    skip_value = _extract_extra_param(request, "skip")
-    if not skip_value and extra_overrides:
-        skip_value = extra_overrides.get("skip")
-    limit_value = _extract_extra_param(request, "limit")
-    if not limit_value and extra_overrides:
-        limit_value = extra_overrides.get("limit")
-    skip = _parse_int_param(skip_value, 0)
+    search = _extract_extra_param(request, "search") or (
+        extra_overrides.get("search") if extra_overrides else None
+    )
+    skip_value = _extract_extra_param(request, "skip") or (
+        extra_overrides.get("skip") if extra_overrides else None
+    )
+    limit_value = _extract_extra_param(request, "limit") or (
+        extra_overrides.get("limit") if extra_overrides else None
+    )
+
+    skip = max(0, _parse_int_param(skip_value, 0))
     limit = _parse_int_param(limit_value, 50)
-    if skip < 0:
-        skip = 0
-    if limit <= 0:
-        limit = 50
-    if limit > MAX_LIMIT:
-        limit = MAX_LIMIT
+    limit = min(MAX_LIMIT, max(1, limit))
+
     return skip, limit, search
 
 
@@ -163,35 +153,29 @@ def _catalogs_by_id(catalogs: list[dict]) -> dict[str, dict]:
 def _resolve_status_filter(catalog: dict | None, base_statuses: list[str]) -> list[str]:
     filters = catalog.get("filters") if isinstance(catalog, dict) else {}
     statuses = filters.get("statuses") if isinstance(filters, dict) else None
-    extras: list[str] = []
-    if isinstance(statuses, list):
-        for status_value in statuses:
-            if not status_value:
-                continue
-            status = str(status_value)
-            if status == "added":
-                continue
-            if status in base_statuses:
-                continue
-            extras.append(status)
+
+    extras = [
+        str(status_value)
+        for status_value in (statuses if isinstance(statuses, list) else [])
+        if status_value and str(status_value) != "added" and str(status_value) not in base_statuses
+    ]
+
     return list(dict.fromkeys([*base_statuses, *extras]))
 
 
 def _coerce_page_size(catalog: dict | None) -> int:
-    if not isinstance(catalog, dict):
-        return DEFAULT_PAGE_SIZE
-    value = catalog.get("pageSize")
-    if isinstance(value, int) and value > 0:
-        return value
+    if isinstance(catalog, dict):
+        value = catalog.get("pageSize")
+        if isinstance(value, int) and value > 0:
+            return value
     return DEFAULT_PAGE_SIZE
 
 
 def _coerce_show_in_home(catalog: dict | None) -> bool:
-    if not isinstance(catalog, dict):
-        return DEFAULT_SHOW_IN_HOME
-    value = catalog.get("showInHome")
-    if isinstance(value, bool):
-        return value
+    if isinstance(catalog, dict):
+        value = catalog.get("showInHome")
+        if isinstance(value, bool):
+            return value
     return DEFAULT_SHOW_IN_HOME
 
 
@@ -281,62 +265,13 @@ async def _build_watchlist_query(
     return query
 
 
-def _build_progress_subquery(user_id: str, now_date: date):
-    base = (
-        select(EpisodeItem.show_media_item_id.label("media_item_id"))
-        .where(EpisodeItem.show_media_item_id.is_not(None))
-        .group_by(EpisodeItem.show_media_item_id)
-        .subquery()
-    )
-    released_subq = (
-        select(
-            EpisodeItem.show_media_item_id.label("media_item_id"),
-            func.count(EpisodeItem.id).label("total_released"),
-        )
-        .where(
-            EpisodeItem.air_date.is_not(None),
-            EpisodeItem.air_date <= now_date,
-            EpisodeItem.season_number > 0,
-        )
-        .group_by(EpisodeItem.show_media_item_id)
-        .subquery()
-    )
-    watched_subq = (
-        select(
-            EpisodeItem.show_media_item_id.label("media_item_id"),
-            func.count(func.distinct(WatchedItem.episode_item_id)).label("watched_count"),
-        )
-        .join(WatchedItem, WatchedItem.episode_item_id == EpisodeItem.id)
-        .where(
-            WatchedItem.user_id == user_id,
-            WatchedItem.media_item_id.is_(None),
-            EpisodeItem.air_date.is_not(None),
-            EpisodeItem.air_date <= now_date,
-            EpisodeItem.season_number > 0,
-        )
-        .group_by(EpisodeItem.show_media_item_id)
-        .subquery()
-    )
-    return (
-        select(
-            base.c.media_item_id,
-            func.coalesce(released_subq.c.total_released, 0).label("total_released"),
-            func.coalesce(watched_subq.c.watched_count, 0).label("watched_count"),
-        )
-        .select_from(base)
-        .outerjoin(released_subq, released_subq.c.media_item_id == base.c.media_item_id)
-        .outerjoin(watched_subq, watched_subq.c.media_item_id == base.c.media_item_id)
-        .subquery()
-    )
-
-
 async def _build_in_progress_query(
     user_id: str,
     catalog: dict | None,
     search: str | None,
 ):
     now_date = datetime.now(timezone.utc).date()
-    progress_subq = _build_progress_subquery(user_id, now_date)
+    progress_subq = build_show_progress_subquery(user_id, now_date)
     query = (
         select(MediaItem)
         .join(WatchlistItem, WatchlistItem.media_item_id == MediaItem.id)
@@ -346,14 +281,21 @@ async def _build_in_progress_query(
             WatchlistItem.status != "removed",
             WatchlistItem.type.in_(["tv", "anime"]),
             MediaItem.media_type.in_(["tv", "anime"]),
-            progress_subq.c.total_released > 0,
-            progress_subq.c.watched_count > 0,
-            progress_subq.c.watched_count < progress_subq.c.total_released,
         )
     )
     statuses = _resolve_status_filter(catalog, ["in_progress"])
-    if statuses:
-        query = query.where(WatchlistItem.status.in_(statuses))
+    in_progress_clause = and_(
+        progress_subq.c.total_released > 0,
+        progress_subq.c.watched_count > 0,
+        progress_subq.c.watched_count < progress_subq.c.total_released,
+    )
+    other_statuses = [status_value for status_value in statuses if status_value != "in_progress"]
+    if other_statuses:
+        query = query.where(
+            or_(WatchlistItem.status.in_(other_statuses), in_progress_clause)
+        )
+    else:
+        query = query.where(in_progress_clause)
     if search:
         query = _apply_search_filter(query, search)
     return query
@@ -457,9 +399,9 @@ async def _serve_catalog(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
     catalogs = _normalize_catalogs(config.default_catalogs)
-    catalogs_by_id = _catalogs_by_id(catalogs)
-    catalog = catalogs_by_id.get(catalog_id)
+    catalog = _catalogs_by_id(catalogs).get(catalog_id)
     custom_catalog = None
+
     if not catalog:
         custom_result = await db.execute(
             select(StremioCustomCatalog).where(
@@ -470,14 +412,14 @@ async def _serve_catalog(
         custom_catalog = custom_result.scalars().first()
         if not custom_catalog:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog not found")
-        expected_type = _resolve_stremio_type(custom_catalog.media_type)
-        if expected_type != catalog_type:
+
+        if _resolve_stremio_type(custom_catalog.media_type) != catalog_type:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog not found")
     else:
         if not catalog.get("enabled", True):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog not found")
-        expected_type = _resolve_stremio_type(str(catalog.get("media_type")))
-        if expected_type != catalog_type:
+
+        if _resolve_stremio_type(str(catalog.get("media_type"))) != catalog_type:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog not found")
 
     skip, limit, search = _resolve_pagination(request, extra_overrides)
@@ -522,20 +464,14 @@ async def _serve_catalog(
             tie_breaker_col=MediaItem.id,
         )
 
-    query = query.offset(skip).limit(limit + 1)
-    result = await db.execute(query)
+    result = await db.execute(query.offset(skip).limit(limit + 1))
     media_items = result.scalars().all()
     has_more = len(media_items) > limit
-    if has_more:
-        media_items = media_items[:limit]
 
-    metas: list[dict[str, Any]] = []
-    for media in media_items:
-        meta = _build_meta(media, catalog_type)
-        if meta:
-            metas.append(meta)
+    metas = [
+        meta
+        for media in media_items[:limit]
+        if (meta := _build_meta(media, catalog_type)) is not None
+    ]
 
-    payload: dict[str, Any] = {"metas": metas}
-    if has_more:
-        payload["hasMore"] = True
-    return payload
+    return {"metas": metas, "hasMore": has_more} if has_more else {"metas": metas}

@@ -51,7 +51,7 @@ def apply_catalog_ordering(
         order_expression = last_watched_subq.c.last_watched_at
     elif order_by in {"episodes_left", "progress"}:
         now_date = now_date or datetime.now(timezone.utc).date()
-        progress_subq = _build_show_progress_subquery(user_id, now_date)
+        progress_subq = build_show_progress_subquery(user_id, now_date)
         updated_query = updated_query.outerjoin(
             progress_subq,
             progress_subq.c.media_item_id == base_media_id_col,
@@ -108,7 +108,7 @@ def _build_last_watched_subquery(user_id: str):
     )
 
 
-def _build_show_progress_subquery(user_id: str, now_date: date):
+def build_show_progress_subquery(user_id: str, now_date: date):
     base = (
         select(EpisodeItem.show_media_item_id.label("media_item_id"))
         .where(EpisodeItem.show_media_item_id.is_not(None))

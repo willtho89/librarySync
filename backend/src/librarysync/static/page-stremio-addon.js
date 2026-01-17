@@ -70,14 +70,13 @@ function setControlsMessage(message, isError = false) {
 }
 
 function updateInstallLinks(payload) {
-  if (!payload) {
-    return;
-  }
-  if (payload.manifest_url) {
-    addonState.installLinks.manifestUrl = payload.manifest_url;
-  }
-  if (payload.install_url) {
-    addonState.installLinks.installUrl = payload.install_url;
+  if (payload) {
+    if (payload.manifest_url) {
+      addonState.installLinks.manifestUrl = payload.manifest_url;
+    }
+    if (payload.install_url) {
+      addonState.installLinks.installUrl = payload.install_url;
+    }
   }
 }
 
@@ -508,29 +507,16 @@ function catalogSearchScope(catalog) {
   if (!catalog) {
     return "all";
   }
-  if (catalog.media_type === "anime") {
-    return "anime";
-  }
-  if (catalog.media_type === "tv") {
-    return "tv";
-  }
-  return "movie";
+  const typeMap = { anime: "anime", tv: "tv" };
+  return typeMap[catalog.media_type] || "movie";
 }
 
 function candidateMatchesItem(candidate, item) {
   if (!candidate || !item) {
     return false;
   }
-  const pairs = [
-    ["imdb_id"],
-    ["tmdb_id"],
-    ["tvdb_id"],
-    ["tvmaze_id"],
-    ["kitsu_id"],
-    ["myanimelist_id"],
-    ["anilist_id"],
-  ];
-  return pairs.some(([key]) => {
+  const idFields = ["imdb_id", "tmdb_id", "tvdb_id", "tvmaze_id", "kitsu_id", "myanimelist_id", "anilist_id"];
+  return idFields.some((key) => {
     const left = candidate[key];
     const right = item[key];
     return left && right && String(left) === String(right);

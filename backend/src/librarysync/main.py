@@ -54,7 +54,6 @@ OPENAPI_TAGS = [
 
 
 def get_app_version() -> str:
-    """Get the application version from package metadata."""
     try:
         return metadata.version("librarysync")
     except metadata.PackageNotFoundError:
@@ -62,10 +61,7 @@ def get_app_version() -> str:
 
 
 def make_static_url(version: str) -> callable:
-    """Create a static_url function with the given version."""
-
     def static_url(path: str) -> str:
-        """Generate a versioned static URL for cache busting."""
         return f"{path}?v={version}"
 
     return static_url
@@ -105,11 +101,13 @@ def create_app() -> FastAPI:
             response = await super().get_response(path, scope)
             if response.status_code != 200 or "cache-control" in response.headers:
                 return response
+
             suffix = Path(path).suffix.lower()
+
             if path.endswith("service-worker.js"):
-                response.headers["Cache-Control"] = "no-cache"
-                return response
-            if suffix in {
+                cache_max_age = 0
+                cache_directive = "no-cache"
+            elif suffix in {
                 ".woff2",
                 ".woff",
                 ".ttf",
@@ -122,12 +120,16 @@ def create_app() -> FastAPI:
                 ".svg",
                 ".ico",
             }:
-                response.headers["Cache-Control"] = f"public, max-age={STATIC_CACHE_LONG}"
-                return response
-            if suffix in {".css", ".js", ".webmanifest"}:
-                response.headers["Cache-Control"] = f"public, max-age={STATIC_CACHE_MEDIUM}"
-                return response
-            response.headers["Cache-Control"] = f"public, max-age={STATIC_CACHE_DEFAULT}"
+                cache_max_age = STATIC_CACHE_LONG
+                cache_directive = f"public, max-age={cache_max_age}"
+            elif suffix in {".css", ".js", ".webmanifest"}:
+                cache_max_age = STATIC_CACHE_MEDIUM
+                cache_directive = f"public, max-age={cache_max_age}"
+            else:
+                cache_max_age = STATIC_CACHE_DEFAULT
+                cache_directive = f"public, max-age={cache_max_age}"
+
+            response.headers["Cache-Control"] = cache_directive
             return response
 
     app.mount("/static", CachedStaticFiles(directory=STATIC_DIR), name="static")
@@ -135,6 +137,7 @@ def create_app() -> FastAPI:
     def _static_asset(filename: str) -> FileResponse:
         response = FileResponse(STATIC_DIR / filename)
         suffix = Path(filename).suffix.lower()
+
         if suffix in {
             ".woff2",
             ".woff",
@@ -148,11 +151,13 @@ def create_app() -> FastAPI:
             ".svg",
             ".ico",
         }:
-            response.headers["Cache-Control"] = f"public, max-age={STATIC_CACHE_LONG}"
+            cache_max_age = STATIC_CACHE_LONG
         elif suffix in {".css", ".js", ".webmanifest"}:
-            response.headers["Cache-Control"] = f"public, max-age={STATIC_CACHE_MEDIUM}"
+            cache_max_age = STATIC_CACHE_MEDIUM
         else:
-            response.headers["Cache-Control"] = f"public, max-age={STATIC_CACHE_DEFAULT}"
+            cache_max_age = STATIC_CACHE_DEFAULT
+
+        response.headers["Cache-Control"] = f"public, max-age={cache_max_age}"
         return response
 
     @app.get("/favicon.ico", include_in_schema=False)
@@ -194,13 +199,12 @@ def create_app() -> FastAPI:
         current_user: User | None = None,
         **context: object,
     ):
-        auth_state = "auth" if current_user else "guest"
         return templates.TemplateResponse(
             template_name,
             {
                 "request": request,
                 "app_version": app_version,
-                "auth_state": auth_state,
+                "auth_state": "auth" if current_user else "guest",
                 "current_user": current_user,
                 **context,
             },

@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
@@ -15,6 +15,7 @@ from librarysync.core.catalog_ordering import (
     CatalogOrderBy,
     CatalogOrderDirection,
     apply_catalog_ordering,
+    build_show_progress_subquery,
 )
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
@@ -520,7 +521,31 @@ async def list_watchlist_items(
     if status and status != "all":
         statuses = [s.strip() for s in status.split(",") if s.strip()]
         if statuses:
-            query = query.where(WatchlistItem.status.in_(statuses))
+            if "in_progress" in statuses:
+                other_statuses = [
+                    status_value for status_value in statuses if status_value != "in_progress"
+                ]
+                now_date = datetime.now(timezone.utc).date()
+                progress_subq = build_show_progress_subquery(current_user.id, now_date)
+                query = query.outerjoin(
+                    progress_subq,
+                    progress_subq.c.media_item_id == MediaItem.id,
+                )
+                in_progress_clause = and_(
+                    WatchlistItem.status != "removed",
+                    MediaItem.media_type.in_(["tv", "anime"]),
+                    progress_subq.c.total_released > 0,
+                    progress_subq.c.watched_count > 0,
+                    progress_subq.c.watched_count < progress_subq.c.total_released,
+                )
+                if other_statuses:
+                    query = query.where(
+                        or_(WatchlistItem.status.in_(other_statuses), in_progress_clause)
+                    )
+                else:
+                    query = query.where(in_progress_clause)
+            else:
+                query = query.where(WatchlistItem.status.in_(statuses))
 
     if media_type:
         query = query.where(WatchlistItem.type == media_type)

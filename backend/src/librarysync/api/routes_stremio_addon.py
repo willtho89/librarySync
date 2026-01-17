@@ -101,9 +101,8 @@ class StremioCustomCatalogReorder(BaseModel):
 
 
 def _resolve_base_url(request: Request) -> str:
-    if settings.base_url:
-        return settings.base_url.rstrip("/")
-    return str(request.base_url).rstrip("/")
+    base = settings.base_url or str(request.base_url)
+    return base.rstrip("/")
 
 
 def _build_manifest_links(base_url: str, addon_id: str) -> dict[str, str]:
@@ -118,11 +117,9 @@ def _slugify(value: str) -> str:
 
 
 def _truncate_slug(value: str, suffix: str | None = None) -> str:
-    limit = 64 - (len(suffix) if suffix else 0)
-    trimmed = value[:limit].rstrip("-")
-    if suffix:
-        return f"{trimmed}{suffix}"
-    return trimmed
+    suffix_len = len(suffix) if suffix else 0
+    trimmed = value[: 64 - suffix_len].rstrip("-")
+    return f"{trimmed}{suffix}" if suffix else trimmed
 
 
 async def _build_unique_slug(
@@ -156,15 +153,12 @@ def _normalize_custom_order_by(value: str | None) -> str:
     if not value:
         return "manual"
     normalized = value.strip().lower()
-    if normalized in CUSTOM_ORDER_BY:
-        return normalized
-    return "manual"
+    return normalized if normalized in CUSTOM_ORDER_BY else "manual"
 
 
 def _normalize_custom_order_dir(value: str | None) -> str:
-    if value and value.strip().lower() in CUSTOM_ORDER_DIR:
-        return value.strip().lower()
-    return "asc"
+    normalized = value.strip().lower() if value else ""
+    return normalized if normalized in CUSTOM_ORDER_DIR else "asc"
 
 
 def _custom_catalog_out(catalog: StremioCustomCatalog) -> dict:
@@ -291,7 +285,9 @@ async def _resolve_custom_media_item(
     if payload.media_item_id:
         media_item = await db.get(MediaItem, payload.media_item_id)
         if not media_item:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found"
+            )
         if media_item.media_type != catalog.media_type:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -335,13 +331,13 @@ async def _resolve_custom_media_item(
         )
 
     if not media_item:
-        resolved_title = payload.title or fallback_title(ids)
         raw = {"source": "stremio_custom_catalog", "ids": ids}
         if payload.stremio_id:
             raw["stremio_id"] = payload.stremio_id
+
         media_item = MediaItem(
             media_type=media_type,
-            title=resolved_title,
+            title=payload.title or fallback_title(ids),
             year=payload.year,
             poster_url=payload.poster_url,
             imdb_id=ids.get("imdb_id"),
@@ -357,13 +353,16 @@ async def _resolve_custom_media_item(
         await db.flush()
         return media_item
 
-    apply_media_id_update(media_item, "imdb_id", ids.get("imdb_id"))
-    apply_media_id_update(media_item, "tmdb_id", ids.get("tmdb_id"))
-    apply_media_id_update(media_item, "tvdb_id", ids.get("tvdb_id"))
-    apply_media_id_update(media_item, "tvmaze_id", ids.get("tvmaze_id"))
-    apply_media_id_update(media_item, "kitsu_id", ids.get("kitsu_id"))
-    apply_media_id_update(media_item, "myanimelist_id", ids.get("myanimelist_id"))
-    apply_media_id_update(media_item, "anilist_id", ids.get("anilist_id"))
+    for id_field in [
+        "imdb_id",
+        "tmdb_id",
+        "tvdb_id",
+        "tvmaze_id",
+        "kitsu_id",
+        "myanimelist_id",
+        "anilist_id",
+    ]:
+        apply_media_id_update(media_item, id_field, ids.get(id_field))
     if payload.year is not None and media_item.year is None:
         media_item.year = payload.year
     if payload.poster_url and not media_item.poster_url:
@@ -388,19 +387,19 @@ async def get_stremio_addon_config(
 ) -> dict:
     config = await ensure_addon_config(db, current_user.id)
     catalogs = await _ensure_default_catalogs(db, config)
+
     custom_result = await db.execute(
         select(StremioCustomCatalog).where(StremioCustomCatalog.user_id == current_user.id)
     )
     custom_catalogs = [_custom_catalog_out(catalog) for catalog in custom_result.scalars().all()]
-    manifest_links = _build_manifest_links(_resolve_base_url(request), config.id)
-    payload: dict[str, object] = {
+
+    return {
         "addon_id": config.id,
         "is_enabled": bool(config.is_enabled),
         "catalogs": catalogs,
         "custom_catalogs": custom_catalogs,
-        **manifest_links,
+        **_build_manifest_links(_resolve_base_url(request), config.id),
     }
-    return payload
 
 
 @router.post(
@@ -413,25 +412,22 @@ async def update_stremio_addon_config(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(StremioAddonConfig).where(StremioAddonConfig.user_id == current_user.id)
-    )
-    config = result.scalars().first()
-    if not config:
-        config = await ensure_addon_config(db, current_user.id)
+    config = await ensure_addon_config(db, current_user.id)
     catalogs = await _ensure_default_catalogs(db, config)
 
-    fields = payload.model_fields_set
-    if "is_enabled" in fields:
+    if "is_enabled" in payload.model_fields_set:
         config.is_enabled = bool(payload.is_enabled)
+
     if payload.catalogs:
         catalogs = _merge_catalog_updates(catalogs, payload.catalogs)
         config.default_catalogs = catalogs
         flag_modified(config, "default_catalogs")
+
     config.updated_at = datetime.now(timezone.utc)
     db.add(config)
     await db.commit()
     await db.refresh(config)
+
     return {
         "is_enabled": config.is_enabled,
         "catalogs": config.default_catalogs,
@@ -452,16 +448,14 @@ async def create_custom_catalog(
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is required")
-    slug = await _build_unique_slug(db, current_user.id, name)
-    order_by = _normalize_custom_order_by(payload.order_by)
-    order_dir = _normalize_custom_order_dir(payload.order_dir)
+
     catalog = StremioCustomCatalog(
         user_id=current_user.id,
         name=name,
-        slug=slug,
+        slug=await _build_unique_slug(db, current_user.id, name),
         media_type=payload.media_type,
-        order_by=order_by,
-        order_dir=order_dir,
+        order_by=_normalize_custom_order_by(payload.order_by),
+        order_dir=_normalize_custom_order_dir(payload.order_dir),
     )
     db.add(catalog)
     await db.commit()
@@ -482,29 +476,29 @@ async def update_custom_catalog(
 ) -> dict:
     catalog = await _load_custom_catalog(db, current_user.id, catalog_id)
     fields = payload.model_fields_set
+
     if "name" in fields:
         name = (payload.name or "").strip()
         if not name:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is required")
         if name != catalog.name:
             catalog.slug = await _build_unique_slug(
-                db,
-                current_user.id,
-                name,
-                exclude_catalog_id=catalog.id,
+                db, current_user.id, name, exclude_catalog_id=catalog.id
             )
         catalog.name = name
+
     if "media_type" in fields and payload.media_type:
         if payload.media_type not in CUSTOM_MEDIA_TYPES:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid media type",
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid media type"
             )
         catalog.media_type = payload.media_type
+
     if "order_by" in fields:
         catalog.order_by = _normalize_custom_order_by(payload.order_by)
     if "order_dir" in fields:
         catalog.order_dir = _normalize_custom_order_dir(payload.order_dir)
+
     catalog.updated_at = datetime.now(timezone.utc)
     db.add(catalog)
     await db.commit()
@@ -635,9 +629,7 @@ async def reorder_custom_catalog(
 ) -> dict:
     catalog = await _load_custom_catalog(db, current_user.id, catalog_id)
     result = await db.execute(
-        select(StremioCustomCatalogItem).where(
-            StremioCustomCatalogItem.catalog_id == catalog.id
-        )
+        select(StremioCustomCatalogItem).where(StremioCustomCatalogItem.catalog_id == catalog.id)
     )
     items = result.scalars().all()
     existing_ids = [item.media_item_id for item in items]

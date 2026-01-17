@@ -34,7 +34,9 @@ class TestStremioAddonCatalogs(unittest.TestCase):
 
     def test_build_manifest_includes_custom_and_enabled_catalogs(self) -> None:
         catalogs = build_default_catalogs()
-        custom_catalog = SimpleNamespace(name="Curated Picks", slug="curated_picks", media_type="movie")
+        custom_catalog = SimpleNamespace(
+            name="Curated Picks", slug="curated_picks", media_type="movie"
+        )
 
         manifest = routes_stremio_addon_public._build_manifest(catalogs, [custom_catalog])
 
@@ -55,17 +57,17 @@ class TestStremioAddonCatalogs(unittest.TestCase):
             raw={"stremio_id": "stremio:movie:123"},
         )
         meta = routes_stremio_addon_public._build_meta(media_item, "movie")
+
         self.assertIsNotNone(meta)
-        assert meta is not None
         self.assertEqual(meta["id"], "stremio:movie:123")
         self.assertEqual(meta["type"], "movie")
 
     def test_in_progress_query_applies_status_filter(self) -> None:
         catalog = {"filters": {"statuses": ["added"]}}
-
         query = asyncio.run(
             routes_stremio_addon_public._build_in_progress_query("user-id", catalog, None)
         )
+
         compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
         self.assertIn("watchlist_items.status in", compiled)
 
