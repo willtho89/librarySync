@@ -14,6 +14,10 @@
 - Streaming sources, meta enrichers, or providers beyond the local catalog.
 - Replacing existing watchlist UI or watchlist data model.
 
+## Status (current)
+- Done: backend data model + migration, addon config helpers, public Stremio endpoints keyed by addon config id, auth-required config endpoints, basic manifest + catalog responses, custom catalog CRUD + items/reorder endpoints, frontend page/JS/Tailwind build, tests for helpers/queries.
+- Missing: none.
+
 ## Reference/Research
 - Review Stremio addon manifest/catalog spec and best practices.
 - Inspect any local Stremio-related code and the aiometadata/aiostreams addon patterns for response structure and pagination.
@@ -22,7 +26,7 @@
 - Add a new burger-menu entry below Settings: "Stremio Addon".
 - New page `/stremio-addon` with:
   - Install section (manifest URL + stremio:// link).
-  - Addon key management (show + rotate).
+  - Addon controls (enable/disable).
   - Built-in catalogs (Watchlist, In progress) with filter + order controls.
   - Custom catalogs (CRUD + add/remove items).
 
@@ -35,7 +39,6 @@ Suggested tables:
 - `stremio_addon_configs`
   - `user_id` (FK)
   - `is_enabled` (bool)
-  - `addon_key_hash` (string) + `addon_key_last_rotated_at`
   - `default_catalogs` (JSON): list of catalog definitions (id, name, media_type, filters, ordering, enabled)
   - `created_at`, `updated_at`
 
@@ -53,7 +56,7 @@ Suggested tables:
   - `created_at`
 
 Notes:
-- Addon access is key-based (no JWT). Store addon keys hashed; keep plaintext only at creation/rotation time.
+- Addon access uses the addon config id in the URL (no JWT or separate key rotation).
 - If you prefer fewer tables, we can encode the built-in catalogs in JSON on the config table and only create a table for custom catalogs/items.
 - V2 catalog-only watchlists:
   - Add tables mirroring watchlist sources/items but scoped to the addon:
@@ -69,8 +72,6 @@ Create endpoints under `/api/stremio-addon`:
   - Returns manifest URL, install link, enabled state, catalogs config, and custom catalogs.
 - `POST /api/stremio-addon/config`
   - Updates addon enablement and built-in catalog filters/order.
-- `POST /api/stremio-addon/token/rotate`
-  - Rotates addon key and returns new manifest URL.
 - Custom catalogs CRUD:
   - `POST /api/stremio-addon/custom-catalogs`
   - `PATCH /api/stremio-addon/custom-catalogs/{catalog_id}`
@@ -86,12 +87,12 @@ Create endpoints under `/api/stremio-addon`:
   - Optional: `POST /api/stremio-addon/watchlists/{watchlist_id}/refresh`
 
 ### Addon (public) Routes
-Add a new router with public endpoints; all access is gated by the addon key in the URL.
+Add a new router with public endpoints; all access is via the addon config id in the URL.
 
 Suggested URL scheme:
-- `GET /stremio-addon/{addon_key}/manifest.json`
-- `GET /stremio-addon/{addon_key}/catalog/{type}/{id}.json`
-- (Optional) `GET /stremio-addon/{addon_key}/meta/{type}/{id}.json`
+- `GET /stremio-addon/{addon_id}/manifest.json`
+- `GET /stremio-addon/{addon_id}/catalog/{type}/{id}.json`
+- (Optional) `GET /stremio-addon/{addon_id}/meta/{type}/{id}.json`
 
 Notes:
 - Use Stremio types: `movie` and `series`. Map `tv` and `anime` to `series`.
@@ -151,7 +152,6 @@ UI sections:
 1. Install
    - Manifest URL (copy button).
    - Direct install link (stremio://... per spec).
-   - Rotate key button.
 2. Built-in catalogs
    - Toggle enable/disable.
    - Filters: unwatched, released, include watched, media type.
@@ -167,16 +167,15 @@ UI sections:
    - Apply the same filters/order options as built-in watchlist catalogs.
 
 ## Security + Access
-- Addon access uses a per-user addon key (random, rotatable); no auth cookies.
-- Store addon key hashed; verify using constant-time compare.
-- Enforce `is_enabled` flag; return 404/401 for disabled or invalid keys.
+- Addon access uses the addon config id in the URL; no auth cookies.
+- Enforce `is_enabled` flag; return 404 for disabled configs.
 
 ## Testing
 - Unit tests for:
   - Manifest generation includes expected catalogs.
   - Catalog filters (unwatched, released, in-progress) and ordering.
   - Custom catalog CRUD and item ordering.
-  - Addon key rotation and access control.
+  - Access control for disabled configs.
 - Integration tests for Stremio endpoints (FastAPI test client).
 
 ## Rollout Steps
@@ -189,10 +188,4 @@ UI sections:
 None.
 
 ## Known Bugs (needs fixing)
-  - [P2] Persist default catalog updates when editing JSON config — /Users/twillems/Development/stremio/librarySync/backend/src/librarysync/api/routes_stremio_addon.py:60-70
-    The catalog update path mutates the existing default_catalogs list/dicts in place and then reassigns the list. Because default_catalogs is a plain JSON column (not a MutableList), SQLAlchemy doesn’t track in-place JSON mutations; if the new list
-    compares equal to the old one, the UPDATE won’t include default_catalogs. This means toggling catalog enabled state or changing filters/order can appear to succeed in the response but revert on the next load. Consider deep-copying before mutation or
-    explicitly flagging the JSON column as modified.
-  - [P2] Apply catalog status filters to in-progress catalog — /Users/twillems/Development/stremio/librarySync/backend/src/librarysync/api/routes_stremio_addon_public.py:270-277
-    The in-progress catalog query ignores the configured filters.statuses and only excludes removed. If a user disables certain statuses in the addon config (e.g., wants to exclude watched or not_released items), those settings are silently ignored for
-    the in_progress_shows catalog. This causes the in-progress catalog to return items the user explicitly filtered out. Consider applying the same status filter logic as _build_watchlist_query or pass the catalog’s filters into this helper.
+  - None (last two P2s fixed: JSON mutation persistence + in-progress status filters).

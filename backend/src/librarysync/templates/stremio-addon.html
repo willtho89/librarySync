@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="space-y-8">
+  <header class="hero-card rounded-3xl border border-line/60 bg-surface/80 p-6 md:p-8">
+    <p class="eyebrow">Stremio Addon</p>
+    <div class="mt-3 space-y-2">
+      <h1 class="text-2xl font-display text-ink md:text-3xl">Publish your watchlists.</h1>
+      <p class="text-sm text-muted">
+        Turn librarySync lists into Stremio catalogs with per-catalog filters and custom picks.
+      </p>
+    </div>
+  </header>
+
+  <p id="stremio-addon-message" class="form-message" role="status" hidden></p>
+
+  <div class="grid gap-6 lg:grid-cols-2">
+    <div class="card space-y-5">
+      <div>
+        <h2 class="section-title">Install</h2>
+        <p class="section-subtitle">Use the manifest URL or install link in Stremio.</p>
+      </div>
+      <label class="field">
+        <span>Manifest URL</span>
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input id="stremio-manifest-url" class="input" type="text" readonly />
+          <button id="stremio-manifest-copy" type="button" class="btn btn-secondary btn-sm">
+            Copy
+          </button>
+        </div>
+      </label>
+      <label class="field">
+        <span>Install link</span>
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <a id="stremio-install-link" class="btn btn-primary btn-sm" href="#">Install</a>
+          <button id="stremio-install-copy" type="button" class="btn btn-secondary btn-sm">
+            Copy link
+          </button>
+        </div>
+      </label>
+      <p id="stremio-install-hint" class="helper-text">
+        Keep this URL somewhere safe for reinstalling.
+      </p>
+      <p id="stremio-install-message" class="form-message" role="status" hidden></p>
+    </div>
+
+    <div class="card space-y-5">
+      <div>
+        <h2 class="section-title">Addon controls</h2>
+        <p class="section-subtitle">Enable or disable the addon.</p>
+      </div>
+      <label class="inline-control">
+        <input id="stremio-addon-enabled" type="checkbox" />
+        <span>Enable addon</span>
+      </label>
+      <div class="flex flex-wrap items-center gap-3">
+        <button id="stremio-addon-enable-save" type="button" class="btn btn-secondary btn-sm">
+          Save status
+        </button>
+      </div>
+      <p id="stremio-addon-controls-message" class="form-message" role="status" hidden></p>
+    </div>
+  </div>
+
+  <div class="card space-y-4">
+    <div class="card-header">
+      <div>
+        <h2 class="section-title">Built-in catalogs</h2>
+        <p class="section-subtitle">Filter and order the default watchlist feeds.</p>
+      </div>
+    </div>
+    <div id="stremio-addon-catalogs" class="grid gap-4">Loading...</div>
+  </div>
+
+  <div class="card space-y-6">
+    <div class="card-header">
+      <div>
+        <h2 class="section-title">Custom catalogs</h2>
+        <p class="section-subtitle">Curate hand-picked lists for Stremio.</p>
+      </div>
+    </div>
+    <form id="custom-catalog-form" class="grid gap-4 md:grid-cols-4">
+      <label class="field md:col-span-2">
+        <span>Name</span>
+        <input class="input" type="text" name="name" placeholder="Weekend picks" required />
+      </label>
+      <label class="field">
+        <span>Type</span>
+        <select class="select" name="media_type">
+          <option value="movie">Movie</option>
+          <option value="tv">TV</option>
+          <option value="anime">Anime</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Order</span>
+        <select class="select" name="order_by">
+          <option value="manual" selected>Manual</option>
+          <option value="date_added">Date added</option>
+          <option value="release_date">Release date</option>
+          <option value="last_watched">Last watched</option>
+          <option value="episodes_left">Episodes left</option>
+          <option value="progress">Progress</option>
+          <option value="last_episode_air_date">Last episode air date</option>
+          <option value="next_episode_air_date">Next episode air date</option>
+          <option value="random">Random</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Direction</span>
+        <select class="select" name="order_dir">
+          <option value="asc" selected>Ascending</option>
+          <option value="desc">Descending</option>
+        </select>
+      </label>
+      <div class="md:col-span-4 flex flex-wrap items-center gap-3">
+        <button class="btn btn-primary btn-sm" type="submit">Create catalog</button>
+        <p id="custom-catalog-message" class="form-message" role="status" hidden></p>
+      </div>
+    </form>
+    <div id="custom-catalog-list" class="grid gap-4">Loading...</div>
+  </div>
+
+  <div id="custom-catalog-items-panel" class="card space-y-5" hidden>
+    <div class="card-header">
+      <div>
+        <h2 class="section-title">Catalog items</h2>
+        <p class="section-subtitle" id="custom-catalog-items-subtitle">Manage the selection.</p>
+      </div>
+      <button id="custom-catalog-items-close" type="button" class="btn btn-ghost btn-sm">
+        Close
+      </button>
+    </div>
+    <form id="custom-catalog-items-lookup-form" class="grid gap-4 md:grid-cols-3">
+      <label class="field md:col-span-2">
+        <span>Search titles or IDs</span>
+        <input
+          class="input"
+          type="text"
+          name="query"
+          placeholder="Movie, show, or ID"
+          required
+        />
+      </label>
+      <div class="md:col-span-3 flex flex-wrap items-center gap-3">
+        <button class="btn btn-secondary btn-sm" type="submit">Search</button>
+        <p id="custom-catalog-items-message" class="form-message" role="status" hidden></p>
+      </div>
+    </form>
+    <div id="custom-catalog-items-results" class="space-y-3" hidden>
+      <div>
+        <h3 class="text-sm font-semibold text-ink">Search results</h3>
+        <p class="text-xs text-muted">Add items to the selected catalog.</p>
+      </div>
+      <div id="custom-catalog-items-candidates" class="candidate-list"></div>
+    </div>
+    <div class="space-y-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 class="text-sm font-semibold text-ink">Current items</h3>
+          <p class="text-xs text-muted">Reorder or remove entries.</p>
+        </div>
+        <p id="custom-catalog-items-order-hint" class="text-xs text-muted"></p>
+      </div>
+      <div id="custom-catalog-items-list" class="candidate-list">Loading...</div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ static_url('/static/page-stremio-addon.js') }}" defer></script>
+{% endblock %}

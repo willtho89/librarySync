@@ -298,6 +298,20 @@ def create_app() -> FastAPI:
             current_user=current_user,
         )
 
+    @app.get("/stremio-addon", include_in_schema=False)
+    async def stremio_addon_page(
+        request: Request,
+        current_user: User | None = Depends(get_optional_user),
+    ):
+        return _render_page(
+            request,
+            "stremio-addon.html",
+            page_title="Stremio Addon",
+            active_page="stremio-addon",
+            requires_auth=True,
+            current_user=current_user,
+        )
+
     @app.get("/offline", include_in_schema=False)
     async def offline(
         request: Request,

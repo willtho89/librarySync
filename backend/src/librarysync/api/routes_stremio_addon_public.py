@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_db
 from librarysync.core.catalog_ordering import apply_catalog_ordering
-from librarysync.core.stremio_addon import build_default_catalogs, get_addon_config_by_key
+from librarysync.core.stremio_addon import build_default_catalogs, get_addon_config_by_id
 from librarysync.db.models import (
     EpisodeItem,
     MediaItem,
@@ -130,8 +130,6 @@ def _catalogs_by_id(catalogs: list[dict]) -> dict[str, dict]:
 
 
 def _build_manifest(
-    base_url: str,
-    addon_key: str,
     catalogs: list[dict],
     custom_catalogs: list[StremioCustomCatalog],
 ) -> dict[str, Any]:
@@ -263,6 +261,7 @@ def _build_progress_subquery(user_id: str, now_date: date):
 
 async def _build_in_progress_query(
     user_id: str,
+    catalog: dict | None,
     search: str | None,
 ):
     now_date = datetime.now(timezone.utc).date()
@@ -281,6 +280,10 @@ async def _build_in_progress_query(
             progress_subq.c.watched_count < progress_subq.c.total_released,
         )
     )
+    filters = catalog.get("filters") if isinstance(catalog, dict) else {}
+    statuses = filters.get("statuses") if isinstance(filters, dict) else None
+    if statuses:
+        query = query.where(WatchlistItem.status.in_(statuses))
     if search:
         query = _apply_search_filter(query, search)
     return query
@@ -328,13 +331,12 @@ def _apply_ordering(
     )
 
 
-@router.get("/{addon_key}/manifest.json", include_in_schema=False)
+@router.get("/{addon_id}/manifest.json", include_in_schema=False)
 async def stremio_addon_manifest(
-    addon_key: str,
-    request: Request,
+    addon_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    config = await get_addon_config_by_key(db, addon_key)
+    config = await get_addon_config_by_id(db, addon_id)
     if not config or not config.is_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     catalogs = _normalize_catalogs(config.default_catalogs)
@@ -342,19 +344,18 @@ async def stremio_addon_manifest(
         select(StremioCustomCatalog).where(StremioCustomCatalog.user_id == config.user_id)
     )
     custom_catalogs = custom_result.scalars().all()
-    base_url = str(request.base_url).rstrip("/")
-    return _build_manifest(base_url, addon_key, catalogs, custom_catalogs)
+    return _build_manifest(catalogs, custom_catalogs)
 
 
-@router.get("/{addon_key}/catalog/{catalog_type}/{catalog_id}.json", include_in_schema=False)
+@router.get("/{addon_id}/catalog/{catalog_type}/{catalog_id}.json", include_in_schema=False)
 async def stremio_addon_catalog(
-    addon_key: str,
+    addon_id: str,
     catalog_type: Literal["movie", "series"],
     catalog_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    config = await get_addon_config_by_key(db, addon_key)
+    config = await get_addon_config_by_id(db, addon_id)
     if not config or not config.is_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
@@ -406,7 +407,7 @@ async def stremio_addon_catalog(
             )
     else:
         if catalog_id == "in_progress_shows":
-            query = await _build_in_progress_query(config.user_id, search)
+            query = await _build_in_progress_query(config.user_id, catalog, search)
         else:
             query = await _build_watchlist_query(config.user_id, catalog, search)
         ordering = catalog.get("ordering") if isinstance(catalog.get("ordering"), dict) else {}

@@ -389,8 +389,6 @@ class StremioAddonConfig(Base):
     __tablename__ = "stremio_addon_configs"
     __table_args__ = (
         UniqueConstraint("user_id", name="uq_stremio_addon_configs_user_id"),
-        UniqueConstraint("addon_key_hash", name="uq_stremio_addon_configs_addon_key_hash"),
-        Index("ix_stremio_addon_configs_addon_key_hash", "addon_key_hash"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -398,10 +396,6 @@ class StremioAddonConfig(Base):
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    addon_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    addon_key_last_rotated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
     default_catalogs: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

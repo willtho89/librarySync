@@ -403,6 +403,15 @@
     @apply text-xs text-muted;
   }
 
+  .icon-stremio {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    background-color: currentColor;
+    mask: url("/static/icons/stremio.svg") no-repeat center / contain;
+    -webkit-mask: url("/static/icons/stremio.svg") no-repeat center / contain;
+  }
+
   .episode-picker {
     @apply rounded-xl border border-line/70 bg-elevated/70 p-4;
   }

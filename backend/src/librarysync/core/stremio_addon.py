@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import hmac
-import secrets
-from datetime import datetime, timezone
+import uuid
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.config import settings
 from librarysync.db.models import StremioAddonConfig
 
 DEFAULT_CATALOGS: list[dict[str, Any]] = [
@@ -53,20 +49,6 @@ def build_default_catalogs() -> list[dict[str, Any]]:
     return copy.deepcopy(DEFAULT_CATALOGS)
 
 
-def generate_addon_key() -> str:
-    return secrets.token_urlsafe(32)
-
-
-def hash_addon_key(addon_key: str) -> str:
-    if not settings.secret_key:
-        raise RuntimeError("LIBRARYSYNC_SECRET_KEY is not set")
-    return hmac.new(
-        settings.secret_key.encode("utf-8"),
-        addon_key.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-
-
 async def get_addon_config_by_user(
     db: AsyncSession,
     user_id: str,
@@ -77,52 +59,30 @@ async def get_addon_config_by_user(
     return result.scalars().first()
 
 
-async def get_addon_config_by_key(
+async def get_addon_config_by_id(
     db: AsyncSession,
-    addon_key: str,
+    addon_id: str,
 ) -> StremioAddonConfig | None:
-    key_hash = hash_addon_key(addon_key)
     result = await db.execute(
-        select(StremioAddonConfig).where(StremioAddonConfig.addon_key_hash == key_hash)
+        select(StremioAddonConfig).where(StremioAddonConfig.id == addon_id)
     )
-    config = result.scalars().first()
-    if not config:
-        return None
-    if not hmac.compare_digest(config.addon_key_hash, key_hash):
-        return None
-    return config
+    return result.scalars().first()
 
 
 async def ensure_addon_config(
     db: AsyncSession,
     user_id: str,
-) -> tuple[StremioAddonConfig, str | None]:
+) -> StremioAddonConfig:
     config = await get_addon_config_by_user(db, user_id)
     if config:
-        return config, None
-    addon_key = generate_addon_key()
-    now = datetime.now(timezone.utc)
+        return config
     config = StremioAddonConfig(
+        id=str(uuid.uuid4()),
         user_id=user_id,
         is_enabled=True,
-        addon_key_hash=hash_addon_key(addon_key),
-        addon_key_last_rotated_at=now,
         default_catalogs=build_default_catalogs(),
     )
     db.add(config)
     await db.commit()
     await db.refresh(config)
-    return config, addon_key
-
-
-async def rotate_addon_key(
-    db: AsyncSession,
-    config: StremioAddonConfig,
-) -> str:
-    addon_key = generate_addon_key()
-    config.addon_key_hash = hash_addon_key(addon_key)
-    config.addon_key_last_rotated_at = datetime.now(timezone.utc)
-    db.add(config)
-    await db.commit()
-    await db.refresh(config)
-    return addon_key
+    return config
