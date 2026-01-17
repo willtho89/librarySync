@@ -16,6 +16,11 @@ from librarysync.core.stremio_addon import (
     get_addon_config_by_id,
     normalize_default_catalogs,
 )
+from librarysync.core.watchlist import (
+    SHOW_STATUS_VALUES,
+    build_show_status_context,
+    normalize_watchlist_statuses,
+)
 from librarysync.db.models import (
     MediaItem,
     StremioCustomCatalog,
@@ -163,6 +168,15 @@ def _resolve_status_filter(catalog: dict | None, base_statuses: list[str]) -> li
     return list(dict.fromkeys([*base_statuses, *extras]))
 
 
+def _resolve_show_watched(catalog: dict | None) -> bool:
+    filters = catalog.get("filters") if isinstance(catalog, dict) else {}
+    if isinstance(filters, dict):
+        value = filters.get("show_watched")
+        if isinstance(value, bool):
+            return value
+    return False
+
+
 def _coerce_page_size(catalog: dict | None) -> int:
     if isinstance(catalog, dict):
         value = catalog.get("pageSize")
@@ -251,15 +265,36 @@ async def _build_watchlist_query(
         )
     )
     media_type = catalog.get("media_type")
-    if media_type:
-        normalized = str(media_type)
-        if normalized == "series":
+    normalized_media_type = str(media_type) if media_type else None
+    if normalized_media_type:
+        if normalized_media_type == "series":
             query = query.where(WatchlistItem.type.in_(["tv", "anime"]))
         else:
-            query = query.where(WatchlistItem.type == normalized)
-    statuses = _resolve_status_filter(catalog, ["added"])
+            query = query.where(WatchlistItem.type == normalized_media_type)
+    statuses = normalize_watchlist_statuses(_resolve_status_filter(catalog, ["added"]))
+    is_show_catalog = normalized_media_type in {"tv", "anime", "series"}
     if statuses:
-        query = query.where(WatchlistItem.status.in_(statuses))
+        if is_show_catalog:
+            now_date = datetime.now(timezone.utc).date()
+            status_ctx = build_show_status_context(user_id, now_date)
+            query = query.outerjoin(
+                status_ctx.progress_subq, status_ctx.progress_subq.c.media_item_id == MediaItem.id
+            )
+            query = query.outerjoin(
+                status_ctx.earliest_air_subq,
+                status_ctx.earliest_air_subq.c.media_item_id == MediaItem.id,
+            )
+            computed_statuses = [status for status in statuses if status in SHOW_STATUS_VALUES]
+            raw_statuses = [status for status in statuses if status not in SHOW_STATUS_VALUES]
+            status_clauses = []
+            if computed_statuses:
+                status_clauses.append(status_ctx.status_expr.in_(computed_statuses))
+            if raw_statuses:
+                status_clauses.append(WatchlistItem.status.in_(raw_statuses))
+            if status_clauses:
+                query = query.where(or_(*status_clauses))
+        else:
+            query = query.where(WatchlistItem.status.in_(statuses))
     if search:
         query = _apply_search_filter(query, search)
     return query
@@ -289,6 +324,12 @@ async def _build_in_progress_query(
         progress_subq.c.watched_count > 0,
         progress_subq.c.watched_count < progress_subq.c.total_released,
     )
+    if _resolve_show_watched(catalog):
+        watched_clause = and_(
+            progress_subq.c.total_released > 0,
+            progress_subq.c.watched_count >= progress_subq.c.total_released,
+        )
+        in_progress_clause = or_(in_progress_clause, watched_clause)
     other_statuses = [status_value for status_value in statuses if status_value != "in_progress"]
     if other_statuses:
         query = query.where(

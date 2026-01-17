@@ -15,14 +15,16 @@ from librarysync.core.catalog_ordering import (
     CatalogOrderBy,
     CatalogOrderDirection,
     apply_catalog_ordering,
-    build_show_progress_subquery,
 )
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
+    SHOW_STATUS_VALUES,
     apply_watchlist_status_change,
+    build_show_status_context,
     determine_movie_watchlist_status,
     determine_show_watchlist_status,
     log_watchlist_event,
+    normalize_watchlist_statuses,
     normalize_media_ids,
     upsert_watchlist_item,
 )
@@ -503,9 +505,13 @@ async def list_watchlist_items(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    normalized_statuses: list[str] = []
+    status_filter_values: list[str] = []
     if status and status != "all":
-        statuses = [s.strip() for s in status.split(",") if s.strip()]
-        if "not_released" in statuses:
+        raw_statuses = [s.strip() for s in status.split(",") if s.strip()]
+        normalized_statuses = normalize_watchlist_statuses(raw_statuses)
+        status_filter_values = list(dict.fromkeys([*raw_statuses, *normalized_statuses]))
+        if "not_released" in normalized_statuses:
             await _refresh_watchlist_statuses_for_filter(
                 db,
                 current_user.id,
@@ -518,34 +524,52 @@ async def list_watchlist_items(
         .where(WatchlistItem.user_id == current_user.id)
     )
 
-    if status and status != "all":
-        statuses = [s.strip() for s in status.split(",") if s.strip()]
-        if statuses:
-            if "in_progress" in statuses:
-                other_statuses = [
-                    status_value for status_value in statuses if status_value != "in_progress"
-                ]
-                now_date = datetime.now(timezone.utc).date()
-                progress_subq = build_show_progress_subquery(current_user.id, now_date)
-                query = query.outerjoin(
-                    progress_subq,
-                    progress_subq.c.media_item_id == MediaItem.id,
-                )
-                in_progress_clause = and_(
-                    WatchlistItem.status != "removed",
-                    MediaItem.media_type.in_(["tv", "anime"]),
-                    progress_subq.c.total_released > 0,
-                    progress_subq.c.watched_count > 0,
-                    progress_subq.c.watched_count < progress_subq.c.total_released,
-                )
-                if other_statuses:
-                    query = query.where(
-                        or_(WatchlistItem.status.in_(other_statuses), in_progress_clause)
+    if status and status != "all" and status_filter_values:
+        show_status_ctx = None
+        if media_type in {None, "tv", "anime"}:
+            filter_now_date = datetime.now(timezone.utc).date()
+            show_status_ctx = build_show_status_context(current_user.id, filter_now_date)
+            query = query.outerjoin(
+                show_status_ctx.progress_subq,
+                show_status_ctx.progress_subq.c.media_item_id == MediaItem.id,
+            )
+            query = query.outerjoin(
+                show_status_ctx.earliest_air_subq,
+                show_status_ctx.earliest_air_subq.c.media_item_id == MediaItem.id,
+            )
+
+        computed_statuses = [
+            status_value for status_value in normalized_statuses if status_value in SHOW_STATUS_VALUES
+        ]
+        show_raw_statuses = [
+            status_value
+            for status_value in normalized_statuses
+            if status_value not in SHOW_STATUS_VALUES
+        ]
+        show_clauses = []
+        if show_status_ctx:
+            if computed_statuses:
+                show_clauses.append(show_status_ctx.status_expr.in_(computed_statuses))
+            if show_raw_statuses:
+                show_clauses.append(WatchlistItem.status.in_(show_raw_statuses))
+
+        if media_type == "movie":
+            query = query.where(WatchlistItem.status.in_(status_filter_values))
+        elif media_type in {"tv", "anime"}:
+            if show_clauses:
+                query = query.where(or_(*show_clauses))
+        else:
+            show_filter = or_(*show_clauses) if show_clauses else None
+            movie_filter = WatchlistItem.status.in_(status_filter_values)
+            if show_filter is not None:
+                query = query.where(
+                    or_(
+                        and_(MediaItem.media_type.in_(["tv", "anime"]), show_filter),
+                        and_(MediaItem.media_type == "movie", movie_filter),
                     )
-                else:
-                    query = query.where(in_progress_clause)
+                )
             else:
-                query = query.where(WatchlistItem.status.in_(statuses))
+                query = query.where(movie_filter)
 
     if media_type:
         query = query.where(WatchlistItem.type == media_type)

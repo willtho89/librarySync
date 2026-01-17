@@ -46,6 +46,7 @@ CUSTOM_ORDER_DIR = {"asc", "desc"}
 
 class StremioCatalogFilters(BaseModel):
     statuses: list[str] | None = None
+    show_watched: bool | None = None
 
 
 class StremioCatalogOrdering(BaseModel):

@@ -48,7 +48,7 @@ DEFAULT_CATALOGS: list[dict[str, Any]] = [
         "name": "In Progress",
         "media_type": "tv",
         "enabled": True,
-        "filters": {"statuses": []},
+        "filters": {"statuses": [], "show_watched": False},
         "ordering": {"order_by": "episodes_left", "order_dir": "asc"},
         "pageSize": DEFAULT_PAGE_SIZE,
         "showInHome": DEFAULT_SHOW_IN_HOME,
@@ -71,6 +71,14 @@ def normalize_default_catalogs(catalogs: list[dict[str, Any]] | None) -> list[di
         show_in_home = clone.get("showInHome")
         if not isinstance(show_in_home, bool):
             clone["showInHome"] = DEFAULT_SHOW_IN_HOME
+        if clone.get("id") == "in_progress_shows":
+            filters = clone.get("filters")
+            if not isinstance(filters, dict):
+                filters = {}
+            show_watched = filters.get("show_watched")
+            if not isinstance(show_watched, bool):
+                filters["show_watched"] = False
+            clone["filters"] = filters
         normalized.append(clone)
     return normalized
 

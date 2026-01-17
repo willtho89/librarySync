@@ -144,6 +144,14 @@ function normalizeShowInHome(catalog) {
   return true;
 }
 
+function normalizeShowWatched(catalog) {
+  const filters = catalog && catalog.filters ? catalog.filters : {};
+  if (typeof filters.show_watched === "boolean") {
+    return filters.show_watched;
+  }
+  return false;
+}
+
 function getCatalogStatusOptions(catalogId) {
   const options = CATALOG_STATUS_OPTIONS[catalogId] || [];
   return options.map((value) => ({
@@ -220,6 +228,7 @@ function renderBuiltInCatalogs() {
 
     const statusOptions = getCatalogStatusOptions(catalog.id);
     const showInHomeValue = normalizeShowInHome(catalog);
+    const showWatchedValue = normalizeShowWatched(catalog);
     const statusBlock = document.createElement("div");
     const statusLabel = document.createElement("p");
     statusLabel.className = "text-xs font-semibold uppercase tracking-[0.2em] text-muted";
@@ -244,6 +253,19 @@ function renderBuiltInCatalogs() {
         toggleGroup.appendChild(label);
       });
       statusGroup.appendChild(toggleGroup);
+    }
+    if (catalog.id === "in_progress_shows") {
+      const watchedLabel = document.createElement("label");
+      watchedLabel.className = "inline-control";
+      const watchedInput = document.createElement("input");
+      watchedInput.type = "checkbox";
+      watchedInput.checked = showWatchedValue;
+      watchedInput.dataset.catalogShowWatched = "true";
+      const watchedText = document.createElement("span");
+      watchedText.textContent = "Show watched";
+      watchedLabel.appendChild(watchedInput);
+      watchedLabel.appendChild(watchedText);
+      statusGroup.appendChild(watchedLabel);
     }
     const homeLabel = document.createElement("label");
     homeLabel.className = "inline-control";
@@ -943,16 +965,21 @@ async function handleCatalogSave(button) {
   const enabledToggle = card.querySelector("[data-catalog-enabled]");
   const statusChecks = Array.from(card.querySelectorAll("[data-catalog-status]"));
   const showInHomeToggle = card.querySelector("[data-catalog-show-in-home]");
+  const showWatchedToggle = card.querySelector("[data-catalog-show-watched]");
   const orderBySelect = card.querySelector("[data-catalog-order-by]");
   const orderDirSelect = card.querySelector("[data-catalog-order-dir]");
   const statuses = buildCatalogStatuses(statusChecks);
+  const filters = { statuses };
+  if (showWatchedToggle) {
+    filters.show_watched = showWatchedToggle.checked;
+  }
   const payload = {
     catalogs: [
       {
         id: catalogId,
         enabled: enabledToggle ? enabledToggle.checked : true,
         showInHome: showInHomeToggle ? showInHomeToggle.checked : true,
-        filters: { statuses },
+        filters,
         ordering: {
           order_by: orderBySelect ? orderBySelect.value : "date_added",
           order_dir: orderDirSelect ? orderDirSelect.value : "desc",

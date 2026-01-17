@@ -3,10 +3,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import EpisodeMetadataProvider
+from librarysync.core.catalog_ordering import build_show_progress_subquery
 from librarysync.core.metadata_providers import MetadataProviderService
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.db.models import (
@@ -24,6 +25,7 @@ LEGACY_WATCHLIST_STATUS_MAP = {
     "active": "added",
     "waiting": "watched",
 }
+SHOW_STATUS_VALUES = {"added", "in_progress", "watched", "not_released"}
 
 
 def _is_future_date(value: date | None, now_date: date) -> bool:
@@ -34,6 +36,62 @@ def normalize_watchlist_status(status: str | None) -> str | None:
     if not status:
         return status
     return LEGACY_WATCHLIST_STATUS_MAP.get(status, status)
+
+
+def normalize_watchlist_statuses(statuses: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for status in statuses:
+        mapped = normalize_watchlist_status(status)
+        if not mapped or mapped in normalized:
+            continue
+        normalized.append(mapped)
+    return normalized
+
+
+@dataclass(frozen=True)
+class ShowStatusContext:
+    progress_subq: Any
+    earliest_air_subq: Any
+    total_released: Any
+    watched_count: Any
+    earliest_air_date: Any
+    status_expr: Any
+
+
+def build_show_status_context(user_id: str, now_date: date) -> ShowStatusContext:
+    progress_subq = build_show_progress_subquery(user_id, now_date)
+    earliest_subq = (
+        select(
+            EpisodeItem.show_media_item_id.label("media_item_id"),
+            func.min(EpisodeItem.air_date).label("earliest_air_date"),
+        )
+        .where(EpisodeItem.season_number > 0)
+        .group_by(EpisodeItem.show_media_item_id)
+        .subquery()
+    )
+    total_released = func.coalesce(progress_subq.c.total_released, 0)
+    watched_count = func.coalesce(progress_subq.c.watched_count, 0)
+    earliest_air_date = earliest_subq.c.earliest_air_date
+
+    not_released_clause = or_(
+        and_(MediaItem.first_air_date.is_(None), earliest_air_date.is_(None)),
+        MediaItem.first_air_date > now_date,
+        earliest_air_date > now_date,
+    )
+    status_expr = case(
+        (total_released <= 0, case((not_released_clause, "not_released"), else_="added")),
+        (watched_count <= 0, "added"),
+        (watched_count < total_released, "in_progress"),
+        else_="watched",
+    )
+    return ShowStatusContext(
+        progress_subq=progress_subq,
+        earliest_air_subq=earliest_subq,
+        total_released=total_released,
+        watched_count=watched_count,
+        earliest_air_date=earliest_air_date,
+        status_expr=status_expr,
+    )
 
 
 def determine_movie_watchlist_status(
