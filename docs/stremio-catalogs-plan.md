@@ -5,6 +5,8 @@
 - Support user-defined filters (unwatched, released, combinations) and ordering (date added, release date, random, etc.).
 - Add a TV-only "In progress" catalog for shows with unwatched released episodes.
 - Enable custom catalogs with fixed, user-curated media items.
+- V2: Support catalog-only external watchlists (provider watchlists or list URLs), imported
+  separately and refreshed regularly, with the same filters applied before ordering.
 - Offer install options: direct install link and copyable manifest URL.
 - Ship a responsive frontend for configuration + management.
 
@@ -53,6 +55,13 @@ Suggested tables:
 Notes:
 - Addon access is key-based (no JWT). Store addon keys hashed; keep plaintext only at creation/rotation time.
 - If you prefer fewer tables, we can encode the built-in catalogs in JSON on the config table and only create a table for custom catalogs/items.
+- V2 catalog-only watchlists:
+  - Add tables mirroring watchlist sources/items but scoped to the addon:
+    - `stremio_watchlist_sources` (user_id, provider, source_type, external_id, url, name, enabled)
+    - `stremio_watchlist_items` (user_id, media_item_id, status, dates, source metadata)
+    - `stremio_watchlist_source_items` (source_id, watchlist_item_id, last_seen_at)
+  - Keep these separate from `watchlist_items` so catalog-only imports do not modify the main
+    watchlist UI.
 
 ### Internal API (auth-required)
 Create endpoints under `/api/stremio-addon`:
@@ -69,6 +78,12 @@ Create endpoints under `/api/stremio-addon`:
   - `POST /api/stremio-addon/custom-catalogs/{catalog_id}/items`
   - `DELETE /api/stremio-addon/custom-catalogs/{catalog_id}/items/{media_item_id}`
   - Optional: `POST /api/stremio-addon/custom-catalogs/{catalog_id}/reorder`
+- V2 catalog-only watchlists:
+  - `GET /api/stremio-addon/watchlists`
+  - `POST /api/stremio-addon/watchlists`
+  - `PATCH /api/stremio-addon/watchlists/{watchlist_id}`
+  - `DELETE /api/stremio-addon/watchlists/{watchlist_id}`
+  - Optional: `POST /api/stremio-addon/watchlists/{watchlist_id}/refresh`
 
 ### Addon (public) Routes
 Add a new router with public endpoints; all access is gated by the addon key in the URL.
@@ -97,6 +112,11 @@ Custom catalogs:
 - Items are explicit `media_item_id` entries.
 - Custom catalogs are separate from the watchlist.
 
+V2: Catalog-only watchlist catalogs:
+- Each catalog maps to a `stremio_watchlist_source` (provider + source_type + external_id).
+- Treated like watchlist-backed catalogs but scoped to the catalog-only dataset.
+- Apply the same filters (e.g. exclude `watched` statuses) before ordering.
+
 ### Filters and Ordering
 Filters should align with existing watchlist status logic:
 - Unwatched: statuses in `added`, `in_progress`, `not_released` (exclude `watched`, `waiting`, `removed`).
@@ -117,6 +137,9 @@ Ordering:
 - Custom catalogs:
   - Join `stremio_custom_catalog_items` -> `media_items`.
   - Support manual ordering by `position`, fallback to created_at.
+- V2 catalog-only watchlists:
+  - Join `stremio_watchlist_source_items` -> `stremio_watchlist_items` -> `media_items`.
+  - Filter by source scope, then apply the same watchlist filters.
 
 ## Frontend Plan
 - Add nav entry in `backend/src/librarysync/templates/base.html`.
@@ -139,6 +162,9 @@ UI sections:
    - Create/edit/delete catalogs.
    - Add items via search (reuse blacklist-style search UX).
    - Reorder items (drag/drop or up/down).
+5. V2: Catalog-only watchlists
+   - Add/manage external watchlist sources for catalog-only use.
+   - Apply the same filters/order options as built-in watchlist catalogs.
 
 ## Security + Access
 - Addon access uses a per-user addon key (random, rotatable); no auth cookies.
@@ -161,3 +187,12 @@ UI sections:
 
 ## Open Questions
 None.
+
+## Known Bugs (needs fixing)
+  - [P2] Persist default catalog updates when editing JSON config — /Users/twillems/Development/stremio/librarySync/backend/src/librarysync/api/routes_stremio_addon.py:60-70
+    The catalog update path mutates the existing default_catalogs list/dicts in place and then reassigns the list. Because default_catalogs is a plain JSON column (not a MutableList), SQLAlchemy doesn’t track in-place JSON mutations; if the new list
+    compares equal to the old one, the UPDATE won’t include default_catalogs. This means toggling catalog enabled state or changing filters/order can appear to succeed in the response but revert on the next load. Consider deep-copying before mutation or
+    explicitly flagging the JSON column as modified.
+  - [P2] Apply catalog status filters to in-progress catalog — /Users/twillems/Development/stremio/librarySync/backend/src/librarysync/api/routes_stremio_addon_public.py:270-277
+    The in-progress catalog query ignores the configured filters.statuses and only excludes removed. If a user disables certain statuses in the addon config (e.g., wants to exclude watched or not_released items), those settings are silently ignored for
+    the in_progress_shows catalog. This causes the in-progress catalog to return items the user explicitly filtered out. Consider applying the same status filter logic as _build_watchlist_query or pass the catalog’s filters into this helper.

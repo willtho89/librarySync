@@ -19,6 +19,8 @@ from librarysync.api import (
     routes_integrations,
     routes_metadata,
     routes_settings,
+    routes_stremio_addon,
+    routes_stremio_addon_public,
     routes_watchlist,
 )
 from librarysync.api.deps import get_db, get_optional_user
@@ -45,6 +47,7 @@ OPENAPI_TAGS = [
     {"name": "dashboard", "description": "Dashboard statistics and analytics."},
     {"name": "settings", "description": "Per-user search settings."},
     {"name": "blacklist", "description": "Per-user blacklist entries."},
+    {"name": "stremio-addon", "description": "Stremio addon configuration and catalogs."},
     {"name": "admin", "description": "Administrative operations."},
     {"name": "health", "description": "Service health check."},
 ]
@@ -89,6 +92,8 @@ def create_app() -> FastAPI:
     app.include_router(routes_settings.router)
     app.include_router(routes_blacklist.router)
     app.include_router(routes_watchlist.router)
+    app.include_router(routes_stremio_addon.router)
+    app.include_router(routes_stremio_addon_public.router)
     app.include_router(routes_admin.router)
 
     app_version = get_app_version()

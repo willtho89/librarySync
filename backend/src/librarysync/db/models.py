@@ -385,6 +385,94 @@ class WatchSync(Base):
     )
 
 
+class StremioAddonConfig(Base):
+    __tablename__ = "stremio_addon_configs"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_stremio_addon_configs_user_id"),
+        UniqueConstraint("addon_key_hash", name="uq_stremio_addon_configs_addon_key_hash"),
+        Index("ix_stremio_addon_configs_addon_key_hash", "addon_key_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    addon_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    addon_key_last_rotated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    default_catalogs: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class StremioCustomCatalog(Base):
+    __tablename__ = "stremio_custom_catalogs"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "slug",
+            name="uq_stremio_custom_catalogs_user_slug",
+        ),
+        Index("ix_stremio_custom_catalogs_user_id", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(255))
+    slug: Mapped[str] = mapped_column(String(64))
+    media_type: Mapped[str] = mapped_column(String(32), default="movie")
+    order_by: Mapped[str] = mapped_column(String(32), default="manual")
+    order_dir: Mapped[str] = mapped_column(String(8), default="asc")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class StremioCustomCatalogItem(Base):
+    __tablename__ = "stremio_custom_catalog_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "catalog_id",
+            "media_item_id",
+            name="uq_stremio_custom_catalog_items_catalog_media",
+        ),
+        Index(
+            "ix_stremio_custom_catalog_items_catalog_position",
+            "catalog_id",
+            "position",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    catalog_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("stremio_custom_catalogs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    media_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("media_items.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class WatchlistItem(Base):
     __tablename__ = "watchlist_items"
     __table_args__ = (
