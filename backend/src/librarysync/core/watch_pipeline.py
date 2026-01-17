@@ -1308,3 +1308,43 @@ def _coerce_int(value: object) -> int | None:
         if cleaned.isdigit():
             return int(cleaned)
     return None
+
+
+def _merge_media_fields(target: MediaItem, source: MediaItem) -> None:
+    if not target.imdb_id and source.imdb_id:
+        target.imdb_id = source.imdb_id
+    if not target.tmdb_id and source.tmdb_id:
+        target.tmdb_id = source.tmdb_id
+    if not target.tvdb_id and source.tvdb_id:
+        target.tvdb_id = source.tvdb_id
+    if not target.tvmaze_id and source.tvmaze_id:
+        target.tvmaze_id = source.tvmaze_id
+    if not target.kitsu_id and source.kitsu_id:
+        target.kitsu_id = source.kitsu_id
+    if not target.myanimelist_id and source.myanimelist_id:
+        target.myanimelist_id = source.myanimelist_id
+    if not target.anilist_id and source.anilist_id:
+        target.anilist_id = source.anilist_id
+    if target.year is None and source.year is not None:
+        target.year = source.year
+    if not target.poster_url and source.poster_url:
+        target.poster_url = source.poster_url
+    if not target.title and source.title:
+        target.title = source.title
+    if not target.overview and source.overview:
+        target.overview = source.overview
+    if not target.genres and source.genres:
+        target.genres = source.genres
+    if target.runtime_in_seconds is None and source.runtime_in_seconds is not None:
+        target.runtime_in_seconds = source.runtime_in_seconds
+    if not target.release_date and source.release_date:
+        target.release_date = source.release_date
+    if not target.first_air_date and source.first_air_date:
+        target.first_air_date = source.first_air_date
+    if not target.last_air_date and source.last_air_date:
+        target.last_air_date = source.last_air_date
+    if isinstance(target.raw, dict) and isinstance(source.raw, dict):
+        for key, value in source.raw.items():
+            target.raw.setdefault(key, value)
+    elif target.raw is None and source.raw is not None:
+        target.raw = dict(source.raw)

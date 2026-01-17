@@ -30,6 +30,7 @@ from librarysync.core.scheduler import (
     extend_scheduled_job,
     release_scheduled_job,
 )
+from librarysync.core.watch_pipeline import _merge_media_fields
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
@@ -298,23 +299,7 @@ def _row_sort_key(row: WatchedRow, priority_map: dict[str, int]) -> tuple[int, i
 
 def _merge_media(primary: MediaItem, others: list[MediaItem]) -> None:
     for other in others:
-        if not primary.imdb_id and other.imdb_id:
-            primary.imdb_id = other.imdb_id
-        if not primary.tmdb_id and other.tmdb_id:
-            primary.tmdb_id = other.tmdb_id
-        if not primary.tvdb_id and other.tvdb_id:
-            primary.tvdb_id = other.tvdb_id
-        if primary.year is None and other.year is not None:
-            primary.year = other.year
-        if not primary.poster_url and other.poster_url:
-            primary.poster_url = other.poster_url
-        if other.title and (not primary.title or len(other.title) > len(primary.title)):
-            primary.title = other.title
-        if isinstance(primary.raw, dict) and isinstance(other.raw, dict):
-            for key, value in other.raw.items():
-                primary.raw.setdefault(key, value)
-        elif primary.raw is None and other.raw is not None:
-            primary.raw = dict(other.raw)
+        _merge_media_fields(primary, other)
 
 
 def _merge_watched(primary: WatchedItem, others: list[WatchedItem]) -> None:
