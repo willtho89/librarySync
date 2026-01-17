@@ -712,6 +712,18 @@ h1,
   }
 }
 
+.\!card {
+  border-radius: 1.5rem;
+  border-width: 1px;
+  border-color: rgb(var(--color-line) / 0.6);
+  --tw-bg-opacity: 1;
+  background-color: rgb(var(--color-surface) / var(--tw-bg-opacity, 1));
+  padding: 1.5rem;
+  --tw-shadow: 0 18px 40px -24px rgba(15, 27, 36, 0.45);
+  --tw-shadow-colored: 0 18px 40px -24px var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
 .card {
   border-radius: 1.5rem;
   border-width: 1px;
@@ -1478,6 +1490,15 @@ h1,
   line-height: 1rem;
   --tw-text-opacity: 1;
   color: rgb(var(--color-muted) / var(--tw-text-opacity, 1));
+}
+
+.icon-stremio {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  background-color: currentColor;
+  mask: url("/static/icons/stremio.svg") no-repeat center / contain;
+  -webkit-mask: url("/static/icons/stremio.svg") no-repeat center / contain;
 }
 
 .episode-picker {
@@ -3002,6 +3023,12 @@ h1,
   margin-bottom: calc(1rem * var(--tw-space-y-reverse));
 }
 
+.space-y-5 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-y-reverse: 0;
+  margin-top: calc(1.25rem * calc(1 - var(--tw-space-y-reverse)));
+  margin-bottom: calc(1.25rem * var(--tw-space-y-reverse));
+}
+
 .space-y-6 > :not([hidden]) ~ :not([hidden]) {
   --tw-space-y-reverse: 0;
   margin-top: calc(1.5rem * calc(1 - var(--tw-space-y-reverse)));
@@ -3078,6 +3105,10 @@ h1,
 
 .border-primary\/20 {
   border-color: rgb(var(--color-primary) / 0.2);
+}
+
+.border-primary\/50 {
+  border-color: rgb(var(--color-primary) / 0.5);
 }
 
 .bg-amber-500\/10 {
@@ -3632,6 +3663,14 @@ h1,
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .sm\:flex-row {
+    flex-direction: row;
+  }
+
+  .sm\:items-center {
+    align-items: center;
+  }
+
   .sm\:justify-start {
     justify-content: flex-start;
   }
@@ -3680,6 +3719,10 @@ h1,
     grid-column: span 3 / span 3;
   }
 
+  .md\:col-span-4 {
+    grid-column: span 4 / span 4;
+  }
+
   .md\:flex {
     display: flex;
   }
@@ -3698,6 +3741,10 @@ h1,
 
   .md\:grid-cols-3 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .md\:grid-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .md\:flex-row {
@@ -3741,6 +3788,10 @@ h1,
 
   .lg\:grid-cols-4 {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .lg\:grid-cols-\[minmax\(0\2c 2fr\)_minmax\(0\2c 1fr\)\] {
+    grid-template-columns: minmax(0,2fr) minmax(0,1fr);
   }
 
   .lg\:px-8 {
