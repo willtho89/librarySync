@@ -21,13 +21,6 @@ def upgrade() -> None:
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.Column("user_id", sa.String(length=36), nullable=False),
         sa.Column("is_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("addon_key_hash", sa.String(length=64), nullable=False),
-        sa.Column(
-            "addon_key_last_rotated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("CURRENT_TIMESTAMP"),
-        ),
         sa.Column("default_catalogs", sa.JSON(), nullable=True),
         sa.Column(
             "created_at",
@@ -44,14 +37,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("user_id", name="uq_stremio_addon_configs_user_id"),
-        sa.UniqueConstraint(
-            "addon_key_hash", name="uq_stremio_addon_configs_addon_key_hash"
-        ),
-    )
-    op.create_index(
-        "ix_stremio_addon_configs_addon_key_hash",
-        "stremio_addon_configs",
-        ["addon_key_hash"],
     )
     op.create_index(
         op.f("ix_stremio_addon_configs_user_id"),
@@ -146,8 +131,5 @@ def downgrade() -> None:
     op.drop_table("stremio_custom_catalogs")
     op.drop_index(
         op.f("ix_stremio_addon_configs_user_id"), table_name="stremio_addon_configs"
-    )
-    op.drop_index(
-        "ix_stremio_addon_configs_addon_key_hash", table_name="stremio_addon_configs"
     )
     op.drop_table("stremio_addon_configs")

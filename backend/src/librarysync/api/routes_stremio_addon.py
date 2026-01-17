@@ -16,8 +16,8 @@ from librarysync.api.deps import get_current_user, get_db
 from librarysync.config import settings
 from librarysync.core.catalog_ordering import CatalogOrderBy
 from librarysync.core.stremio_addon import (
-    build_default_catalogs,
     ensure_addon_config,
+    normalize_default_catalogs,
 )
 from librarysync.core.watchlist import (
     apply_media_id_update,
@@ -58,6 +58,7 @@ class StremioCatalogUpdate(BaseModel):
     enabled: bool | None = None
     filters: StremioCatalogFilters | None = None
     ordering: StremioCatalogOrdering | None = None
+    showInHome: bool | None = None
 
 
 class StremioAddonConfigUpdate(BaseModel):
@@ -247,6 +248,8 @@ def _merge_catalog_updates(
             catalog["filters"] = update.filters.model_dump(exclude_none=True)
         if update.ordering is not None:
             catalog["ordering"] = update.ordering.model_dump(exclude_none=True)
+        if update.showInHome is not None:
+            catalog["showInHome"] = bool(update.showInHome)
     return list(by_id.values())
 
 
@@ -254,9 +257,8 @@ async def _ensure_default_catalogs(
     db: AsyncSession,
     config: StremioAddonConfig,
 ) -> list[dict]:
-    catalogs = config.default_catalogs
-    if not catalogs:
-        catalogs = build_default_catalogs()
+    catalogs = normalize_default_catalogs(config.default_catalogs)
+    if config.default_catalogs != catalogs:
         config.default_catalogs = catalogs
         db.add(config)
         await db.commit()

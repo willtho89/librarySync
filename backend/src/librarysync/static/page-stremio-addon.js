@@ -32,12 +32,18 @@ const BUILTIN_CATALOG_DETAILS = {
   },
 };
 
-const STATUS_OPTIONS = [
-  { value: "added", label: "Added" },
-  { value: "in_progress", label: "In progress" },
-  { value: "not_released", label: "Not released" },
-  { value: "watched", label: "Watched" },
-];
+const STATUS_LABELS = {
+  watched: "Show watched",
+  not_released: "Show unreleased",
+  in_progress: "Show in progress",
+};
+
+const CATALOG_STATUS_OPTIONS = {
+  watchlist_movies: ["watched", "not_released"],
+  watchlist_shows: ["in_progress", "watched", "not_released"],
+  watchlist_anime: ["in_progress", "watched", "not_released"],
+  in_progress_shows: [],
+};
 
 const ORDER_OPTIONS = [
   { value: "date_added", label: "Date added" },
@@ -128,11 +134,30 @@ function buildSelect(options, selectedValue) {
 
 function normalizeStatuses(catalog) {
   const filters = catalog && catalog.filters ? catalog.filters : {};
-  const statuses = Array.isArray(filters.statuses) ? filters.statuses : null;
-  if (Array.isArray(statuses)) {
-    return statuses;
+  const statuses = Array.isArray(filters.statuses) ? filters.statuses : [];
+  return statuses.filter((status) => status && status !== "added");
+}
+
+function normalizeShowInHome(catalog) {
+  if (catalog && typeof catalog.showInHome === "boolean") {
+    return catalog.showInHome;
   }
-  return ["added", "in_progress", "not_released"];
+  return true;
+}
+
+function getCatalogStatusOptions(catalogId) {
+  const options = CATALOG_STATUS_OPTIONS[catalogId] || [];
+  return options.map((value) => ({
+    value,
+    label: STATUS_LABELS[value] || value,
+  }));
+}
+
+function buildCatalogStatuses(statusChecks) {
+  const selected = statusChecks
+    .filter((input) => input.checked)
+    .map((input) => input.value);
+  return Array.from(new Set(selected));
 }
 
 function normalizeOrdering(catalog) {
@@ -194,26 +219,44 @@ function renderBuiltInCatalogs() {
     const body = document.createElement("div");
     body.className = "mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]";
 
+    const statusOptions = getCatalogStatusOptions(catalog.id);
+    const showInHomeValue = normalizeShowInHome(catalog);
     const statusBlock = document.createElement("div");
     const statusLabel = document.createElement("p");
     statusLabel.className = "text-xs font-semibold uppercase tracking-[0.2em] text-muted";
-    statusLabel.textContent = "Statuses";
+    statusLabel.textContent = "Visibility";
     const statusGroup = document.createElement("div");
-    statusGroup.className = "mt-2 flex flex-wrap gap-3";
-    STATUS_OPTIONS.forEach((option) => {
-      const label = document.createElement("label");
-      label.className = "inline-control";
-      const input = document.createElement("input");
-      input.type = "checkbox";
-      input.value = option.value;
-      input.dataset.catalogStatus = "true";
-      input.checked = statuses.includes(option.value);
-      const span = document.createElement("span");
-      span.textContent = option.label;
-      label.appendChild(input);
-      label.appendChild(span);
-      statusGroup.appendChild(label);
-    });
+    statusGroup.className = "mt-2 space-y-2";
+    if (statusOptions.length) {
+      const toggleGroup = document.createElement("div");
+      toggleGroup.className = "flex flex-wrap gap-3";
+      statusOptions.forEach((option) => {
+        const label = document.createElement("label");
+        label.className = "inline-control";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = option.value;
+        input.dataset.catalogStatus = "true";
+        input.checked = statuses.includes(option.value);
+        const span = document.createElement("span");
+        span.textContent = option.label;
+        label.appendChild(input);
+        label.appendChild(span);
+        toggleGroup.appendChild(label);
+      });
+      statusGroup.appendChild(toggleGroup);
+    }
+    const homeLabel = document.createElement("label");
+    homeLabel.className = "inline-control";
+    const homeInput = document.createElement("input");
+    homeInput.type = "checkbox";
+    homeInput.checked = showInHomeValue;
+    homeInput.dataset.catalogShowInHome = "true";
+    const homeText = document.createElement("span");
+    homeText.textContent = "Show in home";
+    homeLabel.appendChild(homeInput);
+    homeLabel.appendChild(homeText);
+    statusGroup.appendChild(homeLabel);
     statusBlock.appendChild(statusLabel);
     statusBlock.appendChild(statusGroup);
 
@@ -913,16 +956,16 @@ async function handleCatalogSave(button) {
   setAddonMessage("");
   const enabledToggle = card.querySelector("[data-catalog-enabled]");
   const statusChecks = Array.from(card.querySelectorAll("[data-catalog-status]"));
+  const showInHomeToggle = card.querySelector("[data-catalog-show-in-home]");
   const orderBySelect = card.querySelector("[data-catalog-order-by]");
   const orderDirSelect = card.querySelector("[data-catalog-order-dir]");
-  const statuses = statusChecks
-    .filter((input) => input.checked)
-    .map((input) => input.value);
+  const statuses = buildCatalogStatuses(statusChecks);
   const payload = {
     catalogs: [
       {
         id: catalogId,
         enabled: enabledToggle ? enabledToggle.checked : true,
+        showInHome: showInHomeToggle ? showInHomeToggle.checked : true,
         filters: { statuses },
         ordering: {
           order_by: orderBySelect ? orderBySelect.value : "date_added",

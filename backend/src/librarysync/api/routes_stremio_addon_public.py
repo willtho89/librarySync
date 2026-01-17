@@ -10,7 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_db
 from librarysync.core.catalog_ordering import apply_catalog_ordering
-from librarysync.core.stremio_addon import build_default_catalogs, get_addon_config_by_id
+from librarysync.core.stremio_addon import (
+    DEFAULT_PAGE_SIZE,
+    DEFAULT_SHOW_IN_HOME,
+    get_addon_config_by_id,
+    normalize_default_catalogs,
+)
 from librarysync.db.models import (
     EpisodeItem,
     MediaItem,
@@ -120,13 +125,46 @@ def _resolve_pagination(request: Request) -> tuple[int, int, str | None]:
 
 
 def _normalize_catalogs(config_catalogs: list[dict] | None) -> list[dict]:
-    if not config_catalogs:
-        return build_default_catalogs()
-    return config_catalogs
+    return normalize_default_catalogs(config_catalogs)
 
 
 def _catalogs_by_id(catalogs: list[dict]) -> dict[str, dict]:
     return {catalog.get("id"): catalog for catalog in catalogs if catalog.get("id")}
+
+
+def _resolve_status_filter(catalog: dict | None, base_statuses: list[str]) -> list[str]:
+    filters = catalog.get("filters") if isinstance(catalog, dict) else {}
+    statuses = filters.get("statuses") if isinstance(filters, dict) else None
+    extras: list[str] = []
+    if isinstance(statuses, list):
+        for status_value in statuses:
+            if not status_value:
+                continue
+            status = str(status_value)
+            if status == "added":
+                continue
+            if status in base_statuses:
+                continue
+            extras.append(status)
+    return list(dict.fromkeys([*base_statuses, *extras]))
+
+
+def _coerce_page_size(catalog: dict | None) -> int:
+    if not isinstance(catalog, dict):
+        return DEFAULT_PAGE_SIZE
+    value = catalog.get("pageSize")
+    if isinstance(value, int) and value > 0:
+        return value
+    return DEFAULT_PAGE_SIZE
+
+
+def _coerce_show_in_home(catalog: dict | None) -> bool:
+    if not isinstance(catalog, dict):
+        return DEFAULT_SHOW_IN_HOME
+    value = catalog.get("showInHome")
+    if isinstance(value, bool):
+        return value
+    return DEFAULT_SHOW_IN_HOME
 
 
 def _build_manifest(
@@ -146,12 +184,16 @@ def _build_manifest(
         stremio_type = _resolve_stremio_type(str(media_type))
         if not stremio_type:
             continue
+        page_size = _coerce_page_size(catalog)
+        show_in_home = _coerce_show_in_home(catalog)
         manifest_catalogs.append(
             {
                 "type": stremio_type,
                 "id": catalog_id,
                 "name": catalog.get("name") or catalog_id,
                 "extraSupported": STREMIO_EXTRA,
+                "pageSize": page_size,
+                "showInHome": show_in_home,
             }
         )
         seen_types.add(stremio_type)
@@ -166,6 +208,8 @@ def _build_manifest(
                 "id": custom.slug,
                 "name": custom.name,
                 "extraSupported": STREMIO_EXTRA,
+                "pageSize": DEFAULT_PAGE_SIZE,
+                "showInHome": DEFAULT_SHOW_IN_HOME,
             }
         )
         seen_types.add(stremio_type)
@@ -201,8 +245,7 @@ async def _build_watchlist_query(
             query = query.where(WatchlistItem.type.in_(["tv", "anime"]))
         else:
             query = query.where(WatchlistItem.type == normalized)
-    filters = catalog.get("filters") if isinstance(catalog.get("filters"), dict) else {}
-    statuses = filters.get("statuses") if isinstance(filters, dict) else None
+    statuses = _resolve_status_filter(catalog, ["added"])
     if statuses:
         query = query.where(WatchlistItem.status.in_(statuses))
     if search:
@@ -280,8 +323,7 @@ async def _build_in_progress_query(
             progress_subq.c.watched_count < progress_subq.c.total_released,
         )
     )
-    filters = catalog.get("filters") if isinstance(catalog, dict) else {}
-    statuses = filters.get("statuses") if isinstance(filters, dict) else None
+    statuses = _resolve_status_filter(catalog, ["in_progress"])
     if statuses:
         query = query.where(WatchlistItem.status.in_(statuses))
     if search:
