@@ -1,19 +1,15 @@
 import asyncio
 import copy
-import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import HTTPException
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(PROJECT_ROOT / "src"))
-
-from librarysync.api import routes_stremio_addon  # noqa: E402
-from librarysync.api import routes_stremio_addon_public  # noqa: E402
-from librarysync.core.stremio_addon import build_default_catalogs  # noqa: E402
-from librarysync.db.models import MediaItem  # noqa: E402
+from librarysync.api import (
+    routes_stremio_addon,
+    routes_stremio_addon_public,
+)
+from librarysync.core.stremio_addon import build_default_catalogs
+from librarysync.db.models import MediaItem
 
 
 class TestStremioAddonCatalogs(unittest.TestCase):

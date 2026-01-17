@@ -157,7 +157,7 @@ def _resolve_status_filter(catalog: dict | None, base_statuses: list[str]) -> li
     extras = [
         str(status_value)
         for status_value in (statuses if isinstance(statuses, list) else [])
-        if status_value and str(status_value) != "added" and str(status_value) not in base_statuses
+        if status_value and str(status_value) not in base_statuses
     ]
 
     return list(dict.fromkeys([*base_statuses, *extras]))
