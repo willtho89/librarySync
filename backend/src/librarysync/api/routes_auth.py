@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
@@ -36,9 +36,9 @@ async def register(payload: LoginRequest, db: AsyncSession = Depends(get_db)) ->
     if not settings.allow_registration:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Registration disabled")
     if settings.max_users >= 0:
-        result = await db.execute(select(User.id).limit(settings.max_users))
-        user_ids = result.scalars().all()
-        if len(user_ids) >= settings.max_users:
+        result = await db.execute(select(func.count(User.id)))
+        user_count = result.scalar_one()
+        if user_count >= settings.max_users:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="User limit reached"
             )
