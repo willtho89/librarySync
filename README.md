@@ -51,6 +51,7 @@ All defaults below are from `.env.example`.
 - `LIBRARYSYNC_JWT_ACCESS_TOKEN_MINUTES` (default `60`): access token lifetime.
 - `LIBRARYSYNC_JWT_ALGORITHM` (default `HS256`): JWT signing algorithm.
 - `LIBRARYSYNC_ALLOW_REGISTRATION` (default `true`): enable `/api/auth/register`.
+- `LIBRARYSYNC_MAX_USERS` (default `1`): max number of registered users (`-1` for unlimited).
 
 ### OAuth
 - `TRAKT_CLIENT_ID` (default `your_trakt_client_id`): Trakt OAuth app client ID.

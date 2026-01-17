@@ -6,7 +6,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api import (
@@ -221,10 +221,10 @@ def create_app() -> FastAPI:
         db: AsyncSession = Depends(get_db),
     ):
         registration_full = False
-        if settings.allow_registration:
-            result = await db.execute(select(func.count(User.id)))
-            user_count = result.scalar_one()
-            registration_full = user_count >= settings.max_users
+        if settings.allow_registration and settings.max_users >= 0:
+            result = await db.execute(select(User.id).limit(settings.max_users))
+            user_ids = result.scalars().all()
+            registration_full = len(user_ids) >= settings.max_users
         return _render_page(
             request,
             "login.html",
