@@ -24,6 +24,7 @@ class Settings:
     jwt_access_token_minutes: int
     jwt_algorithm: str
     allow_registration: bool
+    max_users: int
     gzip_enabled: bool
     gzip_min_size: int
     trakt_rate_limit_per_minute: int
@@ -59,6 +60,7 @@ def load_settings() -> Settings:
         allow_registration=(
             (_get_env("LIBRARYSYNC_ALLOW_REGISTRATION", "true") or "true").lower() == "true"
         ),
+        max_users=int(_get_env("LIBRARYSYNC_MAX_USERS", "1") or "1"),
         gzip_enabled=(
             (_get_env("LIBRARYSYNC_GZIP_ENABLED", "true") or "true").lower() == "true"
         ),
