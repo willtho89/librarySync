@@ -16,11 +16,7 @@ from librarysync.core.stremio_addon import (
     get_addon_config_by_id,
     normalize_default_catalogs,
 )
-from librarysync.core.watchlist import (
-    SHOW_STATUS_VALUES,
-    build_show_status_context,
-    normalize_watchlist_statuses,
-)
+from librarysync.core.watchlist import apply_show_status_filter, normalize_watchlist_statuses
 from librarysync.db.models import (
     MediaItem,
     StremioCustomCatalog,
@@ -155,6 +151,17 @@ def _catalogs_by_id(catalogs: list[dict]) -> dict[str, dict]:
     return {catalog.get("id"): catalog for catalog in catalogs if catalog.get("id")}
 
 
+def _resolve_filter_bool(catalog: dict | None, key: str, default: bool = False) -> bool:
+    """Extract a boolean filter value from catalog config."""
+    if not isinstance(catalog, dict):
+        return default
+    filters = catalog.get("filters")
+    if not isinstance(filters, dict):
+        return default
+    value = filters.get(key)
+    return value if isinstance(value, bool) else default
+
+
 def _resolve_status_filter(catalog: dict | None, base_statuses: list[str]) -> list[str]:
     filters = catalog.get("filters") if isinstance(catalog, dict) else {}
     statuses = filters.get("statuses") if isinstance(filters, dict) else None
@@ -169,12 +176,7 @@ def _resolve_status_filter(catalog: dict | None, base_statuses: list[str]) -> li
 
 
 def _resolve_show_watched(catalog: dict | None) -> bool:
-    filters = catalog.get("filters") if isinstance(catalog, dict) else {}
-    if isinstance(filters, dict):
-        value = filters.get("show_watched")
-        if isinstance(value, bool):
-            return value
-    return False
+    return _resolve_filter_bool(catalog, "show_watched")
 
 
 def _coerce_page_size(catalog: dict | None) -> int:
@@ -276,23 +278,12 @@ async def _build_watchlist_query(
     if statuses:
         if is_show_catalog:
             now_date = datetime.now(timezone.utc).date()
-            status_ctx = build_show_status_context(user_id, now_date)
-            query = query.outerjoin(
-                status_ctx.progress_subq, status_ctx.progress_subq.c.media_item_id == MediaItem.id
+            query, _ = apply_show_status_filter(
+                query,
+                user_id=user_id,
+                now_date=now_date,
+                statuses=statuses,
             )
-            query = query.outerjoin(
-                status_ctx.earliest_air_subq,
-                status_ctx.earliest_air_subq.c.media_item_id == MediaItem.id,
-            )
-            computed_statuses = [status for status in statuses if status in SHOW_STATUS_VALUES]
-            raw_statuses = [status for status in statuses if status not in SHOW_STATUS_VALUES]
-            status_clauses = []
-            if computed_statuses:
-                status_clauses.append(status_ctx.status_expr.in_(computed_statuses))
-            if raw_statuses:
-                status_clauses.append(WatchlistItem.status.in_(raw_statuses))
-            if status_clauses:
-                query = query.where(or_(*status_clauses))
         else:
             query = query.where(WatchlistItem.status.in_(statuses))
     if search:
@@ -332,9 +323,7 @@ async def _build_in_progress_query(
         in_progress_clause = or_(in_progress_clause, watched_clause)
     other_statuses = [status_value for status_value in statuses if status_value != "in_progress"]
     if other_statuses:
-        query = query.where(
-            or_(WatchlistItem.status.in_(other_statuses), in_progress_clause)
-        )
+        query = query.where(or_(WatchlistItem.status.in_(other_statuses), in_progress_clause))
     else:
         query = query.where(in_progress_clause)
     if search:

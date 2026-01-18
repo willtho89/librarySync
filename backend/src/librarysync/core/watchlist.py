@@ -94,6 +94,97 @@ def build_show_status_context(user_id: str, now_date: date) -> ShowStatusContext
     )
 
 
+def apply_show_status_filter(
+    query: Any,
+    *,
+    user_id: str,
+    now_date: date,
+    statuses: list[str],
+    apply_filter: bool = True,
+) -> tuple[Any, list[Any]]:
+    """
+    Apply computed status filtering for TV shows.
+
+    Joins progress and air date subqueries, then builds status clauses based on:
+    - Computed statuses (added, in_progress, watched, not_released)
+    - Raw database statuses (all others)
+
+    Returns the modified query and list of status clauses.
+    """
+    status_ctx = build_show_status_context(user_id, now_date)
+    query = query.outerjoin(
+        status_ctx.progress_subq,
+        status_ctx.progress_subq.c.media_item_id == MediaItem.id,
+    )
+    query = query.outerjoin(
+        status_ctx.earliest_air_subq,
+        status_ctx.earliest_air_subq.c.media_item_id == MediaItem.id,
+    )
+
+    computed_statuses = [s for s in statuses if s in SHOW_STATUS_VALUES]
+    raw_statuses = [s for s in statuses if s not in SHOW_STATUS_VALUES]
+
+    status_clauses = []
+    if computed_statuses:
+        status_clauses.append(status_ctx.status_expr.in_(computed_statuses))
+    if raw_statuses:
+        status_clauses.append(WatchlistItem.status.in_(raw_statuses))
+
+    if apply_filter and status_clauses:
+        query = query.where(or_(*status_clauses))
+
+    return query, status_clauses
+
+
+def apply_combined_status_filter(
+    query: Any,
+    *,
+    user_id: str,
+    now_date: date,
+    normalized_statuses: list[str],
+    status_filter_values: list[str],
+    media_type: str | None,
+) -> Any:
+    """
+    Apply status filtering for watchlist queries that may include both movies and shows.
+
+    Handles three scenarios:
+    - Movies only: use raw status values
+    - Shows only: use computed status with show context
+    - Mixed: combine both filters with proper media_type conditions
+    """
+    if media_type == "movie":
+        return query.where(WatchlistItem.status.in_(status_filter_values))
+
+    show_clauses = []
+    if media_type in {None, "tv", "anime"}:
+        query, show_clauses = apply_show_status_filter(
+            query,
+            user_id=user_id,
+            now_date=now_date,
+            statuses=normalized_statuses,
+            apply_filter=False,
+        )
+
+    if media_type in {"tv", "anime"}:
+        if show_clauses:
+            query = query.where(or_(*show_clauses))
+    else:
+        # Mixed media types: apply appropriate filter for each type
+        movie_filter = WatchlistItem.status.in_(status_filter_values)
+        if show_clauses:
+            query = query.where(
+                or_(
+                    and_(MediaItem.media_type.in_(["tv", "anime"]), or_(*show_clauses)),
+                    and_(MediaItem.media_type == "movie", movie_filter),
+                )
+            )
+        else:
+            query = query.where(movie_filter)
+
+    return query
+
+
 def determine_movie_watchlist_status(
     media_item: MediaItem,
     *,

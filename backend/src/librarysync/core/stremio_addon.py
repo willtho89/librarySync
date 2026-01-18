@@ -61,24 +61,31 @@ def build_default_catalogs() -> list[dict[str, Any]]:
 
 
 def normalize_default_catalogs(catalogs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Normalize catalog configurations with proper defaults."""
     base = catalogs or build_default_catalogs()
     normalized: list[dict[str, Any]] = []
     for catalog in base:
         clone = copy.deepcopy(catalog)
+
+        # Normalize page size
         page_size = clone.get("pageSize")
         if not isinstance(page_size, int) or page_size <= 0:
             clone["pageSize"] = DEFAULT_PAGE_SIZE
+
+        # Normalize show in home flag
         show_in_home = clone.get("showInHome")
         if not isinstance(show_in_home, bool):
             clone["showInHome"] = DEFAULT_SHOW_IN_HOME
+
+        # Normalize in_progress_shows specific filters
         if clone.get("id") == "in_progress_shows":
-            filters = clone.get("filters")
+            filters = clone.get("filters", {})
             if not isinstance(filters, dict):
                 filters = {}
-            show_watched = filters.get("show_watched")
-            if not isinstance(show_watched, bool):
+            if not isinstance(filters.get("show_watched"), bool):
                 filters["show_watched"] = False
             clone["filters"] = filters
+
         normalized.append(clone)
     return normalized
 
@@ -97,9 +104,7 @@ async def get_addon_config_by_id(
     db: AsyncSession,
     addon_id: str,
 ) -> StremioAddonConfig | None:
-    result = await db.execute(
-        select(StremioAddonConfig).where(StremioAddonConfig.id == addon_id)
-    )
+    result = await db.execute(select(StremioAddonConfig).where(StremioAddonConfig.id == addon_id))
     return result.scalars().first()
 
 

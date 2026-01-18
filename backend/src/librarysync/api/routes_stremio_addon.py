@@ -108,7 +108,9 @@ def _resolve_base_url(request: Request) -> str:
 
 def _build_manifest_links(base_url: str, addon_id: str) -> dict[str, str]:
     manifest_url = f"{base_url}/stremio-addon/{addon_id}/manifest.json"
-    install_url = f"stremio://{manifest_url.split('://', 1)[-1]}"
+    # Strip protocol (http:// or https://) for Stremio install URL
+    manifest_path = manifest_url.split("://", 1)[-1]
+    install_url = f"stremio://{manifest_path}"
     return {"manifest_url": manifest_url, "install_url": install_url}
 
 
@@ -517,11 +519,10 @@ async def delete_custom_catalog(
     catalog_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+):
     catalog = await _load_custom_catalog(db, current_user.id, catalog_id)
     await db.delete(catalog)
     await db.commit()
-    return None
 
 
 @router.get(
@@ -601,7 +602,7 @@ async def remove_custom_catalog_item(
     media_item_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+):
     catalog = await _load_custom_catalog(db, current_user.id, catalog_id)
     result = await db.execute(
         select(StremioCustomCatalogItem).where(
@@ -614,7 +615,6 @@ async def remove_custom_catalog_item(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
     await db.delete(item)
     await db.commit()
-    return None
 
 
 @router.post(

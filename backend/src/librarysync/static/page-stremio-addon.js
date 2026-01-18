@@ -131,8 +131,12 @@ function buildSelect(options, selectedValue) {
   return select;
 }
 
+function getCatalogFilters(catalog) {
+  return catalog && catalog.filters ? catalog.filters : {};
+}
+
 function normalizeStatuses(catalog) {
-  const filters = catalog && catalog.filters ? catalog.filters : {};
+  const filters = getCatalogFilters(catalog);
   const statuses = Array.isArray(filters.statuses) ? filters.statuses : [];
   return statuses.filter((status) => status && status !== "added");
 }
@@ -145,7 +149,7 @@ function normalizeShowInHome(catalog) {
 }
 
 function normalizeShowWatched(catalog) {
-  const filters = catalog && catalog.filters ? catalog.filters : {};
+  const filters = getCatalogFilters(catalog);
   if (typeof filters.show_watched === "boolean") {
     return filters.show_watched;
   }

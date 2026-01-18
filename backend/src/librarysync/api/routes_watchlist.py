@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
@@ -18,14 +18,13 @@ from librarysync.core.catalog_ordering import (
 )
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
-    SHOW_STATUS_VALUES,
+    apply_combined_status_filter,
     apply_watchlist_status_change,
-    build_show_status_context,
     determine_movie_watchlist_status,
     determine_show_watchlist_status,
     log_watchlist_event,
-    normalize_watchlist_statuses,
     normalize_media_ids,
+    normalize_watchlist_statuses,
     upsert_watchlist_item,
 )
 from librarysync.core.watchlist_links import (
@@ -525,51 +524,15 @@ async def list_watchlist_items(
     )
 
     if status and status != "all" and status_filter_values:
-        show_status_ctx = None
-        if media_type in {None, "tv", "anime"}:
-            filter_now_date = datetime.now(timezone.utc).date()
-            show_status_ctx = build_show_status_context(current_user.id, filter_now_date)
-            query = query.outerjoin(
-                show_status_ctx.progress_subq,
-                show_status_ctx.progress_subq.c.media_item_id == MediaItem.id,
-            )
-            query = query.outerjoin(
-                show_status_ctx.earliest_air_subq,
-                show_status_ctx.earliest_air_subq.c.media_item_id == MediaItem.id,
-            )
-
-        computed_statuses = [
-            status_value for status_value in normalized_statuses if status_value in SHOW_STATUS_VALUES
-        ]
-        show_raw_statuses = [
-            status_value
-            for status_value in normalized_statuses
-            if status_value not in SHOW_STATUS_VALUES
-        ]
-        show_clauses = []
-        if show_status_ctx:
-            if computed_statuses:
-                show_clauses.append(show_status_ctx.status_expr.in_(computed_statuses))
-            if show_raw_statuses:
-                show_clauses.append(WatchlistItem.status.in_(show_raw_statuses))
-
-        if media_type == "movie":
-            query = query.where(WatchlistItem.status.in_(status_filter_values))
-        elif media_type in {"tv", "anime"}:
-            if show_clauses:
-                query = query.where(or_(*show_clauses))
-        else:
-            show_filter = or_(*show_clauses) if show_clauses else None
-            movie_filter = WatchlistItem.status.in_(status_filter_values)
-            if show_filter is not None:
-                query = query.where(
-                    or_(
-                        and_(MediaItem.media_type.in_(["tv", "anime"]), show_filter),
-                        and_(MediaItem.media_type == "movie", movie_filter),
-                    )
-                )
-            else:
-                query = query.where(movie_filter)
+        filter_now_date = datetime.now(timezone.utc).date()
+        query = apply_combined_status_filter(
+            query,
+            user_id=current_user.id,
+            now_date=filter_now_date,
+            normalized_statuses=normalized_statuses,
+            status_filter_values=status_filter_values,
+            media_type=media_type,
+        )
 
     if media_type:
         query = query.where(WatchlistItem.type == media_type)
