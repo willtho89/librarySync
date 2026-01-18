@@ -108,7 +108,7 @@ def _resolve_base_url(request: Request) -> str:
 
 def _build_manifest_links(base_url: str, addon_id: str) -> dict[str, str]:
     manifest_url = f"{base_url}/stremio-addon/{addon_id}/manifest.json"
-    install_url = f"stremio://{manifest_url}"
+    install_url = f"stremio://{manifest_url.split('://', 1)[-1]}"
     return {"manifest_url": manifest_url, "install_url": install_url}
 
 
