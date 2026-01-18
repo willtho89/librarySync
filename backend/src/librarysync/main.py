@@ -2,6 +2,7 @@ from importlib import metadata
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -76,6 +77,16 @@ def create_app() -> FastAPI:
         ),
         openapi_tags=OPENAPI_TAGS,
     )
+
+    # CORS configuration
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=['*'],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     if settings.gzip_enabled:
         app.add_middleware(GZipMiddleware, minimum_size=settings.gzip_min_size)
 
