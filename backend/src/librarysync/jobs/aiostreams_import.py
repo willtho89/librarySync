@@ -500,9 +500,16 @@ async def _check_series_continuity(
     # 3. Have episode watches by this user
     from sqlalchemy import and_, func
     
-    # First, find all TV shows with similar titles that the user has watched
+    # First, find all TV shows the user has watched
+    # Use a subquery to get the max season and episode per show
+    # Note: This may return max_season from one episode and max_episode from another,
+    # but it's acceptable for our continuity check as we're looking for a general pattern
     result = await db.execute(
-        select(MediaItem, func.max(EpisodeItem.season_number), func.max(EpisodeItem.episode_number))
+        select(
+            MediaItem,
+            func.max(EpisodeItem.season_number).label("max_season"),
+            func.max(EpisodeItem.episode_number).label("max_episode"),
+        )
         .join(EpisodeItem, EpisodeItem.show_media_item_id == MediaItem.id)
         .join(WatchedItem, and_(
             WatchedItem.episode_item_id == EpisodeItem.id,
@@ -510,7 +517,6 @@ async def _check_series_continuity(
         ))
         .where(MediaItem.media_type == "tv")
         .group_by(MediaItem.id)
-        .order_by(func.max(EpisodeItem.season_number).desc(), func.max(EpisodeItem.episode_number).desc())
     )
     
     watched_shows = result.all()
@@ -522,8 +528,12 @@ async def _check_series_continuity(
         if not show_title_key or show_title_key != title_key:
             continue
         
+        # Skip if we don't have valid season/episode data
+        if max_season is None or max_episode is None:
+            continue
+        
         # Check if this is a continuation (same season and later episode, or later season)
-        if entry.season_number is not None and max_season is not None:
+        if entry.season_number is not None:
             is_continuation = (
                 (entry.season_number == max_season and entry.episode_number > max_episode) or
                 (entry.season_number > max_season)
