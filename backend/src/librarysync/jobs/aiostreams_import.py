@@ -25,6 +25,7 @@ from librarysync.db.models import (
     EpisodeItem,
     Integration,
     MediaItem,
+    WatchedItem,
 )
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 from librarysync.jobs.import_pipeline import (
@@ -446,7 +447,7 @@ async def _lookup_metadata_candidate(
                     exc_info=True,
                 )
                 continue
-            candidate = _select_candidate_for_entry(entry, candidates)
+            candidate = await _select_candidate_for_entry(db, user_id, entry, candidates)
             if not candidate:
                 continue
             if _candidate_has_useful_id(candidate):
@@ -471,8 +472,97 @@ def _build_lookup_queries(title: str, year: int | None) -> list[str]:
     return [f"{cleaned} {year}", cleaned]
 
 
-def _select_candidate_for_entry(
-    entry: ParsedEntry, candidates: list[MediaCandidate]
+async def _check_series_continuity(
+    db: AsyncSession,
+    user_id: str,
+    entry: ParsedEntry,
+    candidates: list[MediaCandidate],
+) -> MediaCandidate | None:
+    """
+    Check if the user has previously watched an earlier episode of a show matching one of the candidates.
+    This helps disambiguate when there are multiple shows with the same or similar titles.
+    
+    For example, if watching "Fallout S02E08" and user previously watched "Fallout S02E07",
+    prefer the same show's metadata rather than selecting a different "Fallout" (e.g., an anime).
+    """
+    if not entry.title or entry.season_number is None or entry.episode_number is None:
+        return None
+    
+    # Build a normalized title key for matching
+    title_key = _normalize_title_key(entry.title)
+    if not title_key:
+        return None
+    
+    # Query for shows the user has watched episodes of, matching the title
+    # We look for MediaItems that:
+    # 1. Are TV shows
+    # 2. Have a matching normalized title
+    # 3. Have episode watches by this user
+    from sqlalchemy import and_, func
+    
+    # First, find all TV shows with similar titles that the user has watched
+    result = await db.execute(
+        select(MediaItem, func.max(EpisodeItem.season_number), func.max(EpisodeItem.episode_number))
+        .join(EpisodeItem, EpisodeItem.show_media_item_id == MediaItem.id)
+        .join(WatchedItem, and_(
+            WatchedItem.episode_item_id == EpisodeItem.id,
+            WatchedItem.user_id == user_id
+        ))
+        .where(MediaItem.media_type == "tv")
+        .group_by(MediaItem.id)
+        .order_by(func.max(EpisodeItem.season_number).desc(), func.max(EpisodeItem.episode_number).desc())
+    )
+    
+    watched_shows = result.all()
+    
+    # For each watched show, check if it matches one of our candidates
+    for show_item, max_season, max_episode in watched_shows:
+        # Check if the show title matches the entry title (fuzzy match)
+        show_title_key = _normalize_title_key(show_item.title or "")
+        if not show_title_key or show_title_key != title_key:
+            continue
+        
+        # Check if this is a continuation (same season and later episode, or later season)
+        if entry.season_number is not None and max_season is not None:
+            is_continuation = (
+                (entry.season_number == max_season and entry.episode_number > max_episode) or
+                (entry.season_number > max_season)
+            )
+            
+            # Allow same episode or earlier if not too far back (could be rewatching)
+            is_nearby = (
+                entry.season_number == max_season and 
+                abs(entry.episode_number - max_episode) <= 3
+            )
+            
+            if not is_continuation and not is_nearby:
+                continue
+        
+        # Now check if this show matches one of our candidates
+        for candidate in candidates:
+            # Match by IMDb ID (most reliable)
+            if show_item.imdb_id and candidate.imdb_id:
+                if show_item.imdb_id.lower() == candidate.imdb_id.lower():
+                    return candidate
+            
+            # Match by TMDB ID
+            if show_item.tmdb_id and candidate.provider == "tmdb" and candidate.provider_id:
+                if str(show_item.tmdb_id) == str(candidate.provider_id):
+                    return candidate
+            
+            # Match by TVDB ID
+            if show_item.tvdb_id and candidate.provider == "tvdb" and candidate.provider_id:
+                if str(show_item.tvdb_id) == str(candidate.provider_id):
+                    return candidate
+    
+    return None
+
+
+async def _select_candidate_for_entry(
+    db: AsyncSession,
+    user_id: str,
+    entry: ParsedEntry,
+    candidates: list[MediaCandidate],
 ) -> MediaCandidate | None:
     if not candidates:
         return None
@@ -483,6 +573,23 @@ def _select_candidate_for_entry(
     ]
     if not scoped:
         scoped = candidates
+    
+    # For TV shows, check if user has watched a previous episode from one of the candidates
+    if entry.media_type == "tv" and entry.season_number is not None and entry.episode_number is not None:
+        continuity_candidate = await _check_series_continuity(
+            db, user_id, entry, scoped
+        )
+        if continuity_candidate:
+            logger.debug(
+                "Using series continuity: selected %s (imdb=%s) for %s S%02dE%02d",
+                continuity_candidate.title,
+                continuity_candidate.imdb_id,
+                entry.title,
+                entry.season_number,
+                entry.episode_number,
+            )
+            return continuity_candidate
+    
     title_key = _normalize_title_key(entry.title or "")
     title_matches: list[MediaCandidate] = []
     if title_key:
