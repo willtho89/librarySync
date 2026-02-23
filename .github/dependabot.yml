@@ -22,13 +22,3 @@ updates:
     labels:
       - "dependencies"
 
-  - package-ecosystem: "pip"
-    directory: "/worker"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
-      timezone: "UTC"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
