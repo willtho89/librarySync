@@ -122,6 +122,9 @@ class WatchedItemOut(BaseModel):
     anilist_status: str | None = None
     anilist_external_id: str | None = None
     anilist_last_error: str | None = None
+    publicmetadb_status: str | None = None
+    publicmetadb_external_id: str | None = None
+    publicmetadb_last_error: str | None = None
     metadata: HistoryItemMetadata | None = None
 
 
@@ -364,6 +367,7 @@ async def list_watched_items(
     simkl_sync = aliased(WatchSync)
     stremio_sync = aliased(WatchSync)
     anilist_sync = aliased(WatchSync)
+    publicmetadb_sync = aliased(WatchSync)
     filters = [WatchedItem.user_id == current_user.id]
     if media_type:
         filters.append(or_(MediaItem.media_type == media_type, show_item.media_type == media_type))
@@ -425,6 +429,7 @@ async def list_watched_items(
             simkl_sync,
             stremio_sync,
             anilist_sync,
+            publicmetadb_sync,
         )
         .outerjoin(MediaItem, WatchedItem.media_item_id == MediaItem.id)
         .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
@@ -464,6 +469,13 @@ async def list_watched_items(
                 anilist_sync.provider == "anilist",
             ),
         )
+        .outerjoin(
+            publicmetadb_sync,
+            and_(
+                publicmetadb_sync.watched_item_id == WatchedItem.id,
+                publicmetadb_sync.provider == "publicmetadb",
+            ),
+        )
         .where(*filters)
     )
     release_date_expr = func.coalesce(
@@ -497,11 +509,14 @@ async def list_watched_items(
         simkl,
         stremio,
         anilist,
+        publicmetadb,
     ) in result.all():
         base_item = media_item or show
         if not base_item:
             continue
-        sync_entries = [entry for entry in (sync, trakt, simkl, stremio, anilist) if entry]
+        sync_entries = [
+            entry for entry in (sync, trakt, simkl, stremio, anilist, publicmetadb) if entry
+        ]
         first_sync_at = (
             min((entry.created_at for entry in sync_entries), default=None)
             if sync_entries
@@ -592,6 +607,9 @@ async def list_watched_items(
                 anilist_status=anilist.status if anilist else None,
                 anilist_external_id=anilist.external_id if anilist else None,
                 anilist_last_error=anilist.last_error if anilist else None,
+                publicmetadb_status=publicmetadb.status if publicmetadb else None,
+                publicmetadb_external_id=publicmetadb.external_id if publicmetadb else None,
+                publicmetadb_last_error=publicmetadb.last_error if publicmetadb else None,
                 metadata=metadata,
             ).model_dump()
         )
@@ -1336,6 +1354,9 @@ def _provider_fields() -> tuple[str, ...]:
         "anilist_status",
         "anilist_external_id",
         "anilist_last_error",
+        "publicmetadb_status",
+        "publicmetadb_external_id",
+        "publicmetadb_last_error",
     )
 
 

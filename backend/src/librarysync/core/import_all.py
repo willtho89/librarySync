@@ -11,12 +11,14 @@ from librarysync.config import settings
 from librarysync.connectors.services.aiostreams_proxy import has_required_aiostreams_fields
 from librarysync.connectors.services.anilist import has_required_anilist_fields
 from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
+from librarysync.connectors.services.publicmetadb import has_required_publicmetadb_fields
 from librarysync.connectors.services.simkl import has_required_simkl_fields
 from librarysync.connectors.services.stremio import has_required_stremio_fields
 from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.import_schedule import parse_datetime
 from librarysync.core.import_state import coerce_int, coerce_str, normalize_queue
 from librarysync.core.integrations import load_integration_with_secrets
+from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.db.models import Integration
 
 IMPORT_ALL_PROVIDER = "system"
@@ -24,6 +26,7 @@ IMPORT_ALL_PRIORITY = (
     "trakt",
     "letterboxd",
     "simkl",
+    "publicmetadb",
     "anilist",
     "stremio",
     "aiostreams",
@@ -32,6 +35,7 @@ DEFAULT_IMPORT_QUEUE_ORDER = (
     "trakt",
     "letterboxd",
     "simkl",
+    "publicmetadb",
     "anilist",
     "stremio",
     "aiostreams",
@@ -182,6 +186,11 @@ async def load_import_ready_providers(db: AsyncSession, user_id: str) -> list[st
             if not settings.simkl_client_id or not settings.simkl_client_secret:
                 continue
             if not has_required_simkl_fields(secret_data):
+                continue
+        elif provider == "publicmetadb":
+            if not has_required_publicmetadb_fields(secret_data):
+                continue
+            if not is_publicmetadb_sync_enabled(dict(integration.config or {})):
                 continue
         elif provider == "stremio":
             if not has_required_stremio_fields(secret_data):

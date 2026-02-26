@@ -36,6 +36,11 @@ from librarysync.connectors.services.letterboxd import (
 from librarysync.connectors.services.letterboxd import (
     token_to_secret_payload as letterboxd_token_to_secret_payload,
 )
+from librarysync.connectors.services.publicmetadb import (
+    PublicMetaDbClient,
+    PublicMetaDbError,
+    has_required_publicmetadb_fields,
+)
 from librarysync.connectors.services.simkl import (
     SimklClient,
     SimklError,
@@ -71,6 +76,7 @@ from librarysync.connectors.services.trakt import (
 )
 from librarysync.core.import_control import load_blocked_outbox_users
 from librarysync.core.integrations import load_integration_with_secrets
+from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.security import encrypt_value
@@ -90,7 +96,7 @@ from librarysync.db.session import SessionLocal, init_session_factory
 RETRYABLE_STATUSES = ("pending", "failed_retryable")
 BATCHABLE_PROVIDERS = {"trakt", "simkl"}
 BATCHABLE_JOB_TYPES = {"push_watched", "push_rating"}
-MIXED_PROVIDER_ORDER = ("trakt", "simkl", "letterboxd", "stremio")
+MIXED_PROVIDER_ORDER = ("trakt", "simkl", "publicmetadb", "letterboxd", "stremio")
 logger = logging.getLogger(__name__)
 
 
@@ -232,6 +238,25 @@ class StremioOutboxHandler(OutboxHandler):
         raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
 
 
+class PublicMetaDbOutboxHandler(OutboxHandler):
+    provider = "publicmetadb"
+
+    async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        if job.job_type == "push_watched":
+            response_code, external_id = await _deliver_publicmetadb_watch(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "push_rating":
+            response_code, external_id = await _deliver_publicmetadb_rating(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "update_history":
+            response_code, external_id = await _deliver_publicmetadb_update(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "remove_history":
+            response_code, external_id = await _deliver_publicmetadb_remove(db, job)
+            return DeliveryResult(response_code, external_id)
+        raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
+
+
 class AniListOutboxHandler(OutboxHandler):
     provider = "anilist"
 
@@ -266,6 +291,7 @@ OUTBOX_HANDLER_REGISTRY = OutboxHandlerRegistry(
         LetterboxdOutboxHandler(),
         TraktOutboxHandler(),
         SimklOutboxHandler(),
+        PublicMetaDbOutboxHandler(),
         StremioOutboxHandler(),
         AniListOutboxHandler(),
         InternalOutboxHandler(),
@@ -514,6 +540,10 @@ async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
         response_code = exc.status_code
         error_message = _format_simkl_error(exc)
         status = _classify_failure(exc.status_code, error_message)
+    except PublicMetaDbError as exc:
+        response_code = exc.status_code
+        error_message = _format_publicmetadb_error(exc)
+        status = _classify_failure(exc.status_code, error_message)
     except StremioError as exc:
         response_code = exc.status_code
         error_message = _format_stremio_error(exc)
@@ -676,6 +706,10 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     except SimklError as exc:
         response_code = exc.status_code
         error_message = _format_simkl_error(exc)
+        status = _classify_failure(exc.status_code, error_message)
+    except PublicMetaDbError as exc:
+        response_code = exc.status_code
+        error_message = _format_publicmetadb_error(exc)
         status = _classify_failure(exc.status_code, error_message)
     except StremioError as exc:
         response_code = exc.status_code
@@ -1469,6 +1503,274 @@ async def _deliver_simkl_remove(db: AsyncSession, job: OutboxJob) -> tuple[int |
     access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
     remove_payload = _build_simkl_remove_payload(payload)
     _, response_code = await client.remove_history(remove_payload, access_token)
+    return response_code, None
+
+
+async def _load_publicmetadb_client(
+    db: AsyncSession, user_id: str
+) -> tuple[PublicMetaDbClient, str]:
+    integration, secret_data = await load_integration_with_secrets(db, user_id, "publicmetadb")
+    if not integration or not secret_data:
+        raise PublicMetaDbError("PublicMetaDB credentials are missing", status_code=401)
+    if not has_required_publicmetadb_fields(secret_data):
+        raise PublicMetaDbError("PublicMetaDB credentials are incomplete", status_code=401)
+    if not is_publicmetadb_sync_enabled(dict(integration.config or {})):
+        raise PublicMetaDbError("PublicMetaDB sync is disabled", status_code=409)
+    api_key = _coerce_str(secret_data.get("api_key"))
+    if not api_key:
+        raise PublicMetaDbError("PublicMetaDB API key is missing", status_code=401)
+    return PublicMetaDbClient(), api_key
+
+
+def _extract_publicmetadb_entry_id(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("id", "watched_id", "rating_id"):
+        value = payload.get(key)
+        if isinstance(value, (str, int)):
+            cleaned = str(value).strip()
+            if cleaned:
+                return cleaned
+    item = payload.get("item")
+    if isinstance(item, dict):
+        value = item.get("id")
+        if isinstance(value, (str, int)):
+            cleaned = str(value).strip()
+            if cleaned:
+                return cleaned
+    return None
+
+
+def _extract_publicmetadb_items(payload: object) -> list[dict[str, object]]:
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _extract_publicmetadb_tmdb_id(payload: dict[str, object]) -> int | None:
+    direct_id = _coerce_int(payload.get("tmdb_id"))
+    if direct_id is not None:
+        return direct_id
+    movie_ids = payload.get("movie_ids")
+    if isinstance(movie_ids, dict):
+        tmdb_id = _coerce_int(movie_ids.get("tmdb"))
+        if tmdb_id is not None:
+            return tmdb_id
+    show_ids = payload.get("show_ids")
+    if isinstance(show_ids, dict):
+        tmdb_id = _coerce_int(show_ids.get("tmdb"))
+        if tmdb_id is not None:
+            return tmdb_id
+    return None
+
+
+def _normalize_publicmetadb_media_type(payload: dict[str, object]) -> str:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    if media_type in {"tv", "series"}:
+        return "tv"
+    return "movie"
+
+
+def _normalize_publicmetadb_rating(value: object) -> int:
+    rating = coerce_star_rating(value)
+    if rating is None:
+        raise ValueError("PublicMetaDB rating must be between 0.5 and 5.0 stars")
+    normalized = int(round(rating * 20))
+    if normalized < 0:
+        return 0
+    if normalized > 100:
+        return 100
+    return normalized
+
+
+def _normalize_publicmetadb_label(value: object) -> str:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned:
+            return cleaned
+    return "overall"
+
+
+def _match_publicmetadb_watched_item(
+    item: dict[str, object],
+    *,
+    tmdb_id: int,
+    media_type: str,
+    season: int | None,
+    episode: int | None,
+) -> bool:
+    item_tmdb_id = _coerce_int(item.get("tmdb_id"))
+    if item_tmdb_id != tmdb_id:
+        return False
+    item_media_type = _coerce_str(item.get("media_type")) or "movie"
+    if item_media_type != media_type:
+        return False
+    if media_type != "tv":
+        return True
+    item_season = _coerce_int(item.get("season"))
+    item_episode = _coerce_int(item.get("episode"))
+    return item_season == season and item_episode == episode
+
+
+async def _resolve_publicmetadb_watched_id(
+    client: PublicMetaDbClient,
+    api_key: str,
+    *,
+    tmdb_id: int | None,
+    media_type: str,
+    season: int | None,
+    episode: int | None,
+) -> str | None:
+    if tmdb_id is None:
+        return None
+    payload, _response_code = await client.list_watched(api_key)
+    for item in _extract_publicmetadb_items(payload):
+        if not _match_publicmetadb_watched_item(
+            item,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            season=season,
+            episode=episode,
+        ):
+            continue
+        item_id = item.get("id")
+        if isinstance(item_id, (str, int)):
+            cleaned = str(item_id).strip()
+            if cleaned:
+                return cleaned
+    return None
+
+
+async def _deliver_publicmetadb_watch(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    tmdb_id = _extract_publicmetadb_tmdb_id(payload)
+    if tmdb_id is None:
+        raise ValueError("PublicMetaDB sync requires a TMDB ID")
+    media_type = _normalize_publicmetadb_media_type(payload)
+    season_number = _coerce_int(payload.get("season_number"))
+    episode_number = _coerce_int(payload.get("episode_number"))
+    if media_type == "tv" and (season_number is None or episode_number is None):
+        raise ValueError("PublicMetaDB TV sync requires season_number and episode_number")
+    client, api_key = await _load_publicmetadb_client(db, job.user_id)
+    response, response_code = await client.mark_watched(
+        api_key,
+        tmdb_id=tmdb_id,
+        media_type=media_type,
+        season=season_number,
+        episode=episode_number,
+    )
+    return response_code, _extract_publicmetadb_entry_id(response)
+
+
+async def _deliver_publicmetadb_update(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    client, api_key = await _load_publicmetadb_client(db, job.user_id)
+    history_id = _coerce_str(payload.get("history_id") or payload.get("external_id"))
+    tmdb_id = _extract_publicmetadb_tmdb_id(payload)
+    media_type = _normalize_publicmetadb_media_type(payload)
+    season_number = _coerce_int(payload.get("season_number"))
+    episode_number = _coerce_int(payload.get("episode_number"))
+    if media_type == "tv" and (season_number is None or episode_number is None):
+        raise ValueError("PublicMetaDB TV sync requires season_number and episode_number")
+    if not history_id:
+        history_id = await _resolve_publicmetadb_watched_id(
+            client,
+            api_key,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            season=season_number,
+            episode=episode_number,
+        )
+    if history_id:
+        try:
+            await client.delete_watched(api_key, history_id)
+        except PublicMetaDbError as exc:
+            if exc.status_code != 404:
+                raise
+    if tmdb_id is None:
+        raise ValueError("PublicMetaDB sync requires a TMDB ID")
+    response, response_code = await client.mark_watched(
+        api_key,
+        tmdb_id=tmdb_id,
+        media_type=media_type,
+        season=season_number,
+        episode=episode_number,
+    )
+    return response_code, _extract_publicmetadb_entry_id(response)
+
+
+async def _deliver_publicmetadb_remove(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    client, api_key = await _load_publicmetadb_client(db, job.user_id)
+    history_id = _coerce_str(payload.get("history_id") or payload.get("external_id"))
+    tmdb_id = _extract_publicmetadb_tmdb_id(payload)
+    media_type = _normalize_publicmetadb_media_type(payload)
+    season_number = _coerce_int(payload.get("season_number"))
+    episode_number = _coerce_int(payload.get("episode_number"))
+    if not history_id:
+        history_id = await _resolve_publicmetadb_watched_id(
+            client,
+            api_key,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            season=season_number,
+            episode=episode_number,
+        )
+    if not history_id:
+        return 200, None
+    try:
+        _response_payload, response_code = await client.delete_watched(api_key, history_id)
+    except PublicMetaDbError as exc:
+        if exc.status_code == 404:
+            return 200, None
+        raise
+    return response_code, None
+
+
+async def _deliver_publicmetadb_rating(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    tmdb_id = _extract_publicmetadb_tmdb_id(payload)
+    if tmdb_id is None:
+        raise ValueError("PublicMetaDB rating sync requires a TMDB ID")
+    media_type = _normalize_publicmetadb_media_type(payload)
+    score = _normalize_publicmetadb_rating(payload.get("rating"))
+    label = _normalize_publicmetadb_label(payload.get("label"))
+    season_number = _coerce_int(payload.get("season_number"))
+    episode_number = _coerce_int(payload.get("episode_number"))
+    client, api_key = await _load_publicmetadb_client(db, job.user_id)
+    if media_type == "tv":
+        if season_number is None or episode_number is None:
+            raise ValueError(
+                "PublicMetaDB TV rating sync requires season_number and episode_number"
+            )
+        _response_payload, response_code = await client.create_episode_rating(
+            api_key,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            season=season_number,
+            episode=episode_number,
+            score=score,
+            label=label,
+        )
+        return response_code, None
+    _response_payload, response_code = await client.create_rating(
+        api_key,
+        tmdb_id=tmdb_id,
+        media_type=media_type,
+        score=score,
+        label=label,
+    )
     return response_code, None
 
 
@@ -2701,6 +3003,21 @@ def _format_trakt_error(error: TraktError) -> str:
 
 
 def _format_simkl_error(error: SimklError) -> str:
+    message = str(error)
+    status_code = error.status_code
+    response_body = error.response_body
+    if response_body:
+        response_body = _shorten(response_body)
+    if status_code and response_body:
+        return f"{message} (status={status_code}, body={response_body})"
+    if status_code:
+        return f"{message} (status={status_code})"
+    if response_body:
+        return f"{message} (body={response_body})"
+    return message
+
+
+def _format_publicmetadb_error(error: PublicMetaDbError) -> str:
     message = str(error)
     status_code = error.status_code
     response_body = error.response_body

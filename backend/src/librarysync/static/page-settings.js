@@ -22,6 +22,7 @@ const DEFAULT_IMPORT_QUEUE_ORDER = [
   "trakt",
   "letterboxd",
   "simkl",
+  "publicmetadb",
   "anilist",
   "stremio",
   "aiostreams",
@@ -70,6 +71,19 @@ function setIntegrationStatusBadge(id, connected) {
   }
   badge.textContent = connected ? "Connected" : "Not connected";
   badge.dataset.state = connected ? "connected" : "disconnected";
+}
+
+function isPublicMetaDbSyncEnabled(config) {
+  if (!config || typeof config !== "object") {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(config, "sync_enabled")) {
+    return !!config.sync_enabled;
+  }
+  if (Object.prototype.hasOwnProperty.call(config, "metadata_enabled")) {
+    return !!config.metadata_enabled;
+  }
+  return !!config.enabled;
 }
 
 function formatWatchlistSourceLabel(source) {
@@ -556,6 +570,45 @@ async function loadIntegrations() {
       aiostreamsDisconnect.hidden = true;
     }
   }
+
+  const publicmetadbSync = integrations.find(
+    (item) => item.provider === "publicmetadb"
+  );
+  const publicmetadbSyncForm = document.getElementById("publicmetadb-sync-form");
+  if (publicmetadbSyncForm) {
+    const enabledInput = publicmetadbSyncForm.querySelector("input[name='enabled']");
+    if (enabledInput) {
+      enabledInput.checked = isPublicMetaDbSyncEnabled(
+        (publicmetadbSync && publicmetadbSync.config) || {}
+      );
+    }
+  }
+  const publicmetadbSyncDisconnect = document.getElementById(
+    "publicmetadb-sync-disconnect"
+  );
+  const publicmetadbHasKey = !!(publicmetadbSync && publicmetadbSync.has_secrets);
+  const publicmetadbSyncEnabled = isPublicMetaDbSyncEnabled(
+    (publicmetadbSync && publicmetadbSync.config) || {}
+  );
+  const publicmetadbConnected = publicmetadbHasKey && publicmetadbSyncEnabled;
+  setIntegrationStatusBadge("publicmetadb-sync-status", publicmetadbConnected);
+  if (publicmetadbConnected) {
+    setMessage("publicmetadb-sync-message", "PublicMetaDB sync is enabled.");
+    if (publicmetadbSyncDisconnect) {
+      publicmetadbSyncDisconnect.hidden = false;
+    }
+  } else if (publicmetadbHasKey) {
+    setMessage("publicmetadb-sync-message", "API key is stored. Sync is disabled.");
+    if (publicmetadbSyncDisconnect) {
+      publicmetadbSyncDisconnect.hidden = false;
+    }
+  } else {
+    setMessage("publicmetadb-sync-message", "");
+    if (publicmetadbSyncDisconnect) {
+      publicmetadbSyncDisconnect.hidden = true;
+    }
+  }
+
   settingsState.hasAnyImports = integrations.some((item) => item.has_secrets);
   const importAllButton = document.getElementById("import-all-button");
   if (importAllButton) {
@@ -1185,6 +1238,57 @@ async function handleAIOStreamsDisconnect() {
   }
 }
 
+async function handlePublicMetaDbSyncSave(data, form) {
+  setMessage("publicmetadb-sync-message", "");
+  const enabled = data.get("enabled") === "on";
+  const apiKeyRaw = data.get("api_key");
+  const payload = { enabled };
+  if (apiKeyRaw !== null && apiKeyRaw !== undefined) {
+    const apiKey = apiKeyRaw.trim();
+    if (apiKey) {
+      payload.api_key = apiKey;
+    }
+  }
+  try {
+    await requestJSON("/api/integrations/publicmetadb", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const apiKeyInput = form ? form.querySelector("input[name='api_key']") : null;
+    if (apiKeyInput) {
+      apiKeyInput.value = "";
+    }
+    setMessage("publicmetadb-sync-message", "Saved.");
+    await Promise.all([loadIntegrations(), loadMetadataProviders()]);
+  } catch (error) {
+    setMessage("publicmetadb-sync-message", error.message, true);
+  }
+}
+
+async function handlePublicMetaDbSyncTest() {
+  setMessage("publicmetadb-sync-message", "");
+  try {
+    await requestJSON("/api/integrations/publicmetadb/test", { method: "POST" });
+    setMessage("publicmetadb-sync-message", "Connection test succeeded.");
+    await loadIntegrations();
+  } catch (error) {
+    setMessage("publicmetadb-sync-message", error.message, true);
+  }
+}
+
+async function handlePublicMetaDbSyncDisconnect() {
+  setMessage("publicmetadb-sync-message", "");
+  try {
+    await requestJSON("/api/integrations/publicmetadb/disconnect", {
+      method: "POST",
+    });
+    setMessage("publicmetadb-sync-message", "Sync disabled.");
+    await Promise.all([loadIntegrations(), loadMetadataProviders()]);
+  } catch (error) {
+    setMessage("publicmetadb-sync-message", error.message, true);
+  }
+}
+
 async function handleQuickImportScheduleSave(data) {
   setMessage("quick-import-message", "");
   const rawValue = data.get("quick_import_interval");
@@ -1298,6 +1402,7 @@ async function handleSettingsSave(data) {
 async function loadMetadataProviders() {
   const tmdbForm = document.getElementById("tmdb-form");
   const tvdbForm = document.getElementById("tvdb-form");
+  const publicmetadbForm = document.getElementById("publicmetadb-form");
   const tvmazeForm = document.getElementById("tvmaze-form");
   const imdbForm = document.getElementById("imdb-form");
   const kitsuForm = document.getElementById("kitsu-form");
@@ -1306,6 +1411,7 @@ async function loadMetadataProviders() {
   if (
     !tmdbForm &&
     !tvdbForm &&
+    !publicmetadbForm &&
     !kitsuForm &&
     !tvmazeForm &&
     !imdbForm &&
@@ -1321,6 +1427,10 @@ async function loadMetadataProviders() {
     config: {},
   };
   const tvdb = providers.find((item) => item.provider === "tvdb") || {
+    enabled: false,
+    config: {},
+  };
+  const publicmetadb = providers.find((item) => item.provider === "publicmetadb") || {
     enabled: false,
     config: {},
   };
@@ -1380,6 +1490,18 @@ async function loadMetadataProviders() {
       setMessage("tvdb-message", "Credentials are stored securely.");
     } else {
       setMessage("tvdb-message", "");
+    }
+  }
+
+  if (publicmetadbForm) {
+    const enabledInput = publicmetadbForm.querySelector("input[name='enabled']");
+    if (enabledInput) {
+      enabledInput.checked = !!publicmetadb.enabled;
+    }
+    if (publicmetadb.has_credentials) {
+      setMessage("publicmetadb-message", "API key is stored securely.");
+    } else {
+      setMessage("publicmetadb-message", "");
     }
   }
 
@@ -1521,6 +1643,33 @@ async function handleTvdbSave(data, form) {
     await loadMetadataProviders();
   } catch (error) {
     setMessage("tvdb-message", error.message, true);
+  }
+}
+
+async function handlePublicMetaDbSave(data, form) {
+  setMessage("publicmetadb-message", "");
+  const enabled = data.get("enabled") === "on";
+  const apiKeyRaw = data.get("api_key");
+  const payload = { enabled };
+  if (apiKeyRaw !== null && apiKeyRaw !== undefined) {
+    const apiKey = apiKeyRaw.trim();
+    if (apiKey) {
+      payload.api_key = apiKey;
+    }
+  }
+  try {
+    await requestJSON("/api/metadata/providers/publicmetadb", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const apiKeyInput = form.querySelector("input[name='api_key']");
+    if (apiKeyInput) {
+      apiKeyInput.value = "";
+    }
+    setMessage("publicmetadb-message", "Saved.");
+    await Promise.all([loadMetadataProviders(), loadIntegrations()]);
+  } catch (error) {
+    setMessage("publicmetadb-message", error.message, true);
   }
 }
 
@@ -3291,9 +3440,11 @@ window.librarysyncPageInit = async ({ user }) => {
   bindForm("quick-import-form", handleQuickImportScheduleSave);
   bindForm("stremio-form", handleStremioConnect);
   bindForm("aiostreams-form", handleAIOStreamsSave);
+  bindForm("publicmetadb-sync-form", handlePublicMetaDbSyncSave);
   bindForm("settings-form", handleSettingsSave);
   bindForm("tmdb-form", handleTmdbSave);
   bindForm("tvdb-form", handleTvdbSave);
+  bindForm("publicmetadb-form", handlePublicMetaDbSave);
   bindForm("tvmaze-form", handleTvmazeSave);
   bindForm("imdb-form", handleImdbSave);
   bindForm("kitsu-form", handleKitsuSave);
@@ -3364,6 +3515,19 @@ window.librarysyncPageInit = async ({ user }) => {
   const aiostreamsDisconnect = document.getElementById("aiostreams-disconnect");
   if (aiostreamsDisconnect) {
     aiostreamsDisconnect.addEventListener("click", handleAIOStreamsDisconnect);
+  }
+  const publicmetadbSyncTest = document.getElementById("publicmetadb-sync-test");
+  if (publicmetadbSyncTest) {
+    publicmetadbSyncTest.addEventListener("click", handlePublicMetaDbSyncTest);
+  }
+  const publicmetadbSyncDisconnect = document.getElementById(
+    "publicmetadb-sync-disconnect"
+  );
+  if (publicmetadbSyncDisconnect) {
+    publicmetadbSyncDisconnect.addEventListener(
+      "click",
+      handlePublicMetaDbSyncDisconnect
+    );
   }
 
   try {

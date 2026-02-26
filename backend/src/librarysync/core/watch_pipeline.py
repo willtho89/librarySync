@@ -11,12 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from librarysync.config import settings
 from librarysync.connectors.services.anilist import has_required_anilist_fields
 from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
+from librarysync.connectors.services.publicmetadb import has_required_publicmetadb_fields
 from librarysync.connectors.services.simkl import has_required_simkl_fields
 from librarysync.connectors.services.stremio import has_required_stremio_fields
 from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.anime import is_anime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
+from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.watchlist import (
     backfill_show_episodes,
     check_and_update_watchlist,
@@ -38,6 +40,7 @@ SUCCESS_STATUSES = {
     "synced_from_anilist",
     "synced_from_simkl",
     "synced_from_stremio",
+    "synced_from_publicmetadb",
 }
 ACTIVE_OUTBOX_STATUSES = {"pending", "failed_retryable", "in_progress"}
 
@@ -493,12 +496,13 @@ class LetterboxdSyncStrategy(SyncStrategy):
 @dataclass(frozen=True)
 class HistorySyncConfig:
     provider: str
-    client_id_attr: str
-    client_secret_attr: str
     has_required_fields: Callable[[dict[str, Any]], bool]
     build_payload: Callable[
         [MediaItem, EpisodeItem | None, datetime, float | None], dict[str, object] | None
     ]
+    client_id_attr: str | None = None
+    client_secret_attr: str | None = None
+    settings_required: bool = True
     include_history_id_on_delete: bool = False
 
 
@@ -508,6 +512,10 @@ class HistorySyncStrategy(SyncStrategy):
         self.provider = config.provider
 
     def _settings_ready(self) -> bool:
+        if not self._config.settings_required:
+            return True
+        if not self._config.client_id_attr or not self._config.client_secret_attr:
+            return False
         client_id = getattr(settings, self._config.client_id_attr, None)
         client_secret = getattr(settings, self._config.client_secret_attr, None)
         return bool(client_id and client_secret)
@@ -515,6 +523,10 @@ class HistorySyncStrategy(SyncStrategy):
     async def _has_integration(self, db: AsyncSession, user_id: str) -> bool:
         integration, secret_data = await load_integration_with_secrets(db, user_id, self.provider)
         if not integration or not secret_data:
+            return False
+        if self.provider == "publicmetadb" and not is_publicmetadb_sync_enabled(
+            dict(integration.config or {})
+        ):
             return False
         return self._config.has_required_fields(secret_data)
 
@@ -730,10 +742,10 @@ class TraktSyncStrategy(HistorySyncStrategy):
         super().__init__(
             HistorySyncConfig(
                 provider="trakt",
-                client_id_attr="trakt_client_id",
-                client_secret_attr="trakt_client_secret",
                 has_required_fields=has_required_trakt_fields,
                 build_payload=build_trakt_payload,
+                client_id_attr="trakt_client_id",
+                client_secret_attr="trakt_client_secret",
                 include_history_id_on_delete=True,
             )
         )
@@ -744,10 +756,23 @@ class SimklSyncStrategy(HistorySyncStrategy):
         super().__init__(
             HistorySyncConfig(
                 provider="simkl",
-                client_id_attr="simkl_client_id",
-                client_secret_attr="simkl_client_secret",
                 has_required_fields=has_required_simkl_fields,
                 build_payload=build_simkl_payload,
+                client_id_attr="simkl_client_id",
+                client_secret_attr="simkl_client_secret",
+            )
+        )
+
+
+class PublicMetaDbSyncStrategy(HistorySyncStrategy):
+    def __init__(self) -> None:
+        super().__init__(
+            HistorySyncConfig(
+                provider="publicmetadb",
+                has_required_fields=has_required_publicmetadb_fields,
+                build_payload=build_publicmetadb_payload,
+                settings_required=False,
+                include_history_id_on_delete=True,
             )
         )
 
@@ -994,6 +1019,34 @@ def build_simkl_payload(
     )
 
 
+def build_publicmetadb_payload(
+    media_item: MediaItem,
+    episode_item: EpisodeItem | None,
+    watched_at: datetime,
+    rating: float | None,
+) -> dict[str, object] | None:
+    tmdb_id = media_item.tmdb_id
+    if not tmdb_id:
+        return None
+    payload: dict[str, object] = {
+        "tmdb_id": tmdb_id,
+        "watched_at": watched_at.isoformat(),
+    }
+    if episode_item:
+        if episode_item.season_number is None or episode_item.episode_number is None:
+            return None
+        payload["media_type"] = "tv"
+        payload["season_number"] = episode_item.season_number
+        payload["episode_number"] = episode_item.episode_number
+    else:
+        if media_item.media_type not in ("movie", "anime"):
+            return None
+        payload["media_type"] = "movie"
+    if rating is not None:
+        payload["rating"] = rating
+    return payload
+
+
 class AniListSyncStrategy(SyncStrategy):
     provider = "anilist"
 
@@ -1184,6 +1237,7 @@ SYNC_STRATEGY_REGISTRY = SyncStrategyRegistry(
         LetterboxdSyncStrategy(),
         TraktSyncStrategy(),
         SimklSyncStrategy(),
+        PublicMetaDbSyncStrategy(),
         StremioSyncStrategy(),
         AniListSyncStrategy(),
     ]

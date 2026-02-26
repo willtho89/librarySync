@@ -78,6 +78,30 @@
     <div class="card">
       <div class="card-header">
         <div>
+          <h3 class="section-title">PublicMetaDB</h3>
+          <p class="section-subtitle">Community-maintained external ID mappings.</p>
+        </div>
+      </div>
+      <form id="publicmetadb-form" class="space-y-4">
+        <label class="inline-control">
+          <input type="checkbox" name="enabled" />
+          <span>Enable PublicMetaDB metadata</span>
+        </label>
+        <label class="field">
+          <span>PublicMetaDB API Key</span>
+          <input class="input" type="text" name="api_key" autocomplete="off" />
+        </label>
+        <p class="helper-text">
+          This key is shared with the PublicMetaDB sync provider if configured.
+        </p>
+        <button class="btn btn-secondary" type="submit">Save</button>
+        <p id="publicmetadb-message" class="form-message" role="status" hidden></p>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
           <h3 class="section-title">TVMaze</h3>
           <p class="section-subtitle">No API key required.</p>
         </div>

@@ -32,6 +32,7 @@ class Settings:
     letterboxd_rate_limit_per_minute: int
     stremio_rate_limit_per_minute: int
     anilist_rate_limit_per_minute: int
+    publicmetadb_rate_limit_per_minute: int
     tmdb_rate_limit_per_minute: int
     tvdb_rate_limit_per_minute: int
     enable_dashboard_stats: bool
@@ -79,6 +80,9 @@ def load_settings() -> Settings:
         ),
         anilist_rate_limit_per_minute=int(
             _get_env("LIBRARYSYNC_ANILIST_RATE_LIMIT_PER_MINUTE", "90") or "90"
+        ),
+        publicmetadb_rate_limit_per_minute=int(
+            _get_env("LIBRARYSYNC_PUBLICMETADB_RATE_LIMIT_PER_MINUTE", "120") or "120"
         ),
         tmdb_rate_limit_per_minute=int(
             _get_env("LIBRARYSYNC_TMDB_RATE_LIMIT_PER_MINUTE", "150") or "150"

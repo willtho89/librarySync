@@ -19,6 +19,9 @@ function formatProviderLabel(value) {
   if (normalized === "imdb") {
     return "IMDb";
   }
+  if (normalized === "publicmetadb") {
+    return "PublicMetaDB";
+  }
   if (normalized === "kitsu") {
     return "Kitsu";
   }

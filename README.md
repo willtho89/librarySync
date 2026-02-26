@@ -12,8 +12,9 @@ my watch history in sync.
 - Manual watch history (add/update/delete) with optional downstream deletion.
 - Ratings support synced where supported.
 - Imports from Trakt, SIMKL, Letterboxd, and Stremio (quick import + import all).
+- Sync providers include Trakt, SIMKL, Letterboxd, Stremio, AniList, and PublicMetaDB.
 - Outbox-based delivery with retries and per-user rate limiting.
-- Metadata lookup and enrichment with TMDB, TVDB, IMDb, TVMaze, Kitsu, MyAnimeList.
+- Metadata lookup and enrichment with TMDB, TVDB, IMDb, TVMaze, Kitsu, MyAnimeList, PublicMetaDB.
 - Minimal web UI (static HTML + JS).
 
 ## Quick Start (Docker Compose)
@@ -73,6 +74,7 @@ All defaults below are from `.env.example`.
 - `LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE` (default `60`).
 - `LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE` (default `30`).
 - `LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE` (default `120`).
+- `LIBRARYSYNC_PUBLICMETADB_RATE_LIMIT_PER_MINUTE` (default `120`).
 - `LIBRARYSYNC_TMDB_RATE_LIMIT_PER_MINUTE` (default `150`).
 - `LIBRARYSYNC_TVDB_RATE_LIMIT_PER_MINUTE` (default `150`).
 

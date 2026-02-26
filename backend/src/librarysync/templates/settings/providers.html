@@ -224,6 +224,41 @@
          <p id="aiostreams-message" class="form-message" role="status" hidden></p>
        </form>
      </div>
+
+     <div class="card">
+       <div class="card-header">
+         <div>
+           <h3 class="section-title">PublicMetaDB</h3>
+           <p class="section-subtitle">Sync watched history and ratings.</p>
+         </div>
+         <span id="publicmetadb-sync-status" class="status-pill">Not connected</span>
+       </div>
+       <form id="publicmetadb-sync-form" class="space-y-4">
+         <label class="inline-control">
+           <input type="checkbox" name="enabled" />
+           <span>Enable PublicMetaDB sync</span>
+         </label>
+         <label class="field">
+           <span>PublicMetaDB API Key (optional if already set in Metadata)</span>
+           <input class="input" type="password" name="api_key" autocomplete="off" />
+         </label>
+         <div class="flex flex-wrap gap-2">
+           <button class="btn btn-primary" type="submit">Save</button>
+           <button type="button" id="publicmetadb-sync-test" class="btn btn-secondary">
+             Test
+           </button>
+           <button
+             type="button"
+             id="publicmetadb-sync-disconnect"
+             class="btn btn-ghost"
+             hidden
+           >
+             Disable sync
+           </button>
+         </div>
+         <p id="publicmetadb-sync-message" class="form-message" role="status" hidden></p>
+       </form>
+     </div>
    </div>
   <p class="text-xs text-muted">
     Secrets are encrypted at rest and stored in the integration secrets table. Config fields

@@ -32,6 +32,7 @@ LOCAL_PROVIDER = "local"
 
 PROVIDER_ID_COLUMNS = {
     "tmdb": "tmdb_id",
+    "publicmetadb": "tmdb_id",
     "tvdb": "tvdb_id",
     "tvmaze": "tvmaze_id",
     "kitsu": "kitsu_id",

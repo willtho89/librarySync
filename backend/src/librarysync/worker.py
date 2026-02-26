@@ -71,6 +71,9 @@ async def _run_mode_loop(mode: ModeConfig, worker_index: int) -> None:
         processed = 0
         try:
             processed = await mode.handler()
+        except asyncio.CancelledError:
+            logger.info("Stopping %s worker %s", mode.name, worker_index)
+            raise
         except Exception:
             logger.exception("%s processing failed", mode.name)
         delay = mode.idle_delay if processed == 0 else mode.busy_delay
@@ -90,11 +93,20 @@ async def main() -> None:
         concurrency = _mode_concurrency(mode.name)
         for idx in range(concurrency):
             tasks.append(asyncio.create_task(_run_mode_loop(mode, idx)))
-    await asyncio.gather(*tasks)
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def run() -> None:
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("librarysync worker stopped")
 
 
 if __name__ == "__main__":

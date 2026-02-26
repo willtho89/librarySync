@@ -37,6 +37,7 @@ class RateLimiter:
             "letterboxd": settings.letterboxd_rate_limit_per_minute,
             "stremio": settings.stremio_rate_limit_per_minute,
             "anilist": settings.anilist_rate_limit_per_minute,
+            "publicmetadb": settings.publicmetadb_rate_limit_per_minute,
         }.items():
             if limit <= 0:
                 continue

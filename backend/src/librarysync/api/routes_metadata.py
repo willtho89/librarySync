@@ -15,6 +15,7 @@ from librarysync.connectors.metadata.base import (
     MediaCandidate,
     ProviderContext,
 )
+from librarysync.connectors.metadata.publicmetadb import PublicMetaDbMetadataProvider
 from librarysync.connectors.metadata.tmdb import TmdbMetadataProvider
 from librarysync.connectors.metadata.tvdb import TvdbMetadataProvider
 from librarysync.core.metadata_enrichment import apply_refresh_candidate
@@ -26,6 +27,7 @@ from librarysync.core.metadata_providers import (
     MetadataProviderService,
     MyAnimeListProviderSettings,
     ProviderState,
+    PublicMetaDbProviderSettings,
     TmdbProviderSettings,
     TvdbProviderSettings,
     TvmazeProviderSettings,
@@ -52,6 +54,7 @@ PROVIDER_LABELS = {
     "kitsu": "Kitsu",
     "tvmaze": "TVMaze",
     "imdb": "IMDb",
+    "publicmetadb": "PublicMetaDB",
     "myanimelist": "MyAnimeList",
     "anilist": "AniList",
 }
@@ -61,6 +64,7 @@ PROVIDER_UNAVAILABLE_DETAILS = {
     "kitsu": "Kitsu provider is not enabled",
     "tvmaze": "TVMaze provider is not enabled",
     "imdb": "IMDb provider is not enabled",
+    "publicmetadb": "PublicMetaDB provider is not enabled or missing API key",
     "myanimelist": "MyAnimeList provider is not enabled",
     "anilist": "AniList provider is not enabled",
 }
@@ -213,6 +217,13 @@ async def _maybe_validate_tvdb(payload: BaseModel) -> None:
         await _validate_tvdb_credentials(payload.api_key, payload.pin, payload.language)
 
 
+async def _maybe_validate_publicmetadb(payload: BaseModel) -> None:
+    if not isinstance(payload, PublicMetaDbProviderSettings):
+        return
+    if "api_key" in payload.model_fields_set and payload.api_key:
+        await _validate_publicmetadb_credentials(payload.api_key)
+
+
 def _candidate_imdb_id(candidate: MetadataLookupCandidate) -> str | None:
     imdb_id = candidate.imdb_id
     if not imdb_id and candidate.provider == "imdb":
@@ -321,6 +332,8 @@ def _candidate_ids(candidate: MetadataLookupCandidate) -> dict[str, str]:
     provider_id = candidate.provider_item_id
     if provider_id:
         if candidate.provider == "tmdb":
+            ids["tmdb_id"] = provider_id
+        elif candidate.provider == "publicmetadb":
             ids["tmdb_id"] = provider_id
         elif candidate.provider == "tvdb":
             ids["tvdb_id"] = provider_id
@@ -721,6 +734,37 @@ async def test_tvdb_provider(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await _test_provider("tvdb", current_user, db)
+
+
+@router.post(
+    "/providers/publicmetadb",
+    summary="Save PublicMetaDB provider settings",
+    description="Enable/disable PublicMetaDB and store API key settings.",
+)
+async def save_publicmetadb_provider(
+    payload: PublicMetaDbProviderSettings,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return await _save_provider_settings(
+        "publicmetadb",
+        payload,
+        current_user,
+        db,
+        validator=_maybe_validate_publicmetadb,
+    )
+
+
+@router.post(
+    "/providers/publicmetadb/test",
+    summary="Test PublicMetaDB provider",
+    description="Validate the stored PublicMetaDB API key.",
+)
+async def test_publicmetadb_provider(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return await _test_provider("publicmetadb", current_user, db)
 
 
 @router.post(
@@ -1353,6 +1397,30 @@ async def _validate_tvdb_credentials(api_key: str, pin: str | None, language: st
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TVDB error: {exc}"
+        ) from exc
+
+
+async def _validate_publicmetadb_credentials(api_key: str) -> None:
+    try:
+        provider = PublicMetaDbMetadataProvider.from_settings(
+            {},
+            {"api_key": api_key},
+            ProviderContext(user_id="validation", include_adult=False),
+        )
+        await provider.validate_credentials()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in {401, 403}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="PublicMetaDB API key is invalid",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"PublicMetaDB error: {exc}"
+        ) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="PublicMetaDB request failed",
         ) from exc
 
 

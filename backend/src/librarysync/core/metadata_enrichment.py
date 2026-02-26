@@ -765,6 +765,8 @@ def _extract_candidate_ids(candidate: MediaCandidate) -> dict[str, str]:
     ids: dict[str, str] = {}
     if candidate.provider == "tmdb" and candidate.provider_id:
         ids["tmdb_id"] = candidate.provider_id
+    if candidate.provider == "publicmetadb" and candidate.provider_id:
+        ids["tmdb_id"] = candidate.provider_id
     if candidate.provider == "tvdb" and candidate.provider_id:
         ids["tvdb_id"] = candidate.provider_id
     if candidate.provider == "tvmaze" and candidate.provider_id:

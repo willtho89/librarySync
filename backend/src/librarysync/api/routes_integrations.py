@@ -41,6 +41,11 @@ from librarysync.connectors.services.letterboxd import (
     extract_watchlist_list_id,
     has_required_letterboxd_fields,
 )
+from librarysync.connectors.services.publicmetadb import (
+    PublicMetaDbClient,
+    PublicMetaDbError,
+    has_required_publicmetadb_fields,
+)
 from librarysync.connectors.services.simkl import (
     SIMKL_OAUTH_AUTHORIZE_URL,
     SimklClient,
@@ -80,6 +85,13 @@ from librarysync.core.import_control import (
 )
 from librarysync.core.import_schedule import normalize_interval_seconds
 from librarysync.core.integrations import load_integration_with_secrets
+from librarysync.core.publicmetadb import (
+    PUBLICMETADB_METADATA_ENABLED_KEY,
+    is_publicmetadb_metadata_enabled,
+    is_publicmetadb_sync_enabled,
+    set_publicmetadb_metadata_enabled,
+    set_publicmetadb_sync_enabled,
+)
 from librarysync.core.security import decrypt_value, encrypt_value
 from librarysync.core.watchlist import WATCHLIST_IMPORT_KEY, parse_watchlist_import_config
 from librarysync.db.models import Integration, IntegrationSecret, User
@@ -126,6 +138,11 @@ class AIOStreamsConfig(BaseModel):
     username: str | None = None
 
 
+class PublicMetaDbSyncConfig(BaseModel):
+    enabled: bool = True
+    api_key: str | None = None
+
+
 class QuickImportScheduleIn(BaseModel):
     interval_seconds: int | None = None
 
@@ -157,6 +174,16 @@ def _normalize_cookies(cookies: dict[str, str] | None) -> dict[str, str] | None:
         if key_str and value_str:
             cleaned[key_str] = value_str
     return cleaned
+
+
+def _publicmetadb_status(config: dict[str, object], has_secrets: bool) -> str:
+    if has_secrets and (
+        is_publicmetadb_sync_enabled(config) or is_publicmetadb_metadata_enabled(config)
+    ):
+        return "connected"
+    if has_secrets:
+        return "configured"
+    return "disconnected"
 
 
 def _merge_watchlist_import_config(
@@ -1011,6 +1038,137 @@ async def anilist_disconnect(
         "anilist",
         cleanup=_clear_anilist_profile,
     )
+
+
+@router.post(
+    "/publicmetadb",
+    summary="Save PublicMetaDB sync settings",
+    description="Enable/disable PublicMetaDB sync and optionally store an API key.",
+)
+async def save_publicmetadb_sync(
+    payload: PublicMetaDbSyncConfig,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    integration = await _get_integration(db, current_user.id, "publicmetadb")
+    if not integration:
+        integration = Integration(
+            user_id=current_user.id,
+            provider="publicmetadb",
+            status="disconnected",
+        )
+    config = dict(integration.config or {})
+    sync_enabled = bool(payload.enabled)
+    set_publicmetadb_sync_enabled(config, sync_enabled)
+    if sync_enabled and PUBLICMETADB_METADATA_ENABLED_KEY not in config:
+        # First enable defaults to all PublicMetaDB services.
+        set_publicmetadb_metadata_enabled(config, True)
+    integration.config = config
+    db.add(integration)
+    await db.flush()
+
+    api_key = _normalize_optional(payload.api_key)
+    if api_key:
+        client = PublicMetaDbClient()
+        try:
+            await client.validate_credentials(api_key)
+        except PublicMetaDbError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        await _upsert_integration_secret(
+            db,
+            integration,
+            {"api_key": api_key},
+        )
+
+    result = await db.execute(
+        select(IntegrationSecret.integration_id).where(
+            IntegrationSecret.integration_id == integration.id
+        )
+    )
+    has_secrets = result.scalar_one_or_none() is not None
+    if is_publicmetadb_sync_enabled(config) and not has_secrets:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PublicMetaDB API key is required when sync is enabled",
+        )
+
+    integration.status = _publicmetadb_status(config, has_secrets)
+    db.add(integration)
+    await db.commit()
+    return _integration_to_out(integration, has_secrets).model_dump()
+
+
+@router.post(
+    "/publicmetadb/test",
+    summary="Test PublicMetaDB sync credentials",
+    description="Validate the stored PublicMetaDB API key for sync usage.",
+)
+async def test_publicmetadb_sync(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    integration, secret_data = await _load_integration(db, current_user.id, "publicmetadb")
+    if not integration or not secret_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PublicMetaDB credentials are missing",
+        )
+    if not has_required_publicmetadb_fields(secret_data):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PublicMetaDB credentials are incomplete",
+        )
+    api_key = _normalize_optional(str(secret_data.get("api_key") or ""))
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PublicMetaDB API key is missing",
+        )
+    client = PublicMetaDbClient()
+    try:
+        await client.validate_credentials(api_key)
+    except PublicMetaDbError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return {"status": "ok"}
+
+
+@router.post(
+    "/publicmetadb/disconnect",
+    summary="Disable PublicMetaDB sync",
+    description="Disable PublicMetaDB sync. Keeps API key if metadata is still enabled.",
+)
+async def disconnect_publicmetadb_sync(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    integration = await _get_integration(db, current_user.id, "publicmetadb")
+    if not integration:
+        return {"status": "ok"}
+    config = dict(integration.config or {})
+    set_publicmetadb_sync_enabled(config, False)
+    integration.config = config
+
+    if not is_publicmetadb_metadata_enabled(config):
+        await _delete_integration_secret(db, integration)
+        has_secrets = False
+    else:
+        result = await db.execute(
+            select(IntegrationSecret.integration_id).where(
+                IntegrationSecret.integration_id == integration.id
+            )
+        )
+        has_secrets = result.scalar_one_or_none() is not None
+
+    integration.status = _publicmetadb_status(config, has_secrets)
+    db.add(integration)
+    await db.commit()
+    return {"status": "ok"}
 
 
 @router.post(

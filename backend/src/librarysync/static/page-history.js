@@ -336,12 +336,20 @@ function renderHistorySyncButtons(integrations) {
   }
   const note = document.getElementById("history-sync-note");
   container.innerHTML = "";
-  const supported = new Set(["letterboxd", "trakt", "simkl", "stremio"]);
+  const supported = new Set([
+    "letterboxd",
+    "trakt",
+    "simkl",
+    "stremio",
+    "publicmetadb",
+  ]);
   const enabled = (integrations || []).filter(
     (integration) =>
       integration &&
       supported.has(integration.provider) &&
-      isIntegrationConnected(integration)
+      (integration.provider === "publicmetadb"
+        ? isPublicMetaDbHistorySyncEnabled(integration)
+        : isIntegrationConnected(integration))
   );
   if (!enabled.length) {
     container.hidden = true;
@@ -371,6 +379,19 @@ function renderHistorySyncButtons(integrations) {
     note.hidden = false;
   }
   updateHistorySyncControls();
+}
+
+function isPublicMetaDbHistorySyncEnabled(integration) {
+  if (!integration || !integration.has_secrets) {
+    return false;
+  }
+  const config = integration.config && typeof integration.config === "object"
+    ? integration.config
+    : {};
+  if (Object.prototype.hasOwnProperty.call(config, "sync_enabled")) {
+    return !!config.sync_enabled;
+  }
+  return !!config.enabled;
 }
 
 async function handleHistorySync(provider) {
@@ -584,6 +605,18 @@ async function loadHistory() {
       const shortError =
         rawError.length > 120 ? `${rawError.slice(0, 120)}...` : rawError;
       detailParts.push(`Stremio error: ${shortError}`);
+    }
+    const publicmetadbStatus = item.publicmetadb_status;
+    const publicmetadbSucceeded = publicmetadbStatus === "succeeded";
+    if (publicmetadbStatus) {
+      const statusLabel = publicmetadbStatus.replace(/_/g, " ");
+      detailParts.push(`PublicMetaDB ${statusLabel}`);
+    }
+    if (!publicmetadbSucceeded && item.publicmetadb_last_error) {
+      const rawError = String(item.publicmetadb_last_error);
+      const shortError =
+        rawError.length > 120 ? `${rawError.slice(0, 120)}...` : rawError;
+      detailParts.push(`PublicMetaDB error: ${shortError}`);
     }
     detail.textContent = detailParts.join(" · ");
 

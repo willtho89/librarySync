@@ -14,10 +14,19 @@ from librarysync.connectors.metadata.base import MetadataProvider, ProviderConte
 from librarysync.connectors.metadata.imdb import ImdbMetadataProvider
 from librarysync.connectors.metadata.kitsu import KitsuMetadataProvider
 from librarysync.connectors.metadata.myanimelist import MyAnimeListMetadataProvider
+from librarysync.connectors.metadata.publicmetadb import PublicMetaDbMetadataProvider
 from librarysync.connectors.metadata.tmdb import TmdbMetadataProvider
 from librarysync.connectors.metadata.tvdb import TvdbMetadataProvider
 from librarysync.connectors.metadata.tvmaze import TvmazeMetadataProvider
 from librarysync.core.integrations import load_integration_with_secrets
+from librarysync.core.publicmetadb import (
+    PUBLICMETADB_PROVIDER,
+    PUBLICMETADB_SYNC_ENABLED_KEY,
+    is_publicmetadb_metadata_enabled,
+    is_publicmetadb_sync_enabled,
+    set_publicmetadb_metadata_enabled,
+    set_publicmetadb_sync_enabled,
+)
 from librarysync.core.security import encrypt_value
 from librarysync.db.models import Integration, IntegrationSecret, User
 
@@ -77,6 +86,16 @@ class MyAnimeListProviderSettings(BaseModel):
 
 class AniListProviderSettings(BaseModel):
     enabled: bool = True
+
+
+class PublicMetaDbProviderSettings(BaseModel):
+    enabled: bool = True
+    api_key: str | None = None
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _normalize_fields(cls, value: Any) -> Any:
+        return _normalize_optional_str(value)
 
 
 @dataclass(frozen=True)
@@ -187,6 +206,28 @@ def _tmdb_config_adapter(config: dict[str, Any], context: ProviderContext) -> di
     return normalized
 
 
+def _metadata_enabled_for_provider(provider: str, config: dict[str, Any]) -> bool:
+    if provider == PUBLICMETADB_PROVIDER:
+        return is_publicmetadb_metadata_enabled(config)
+    return bool(config.get("enabled"))
+
+
+def _integration_status_for_provider(
+    provider: str,
+    config: dict[str, Any],
+    has_credentials: bool,
+) -> str:
+    if provider == PUBLICMETADB_PROVIDER:
+        if has_credentials and (
+            is_publicmetadb_metadata_enabled(config) or is_publicmetadb_sync_enabled(config)
+        ):
+            return "connected"
+        if has_credentials:
+            return "configured"
+        return "disabled"
+    return "enabled" if _metadata_enabled_for_provider(provider, config) else "disabled"
+
+
 METADATA_PROVIDER_REGISTRY = MetadataProviderRegistry(
     [
         ProviderDefinition(
@@ -204,6 +245,14 @@ METADATA_PROVIDER_REGISTRY = MetadataProviderRegistry(
             settings_model=TvdbProviderSettings,
             provider_class=TvdbMetadataProvider,
             secret_fields=frozenset({"api_key", "pin"}),
+            required_secrets=frozenset({"api_key"}),
+            secret_update_fields=frozenset({"api_key"}),
+        ),
+        ProviderDefinition(
+            provider="publicmetadb",
+            settings_model=PublicMetaDbProviderSettings,
+            provider_class=PublicMetaDbMetadataProvider,
+            secret_fields=frozenset({"api_key"}),
             required_secrets=frozenset({"api_key"}),
             secret_update_fields=frozenset({"api_key"}),
         ),
@@ -274,7 +323,7 @@ class MetadataProviderService:
         for definition in self._registry.list():
             integration = integrations.get(definition.provider)
             config = integration.config if integration and integration.config else {}
-            enabled = bool(config.get("enabled")) if integration else False
+            enabled = _metadata_enabled_for_provider(definition.provider, config)
             has_credentials = False
             if integration:
                 has_credentials = integration.id in secret_ids or not definition.uses_secrets()
@@ -306,9 +355,15 @@ class MetadataProviderService:
 
         update = definition.extract_update(payload)
         config = dict(integration.config or {})
-        config.update(update.config)
+        if provider == PUBLICMETADB_PROVIDER:
+            metadata_enabled = bool(update.config.get("enabled"))
+            set_publicmetadb_metadata_enabled(config, metadata_enabled)
+            if metadata_enabled and PUBLICMETADB_SYNC_ENABLED_KEY not in config:
+                # First enable defaults to all PublicMetaDB services.
+                set_publicmetadb_sync_enabled(config, True)
+        else:
+            config.update(update.config)
         integration.config = config
-        integration.status = "enabled" if config.get("enabled") else "disabled"
         self._db.add(integration)
         await self._db.flush()
 
@@ -346,10 +401,12 @@ class MetadataProviderService:
             else:
                 has_credentials = True
 
+        integration.status = _integration_status_for_provider(provider, config, has_credentials)
+        self._db.add(integration)
         await self._db.commit()
         return ProviderState(
             provider=provider,
-            enabled=bool(config.get("enabled")),
+            enabled=_metadata_enabled_for_provider(provider, config),
             config=config,
             has_credentials=has_credentials,
         )
@@ -363,7 +420,7 @@ class MetadataProviderService:
         )
         if not integration or not integration.config:
             return None
-        if not integration.config.get("enabled"):
+        if not _metadata_enabled_for_provider(provider, dict(integration.config or {})):
             return None
         if definition.uses_secrets() and not secret_data:
             return None
@@ -414,7 +471,7 @@ async def load_random_provider(
     candidates: list[str] = []
     for integration, secret_id in result.all():
         config = integration.config if integration and integration.config else {}
-        if not config.get("enabled"):
+        if not _metadata_enabled_for_provider(provider, config):
             continue
         if definition.uses_secrets() and not secret_id:
             continue
@@ -423,7 +480,9 @@ async def load_random_provider(
         return None
     user_id = random.choice(candidates)
     integration, secret_data = await load_integration_with_secrets(db, user_id, provider)
-    if not integration or not integration.config or not integration.config.get("enabled"):
+    if not integration or not integration.config:
+        return None
+    if not _metadata_enabled_for_provider(provider, dict(integration.config or {})):
         return None
     if definition.uses_secrets() and not secret_data:
         return None

@@ -479,7 +479,7 @@ async def _check_series_continuity(
     candidates: list[MediaCandidate],
 ) -> MediaCandidate | None:
     """
-    Check if the user has previously watched an earlier episode of a show matching one of the candidates.
+    Check if the user has watched an earlier episode of a show matching one of the candidates.
     This helps disambiguate when there are multiple shows with the same or similar titles.
     
     For example, if watching "Fallout S02E08" and user previously watched "Fallout S02E07",
@@ -585,7 +585,7 @@ async def _select_candidate_for_entry(
         scoped = candidates
     
     # For TV shows, check if user has watched a previous episode from one of the candidates
-    if entry.media_type == "tv" and entry.season_number is not None and entry.episode_number is not None:
+    if entry.media_type == "tv" and entry.season_number is not None and entry.episode_number is not None:  #noqa: E501
         continuity_candidate = await _check_series_continuity(
             db, user_id, entry, scoped
         )

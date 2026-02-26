@@ -21,6 +21,7 @@ function formatProvider(value) {
     letterboxd: "Letterboxd",
     aiostreams: "AIOStreams",
     anilist: "AniList",
+    publicmetadb: "PublicMetaDB",
     manual: "Manual",
     internal: "Internal",
   };

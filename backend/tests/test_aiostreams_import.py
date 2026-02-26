@@ -147,7 +147,6 @@ class TestAIOStreamsLookup(unittest.TestCase):
         ]
         
         # Mock database to return a show with matching imdb_id that user has watched before
-        from sqlalchemy.engine import Result
         mock_result = MagicMock()
         
         # Create mock MediaItem for the TV show the user has watched

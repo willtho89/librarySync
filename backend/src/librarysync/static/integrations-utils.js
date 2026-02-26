@@ -28,5 +28,8 @@ function formatIntegrationName(value) {
   if (normalized === "anilist") {
     return "AniList";
   }
+  if (normalized === "publicmetadb") {
+    return "PublicMetaDB";
+  }
   return normalized.toUpperCase();
 }

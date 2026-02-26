@@ -52,6 +52,7 @@ from librarysync.jobs.anilist_import import AniListImportStrategy
 from librarysync.jobs.import_base import ImportContext, ImportStrategyRegistry
 from librarysync.jobs.letterboxd_import import LetterboxdImportStrategy
 from librarysync.jobs.merge_history import enqueue_merge_history
+from librarysync.jobs.publicmetadb_import import PublicMetaDbImportStrategy
 from librarysync.jobs.simkl_import import SimklImportStrategy
 from librarysync.jobs.stremio_import import StremioImportStrategy
 from librarysync.jobs.trakt_import import TraktImportStrategy
@@ -88,6 +89,7 @@ def _build_registry(lookback_days: int) -> ImportStrategyRegistry:
             LetterboxdImportStrategy(lookback_days=lookback_days),
             TraktImportStrategy(lookback_days=lookback_days),
             SimklImportStrategy(lookback_days=lookback_days),
+            PublicMetaDbImportStrategy(lookback_days=lookback_days),
             AniListImportStrategy(lookback_days=lookback_days),
             StremioImportStrategy(lookback_days=lookback_days),
             AIOStreamsImportStrategy(lookback_days=lookback_days),

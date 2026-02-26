@@ -2,7 +2,29 @@
   "version": "0.8.3",
   "configurations": [
     {
-      "name": "API: Uvicorn",
+      "name": "API: Uvicorn (Debug Stable)",
+      "type": "python",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "librarysync.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ],
+      "cwd": "${workspaceFolder}/backend",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/backend/src",
+        "DATABASE_URL": "postgresql+psycopg://librarysync:librarysync@localhost:5432/librarysync"
+      },
+      "justMyCode": true,
+      "subProcess": true,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "API: Uvicorn (Reload)",
       "type": "python",
       "request": "launch",
       "module": "uvicorn",
@@ -43,7 +65,7 @@
   "compounds": [
     {
       "name": "API + Worker",
-      "configurations": ["API: Uvicorn", "Worker: All"],
+      "configurations": ["API: Uvicorn (Debug Stable)", "Worker: All"],
       "stopAll": true
     }
   ]
