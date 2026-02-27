@@ -28,22 +28,7 @@ class RateLimiter:
 
     @classmethod
     def from_settings(cls) -> "RateLimiter":
-        configs: dict[str, RateLimitConfig] = {}
-        for provider, limit in {
-            "tmdb": settings.tmdb_rate_limit_per_minute,
-            "tvdb": settings.tvdb_rate_limit_per_minute,
-            "trakt": settings.trakt_rate_limit_per_minute,
-            "simkl": settings.simkl_rate_limit_per_minute,
-            "letterboxd": settings.letterboxd_rate_limit_per_minute,
-            "stremio": settings.stremio_rate_limit_per_minute,
-            "anilist": settings.anilist_rate_limit_per_minute,
-            "publicmetadb": settings.publicmetadb_rate_limit_per_minute,
-        }.items():
-            if limit <= 0:
-                continue
-            refill = limit / 60.0
-            configs[provider] = RateLimitConfig(capacity=float(limit), refill_per_second=refill)
-        return cls(configs)
+        return cls(_build_rate_limit_configs())
 
     async def try_acquire(
         self,
@@ -90,6 +75,51 @@ class RateLimiter:
             bucket.last_refill_at = now
             bucket.updated_at = now
             return RateLimitDecision(True, None)
+
+
+def _per_minute_config(limit: int) -> RateLimitConfig | None:
+    if limit <= 0:
+        return None
+    refill = limit / 60.0
+    return RateLimitConfig(capacity=float(limit), refill_per_second=refill)
+
+
+def _window_config(max_requests: int, interval_seconds: float) -> RateLimitConfig | None:
+    if max_requests <= 0 or interval_seconds <= 0:
+        return None
+    return RateLimitConfig(
+        capacity=float(max_requests),
+        refill_per_second=float(max_requests) / interval_seconds,
+    )
+
+
+def _build_rate_limit_configs() -> dict[str, RateLimitConfig]:
+    configs: dict[str, RateLimitConfig] = {}
+    for provider, limit in {
+        "tmdb": settings.tmdb_rate_limit_per_minute,
+        "tvdb": settings.tvdb_rate_limit_per_minute,
+        "trakt": settings.trakt_rate_limit_per_minute,
+        "simkl": settings.simkl_rate_limit_per_minute,
+        "letterboxd": settings.letterboxd_rate_limit_per_minute,
+        "stremio": settings.stremio_rate_limit_per_minute,
+        "anilist": settings.anilist_rate_limit_per_minute,
+    }.items():
+        config = _per_minute_config(limit)
+        if config:
+            configs[provider] = config
+
+    publicmetadb_config = _window_config(
+        settings.publicmetadb_rate_limit_max_requests,
+        settings.publicmetadb_rate_limit_interval_seconds,
+    )
+    if publicmetadb_config:
+        configs["publicmetadb"] = publicmetadb_config
+    else:
+        fallback = _per_minute_config(settings.publicmetadb_rate_limit_per_minute)
+        if fallback:
+            configs["publicmetadb"] = fallback
+
+    return configs
 
 
 RATE_LIMITER = RateLimiter.from_settings()

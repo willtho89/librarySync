@@ -74,9 +74,14 @@ All defaults below are from `.env.example`.
 - `LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE` (default `60`).
 - `LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE` (default `30`).
 - `LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE` (default `120`).
-- `LIBRARYSYNC_PUBLICMETADB_RATE_LIMIT_PER_MINUTE` (default `120`).
 - `LIBRARYSYNC_TMDB_RATE_LIMIT_PER_MINUTE` (default `150`).
 - `LIBRARYSYNC_TVDB_RATE_LIMIT_PER_MINUTE` (default `150`).
+
+### PublicMetaDB Rate Limits (per user, request-window based)
+- `LIBRARYSYNC_PUBLICMETADB_RATE_LIMIT_MAX_REQUESTS` (default `300`).
+- `LIBRARYSYNC_PUBLICMETADB_RATE_LIMIT_INTERVAL_SECONDS` (default `10`).
+- `LIBRARYSYNC_PUBLICMETADB_BATCH_RATE_LIMIT_MAX_REQUESTS` (default `3`, reserved for `/api/batch` support).
+- `LIBRARYSYNC_PUBLICMETADB_BATCH_RATE_LIMIT_INTERVAL_SECONDS` (default `1`, reserved for `/api/batch` support).
 
 ### Batch Sizes (for batch-capable providers)
 - `LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE` (default `750`): Maximum number of items per Trakt batch request.

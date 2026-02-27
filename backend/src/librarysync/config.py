@@ -33,6 +33,10 @@ class Settings:
     stremio_rate_limit_per_minute: int
     anilist_rate_limit_per_minute: int
     publicmetadb_rate_limit_per_minute: int
+    publicmetadb_rate_limit_max_requests: int
+    publicmetadb_rate_limit_interval_seconds: float
+    publicmetadb_batch_rate_limit_max_requests: int
+    publicmetadb_batch_rate_limit_interval_seconds: float
     tmdb_rate_limit_per_minute: int
     tvdb_rate_limit_per_minute: int
     enable_dashboard_stats: bool
@@ -83,6 +87,18 @@ def load_settings() -> Settings:
         ),
         publicmetadb_rate_limit_per_minute=int(
             _get_env("LIBRARYSYNC_PUBLICMETADB_RATE_LIMIT_PER_MINUTE", "120") or "120"
+        ),
+        publicmetadb_rate_limit_max_requests=int(
+            _get_env("LIBRARYSYNC_PUBLICMETADB_RATE_LIMIT_MAX_REQUESTS", "300") or "300"
+        ),
+        publicmetadb_rate_limit_interval_seconds=float(
+            _get_env("LIBRARYSYNC_PUBLICMETADB_RATE_LIMIT_INTERVAL_SECONDS", "10") or "10"
+        ),
+        publicmetadb_batch_rate_limit_max_requests=int(
+            _get_env("LIBRARYSYNC_PUBLICMETADB_BATCH_RATE_LIMIT_MAX_REQUESTS", "3") or "3"
+        ),
+        publicmetadb_batch_rate_limit_interval_seconds=float(
+            _get_env("LIBRARYSYNC_PUBLICMETADB_BATCH_RATE_LIMIT_INTERVAL_SECONDS", "1") or "1"
         ),
         tmdb_rate_limit_per_minute=int(
             _get_env("LIBRARYSYNC_TMDB_RATE_LIMIT_PER_MINUTE", "150") or "150"
