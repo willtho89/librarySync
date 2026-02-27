@@ -470,7 +470,7 @@ wheels = [
 
 [[package]]
 name = "librarysync"
-version = "0.13.0"
+version = "0.13.1"
 source = { editable = "backend" }
 dependencies = [
     { name = "alembic" },
