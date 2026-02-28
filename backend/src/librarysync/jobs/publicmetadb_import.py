@@ -18,7 +18,7 @@ from librarysync.core.import_schedule import parse_datetime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.ratings import coerce_star_rating, normalize_ten_point_rating
-from librarysync.db.models import EpisodeItem, Integration, MediaItem
+from librarysync.db.models import EpisodeItem, Integration, MediaItem, WatchSync
 from librarysync.jobs.import_base import ImportContext, ImportResult, ImportStrategy
 from librarysync.jobs.import_pipeline import (
     BlacklistIds,
@@ -133,7 +133,17 @@ async def _import_for_integration(
 
     imported = 0
     for batch in chunked(entries, ENTRY_KEY_BATCH_SIZE):
-        candidates = [candidate for entry in batch if (candidate := _build_candidate(entry))]
+        existing_external_ids = await _load_existing_external_ids(
+            db,
+            integration.user_id,
+            [entry.external_id for entry in batch if entry.external_id],
+        )
+        candidates = [
+            candidate
+            for entry in batch
+            if not (entry.external_id and entry.external_id in existing_external_ids)
+            if (candidate := _build_candidate(entry))
+        ]
         if not candidates:
             continue
         imported += await process_import_candidates(
@@ -158,6 +168,23 @@ def _extract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(items, list):
         return []
     return [item for item in items if isinstance(item, dict)]
+
+
+async def _load_existing_external_ids(
+    db: AsyncSession,
+    user_id: str,
+    external_ids: list[str],
+) -> set[str]:
+    if not external_ids:
+        return set()
+    result = await db.execute(
+        select(WatchSync.external_id).where(
+            WatchSync.user_id == user_id,
+            WatchSync.provider == "publicmetadb",
+            WatchSync.external_id.in_(external_ids),
+        )
+    )
+    return {str(value) for value in result.scalars().all() if value}
 
 
 def _build_watch_entry(

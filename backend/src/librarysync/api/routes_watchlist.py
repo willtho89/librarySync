@@ -16,6 +16,7 @@ from librarysync.core.catalog_ordering import (
     CatalogOrderDirection,
     apply_catalog_ordering,
 )
+from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
     apply_combined_status_filter,
@@ -223,7 +224,7 @@ async def list_watchlist_sources_route(
     integrations_result = await db.execute(
         select(Integration).where(
             Integration.user_id == current_user.id,
-            Integration.provider.in_(["trakt", "simkl", "letterboxd"]),
+            Integration.provider.in_(["trakt", "simkl", "letterboxd", "publicmetadb"]),
             Integration.status != "disconnected",
         )
     )
@@ -249,6 +250,15 @@ async def list_watchlist_sources_route(
                 user_id=current_user.id,
                 provider="letterboxd",
                 name="Letterboxd watchlist",
+            )
+        elif integration.provider == "publicmetadb" and is_publicmetadb_sync_enabled(
+            dict(integration.config or {})
+        ):
+            await ensure_personal_watchlist_source(
+                db,
+                user_id=current_user.id,
+                provider="publicmetadb",
+                name="PublicMetaDB watchlist",
             )
     if integrations:
         await db.commit()

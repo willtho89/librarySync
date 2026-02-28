@@ -35,6 +35,7 @@ IMPORT_EVENT_PROVIDERS = {
     "aiostreams",
     "anilist",
     "letterboxd",
+    "publicmetadb",
     "simkl",
     "stremio",
     "trakt",
@@ -739,6 +740,7 @@ async def clear_watched_items(
                 (
                     "aiostreams_imported",
                     "anilist_imported",
+                    "publicmetadb_imported",
                     "trakt_imported",
                     "letterboxd_imported",
                     "simkl_imported",

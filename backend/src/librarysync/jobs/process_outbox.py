@@ -248,6 +248,12 @@ class PublicMetaDbOutboxHandler(OutboxHandler):
         if job.job_type == "push_rating":
             response_code, external_id = await _deliver_publicmetadb_rating(db, job)
             return DeliveryResult(response_code, external_id)
+        if job.job_type == "push_watchlist":
+            response_code, external_id = await _deliver_publicmetadb_watchlist(db, job)
+            return DeliveryResult(response_code, external_id)
+        if job.job_type == "remove_watchlist":
+            response_code, external_id = await _deliver_publicmetadb_watchlist_remove(db, job)
+            return DeliveryResult(response_code, external_id)
         if job.job_type == "update_history":
             response_code, external_id = await _deliver_publicmetadb_update(db, job)
             return DeliveryResult(response_code, external_id)
@@ -1550,6 +1556,30 @@ def _extract_publicmetadb_items(payload: object) -> list[dict[str, object]]:
     return [item for item in items if isinstance(item, dict)]
 
 
+def _extract_publicmetadb_watchlist_id(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("id", "watchlist_id"):
+        value = payload.get(key)
+        if isinstance(value, (str, int)):
+            cleaned = str(value).strip()
+            if cleaned:
+                return cleaned
+    item = payload.get("item")
+    if isinstance(item, dict):
+        return _extract_publicmetadb_watchlist_id(item)
+    return None
+
+
+def _extract_publicmetadb_watchlist_items(payload: object) -> list[dict[str, object]]:
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
 def _extract_publicmetadb_tmdb_id(payload: dict[str, object]) -> int | None:
     direct_id = _coerce_int(payload.get("tmdb_id"))
     if direct_id is not None:
@@ -1606,6 +1636,8 @@ def _match_publicmetadb_watched_item(
     if item_tmdb_id != tmdb_id:
         return False
     item_media_type = _coerce_str(item.get("media_type")) or "movie"
+    if item_media_type == "series":
+        item_media_type = "tv"
     if item_media_type != media_type:
         return False
     if media_type != "tv":
@@ -1613,6 +1645,21 @@ def _match_publicmetadb_watched_item(
     item_season = _coerce_int(item.get("season"))
     item_episode = _coerce_int(item.get("episode"))
     return item_season == season and item_episode == episode
+
+
+def _match_publicmetadb_watchlist_item(
+    item: dict[str, object],
+    *,
+    tmdb_id: int,
+    media_type: str,
+) -> bool:
+    item_tmdb_id = _coerce_int(item.get("tmdb_id"))
+    if item_tmdb_id != tmdb_id:
+        return False
+    item_media_type = _coerce_str(item.get("media_type")) or "movie"
+    if item_media_type == "series":
+        item_media_type = "tv"
+    return item_media_type == media_type
 
 
 async def _resolve_publicmetadb_watched_id(
@@ -1644,6 +1691,31 @@ async def _resolve_publicmetadb_watched_id(
     return None
 
 
+async def _resolve_publicmetadb_watchlist_id(
+    client: PublicMetaDbClient,
+    api_key: str,
+    *,
+    tmdb_id: int | None,
+    media_type: str,
+) -> str | None:
+    if tmdb_id is None:
+        return None
+    payload, _response_code = await client.list_watchlist(api_key)
+    for item in _extract_publicmetadb_watchlist_items(payload):
+        if not _match_publicmetadb_watchlist_item(
+            item,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+        ):
+            continue
+        item_id = item.get("id") or item.get("watchlist_id")
+        if isinstance(item_id, (str, int)):
+            cleaned = str(item_id).strip()
+            if cleaned:
+                return cleaned
+    return None
+
+
 async def _deliver_publicmetadb_watch(
     db: AsyncSession, job: OutboxJob
 ) -> tuple[int | None, str | None]:
@@ -1654,17 +1726,137 @@ async def _deliver_publicmetadb_watch(
     media_type = _normalize_publicmetadb_media_type(payload)
     season_number = _coerce_int(payload.get("season_number"))
     episode_number = _coerce_int(payload.get("episode_number"))
+    watched_at = _parse_optional_datetime(payload.get("watched_at"))
     if media_type == "tv" and (season_number is None or episode_number is None):
         raise ValueError("PublicMetaDB TV sync requires season_number and episode_number")
     client, api_key = await _load_publicmetadb_client(db, job.user_id)
+    if job.attempts > 1 and watched_at is not None:
+        try:
+            existing = await _find_publicmetadb_watched_for_retry(
+                client,
+                api_key,
+                tmdb_id=tmdb_id,
+                media_type=media_type,
+                season=season_number,
+                episode=episode_number,
+                watched_at=watched_at,
+            )
+            if existing:
+                existing_history_id, existing_watched_at = existing
+                await _sync_local_watched_at(db, payload, existing_watched_at)
+                return 200, existing_history_id
+        except PublicMetaDbError as exc:
+            logger.info("PublicMetaDB history precheck failed: %s", exc)
     response, response_code = await client.mark_watched(
         api_key,
         tmdb_id=tmdb_id,
         media_type=media_type,
         season=season_number,
         episode=episode_number,
+        watched_at=watched_at,
     )
     return response_code, _extract_publicmetadb_entry_id(response)
+
+
+def _parse_publicmetadb_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if cleaned.endswith("Z"):
+        cleaned = f"{cleaned[:-1]}+00:00"
+    return _parse_optional_datetime(cleaned)
+
+
+def _extract_publicmetadb_watched_at(item: dict[str, object]) -> datetime | None:
+    for key in ("watched_at", "watchedAt", "created_at", "createdAt"):
+        parsed = _parse_publicmetadb_datetime(item.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _same_utc_day(left: datetime, right: datetime) -> bool:
+    left_utc = left if left.tzinfo else left.replace(tzinfo=timezone.utc)
+    right_utc = right if right.tzinfo else right.replace(tzinfo=timezone.utc)
+    return left_utc.astimezone(timezone.utc).date() == right_utc.astimezone(timezone.utc).date()
+
+
+async def _find_publicmetadb_watched_for_retry(
+    client: PublicMetaDbClient,
+    api_key: str,
+    *,
+    tmdb_id: int,
+    media_type: str,
+    season: int | None,
+    episode: int | None,
+    watched_at: datetime,
+) -> tuple[str, datetime] | None:
+    payload, _response_code = await client.list_watched(api_key)
+    for item in _extract_publicmetadb_items(payload):
+        if not _match_publicmetadb_watched_item(
+            item,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            season=season,
+            episode=episode,
+        ):
+            continue
+        existing_watched_at = _extract_publicmetadb_watched_at(item)
+        if existing_watched_at is None or not _same_utc_day(existing_watched_at, watched_at):
+            continue
+        item_id = item.get("id")
+        if isinstance(item_id, (str, int)):
+            cleaned = str(item_id).strip()
+            if cleaned:
+                return cleaned, existing_watched_at
+    return None
+
+
+async def _deliver_publicmetadb_watchlist(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    tmdb_id = _extract_publicmetadb_tmdb_id(payload)
+    if tmdb_id is None:
+        raise ValueError("PublicMetaDB watchlist sync requires a TMDB ID")
+    media_type = _normalize_publicmetadb_media_type(payload)
+    client, api_key = await _load_publicmetadb_client(db, job.user_id)
+    response, response_code = await client.add_to_watchlist(
+        api_key,
+        tmdb_id=tmdb_id,
+        media_type=media_type,
+    )
+    return response_code, _extract_publicmetadb_watchlist_id(response)
+
+
+async def _deliver_publicmetadb_watchlist_remove(
+    db: AsyncSession, job: OutboxJob
+) -> tuple[int | None, str | None]:
+    payload = job.payload or {}
+    client, api_key = await _load_publicmetadb_client(db, job.user_id)
+    watchlist_id = _coerce_str(payload.get("watchlist_id") or payload.get("external_id"))
+    tmdb_id = _extract_publicmetadb_tmdb_id(payload)
+    media_type = _normalize_publicmetadb_media_type(payload)
+    if not watchlist_id:
+        watchlist_id = await _resolve_publicmetadb_watchlist_id(
+            client,
+            api_key,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+        )
+    if not watchlist_id:
+        return 200, None
+    try:
+        _response_payload, response_code = await client.delete_watchlist(api_key, watchlist_id)
+    except PublicMetaDbError as exc:
+        if exc.status_code == 404:
+            return 200, None
+        raise
+    return response_code, None
 
 
 async def _deliver_publicmetadb_update(
@@ -1677,6 +1869,7 @@ async def _deliver_publicmetadb_update(
     media_type = _normalize_publicmetadb_media_type(payload)
     season_number = _coerce_int(payload.get("season_number"))
     episode_number = _coerce_int(payload.get("episode_number"))
+    watched_at = _parse_optional_datetime(payload.get("watched_at"))
     if media_type == "tv" and (season_number is None or episode_number is None):
         raise ValueError("PublicMetaDB TV sync requires season_number and episode_number")
     if not history_id:
@@ -1702,6 +1895,7 @@ async def _deliver_publicmetadb_update(
         media_type=media_type,
         season=season_number,
         episode=episode_number,
+        watched_at=watched_at,
     )
     return response_code, _extract_publicmetadb_entry_id(response)
 

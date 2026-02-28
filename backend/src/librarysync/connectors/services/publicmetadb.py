@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -59,6 +60,7 @@ class PublicMetaDbClient:
         media_type: str,
         season: int | None = None,
         episode: int | None = None,
+        watched_at: datetime | None = None,
     ) -> tuple[dict[str, Any], int]:
         payload: dict[str, Any] = {
             "tmdb_id": tmdb_id,
@@ -68,6 +70,8 @@ class PublicMetaDbClient:
             payload["season"] = season
         if episode is not None:
             payload["episode"] = episode
+        if watched_at is not None:
+            payload["watched_at"] = watched_at.isoformat()
         response = await self._request(
             "POST",
             "/api/external/watched",
@@ -83,6 +87,49 @@ class PublicMetaDbClient:
         response = await self._request(
             "DELETE",
             f"/api/external/watched/{watched_id}",
+            api_key=api_key,
+        )
+        payload = self._parse_json(response)
+        return payload if isinstance(payload, dict) else {}, response.status_code
+
+    async def list_watchlist(
+        self,
+        api_key: str,
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "GET",
+            "/api/external/watchlist",
+            api_key=api_key,
+        )
+        payload = self._parse_json(response)
+        return payload if isinstance(payload, dict) else {}, response.status_code
+
+    async def add_to_watchlist(
+        self,
+        api_key: str,
+        *,
+        tmdb_id: int,
+        media_type: str,
+    ) -> tuple[dict[str, Any], int]:
+        payload: dict[str, Any] = {
+            "tmdb_id": tmdb_id,
+            "media_type": media_type,
+        }
+        response = await self._request(
+            "POST",
+            "/api/external/watchlist",
+            api_key=api_key,
+            json_body=payload,
+        )
+        parsed = self._parse_json(response)
+        return parsed if isinstance(parsed, dict) else {}, response.status_code
+
+    async def delete_watchlist(
+        self, api_key: str, watchlist_id: str
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "DELETE",
+            f"/api/external/watchlist/{watchlist_id}",
             api_key=api_key,
         )
         payload = self._parse_json(response)

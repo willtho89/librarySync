@@ -94,6 +94,51 @@ class TestPublicMetaDbImport(unittest.TestCase):
         self.assertEqual(len(args[3]), 1)
         self.assertTrue(args[3][0].entry_key.startswith("publicmetadb:"))
 
+    def test_import_skips_entries_already_synced_from_publicmetadb(self) -> None:
+        strategy = PublicMetaDbImportStrategy(lookback_days=7)
+        integration = Integration(
+            user_id="user-3",
+            provider="publicmetadb",
+            status="connected",
+            config={"sync_enabled": True},
+        )
+        now = datetime.now(timezone.utc)
+        payload = {
+            "items": [
+                {
+                    "id": "w_existing",
+                    "tmdb_id": 550,
+                    "media_type": "movie",
+                    "title": "Fight Club",
+                    "watched_at": now.isoformat(),
+                }
+            ]
+        }
+        with patch(
+            "librarysync.jobs.publicmetadb_import.load_integration_with_secrets",
+            new=AsyncMock(return_value=(integration, {"api_key": "pm-key"})),
+        ), patch(
+            "librarysync.jobs.publicmetadb_import.PublicMetaDbClient.list_watched",
+            new=AsyncMock(return_value=(payload, 200)),
+        ), patch(
+            "librarysync.jobs.publicmetadb_import._load_existing_external_ids",
+            new=AsyncMock(return_value={"w_existing"}),
+        ), patch(
+            "librarysync.jobs.publicmetadb_import.process_import_candidates",
+            new=AsyncMock(return_value=1),
+        ) as mocked_process:
+            result = asyncio.run(
+                strategy.import_for_integration(
+                    ImportContext(db=AsyncMock(), now=now),
+                    integration,
+                    requested_at=None,
+                )
+            )
+
+        self.assertTrue(result.attempted)
+        self.assertEqual(result.imported, 0)
+        mocked_process.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()
