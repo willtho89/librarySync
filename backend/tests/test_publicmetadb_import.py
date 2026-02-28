@@ -74,6 +74,9 @@ class TestPublicMetaDbImport(unittest.TestCase):
             "librarysync.jobs.publicmetadb_import.PublicMetaDbClient.list_watched",
             new=AsyncMock(return_value=(payload, 200)),
         ), patch(
+            "librarysync.jobs.publicmetadb_import._load_existing_external_ids",
+            new=AsyncMock(return_value=set()),
+        ), patch(
             "librarysync.jobs.publicmetadb_import.process_import_candidates",
             new=AsyncMock(return_value=1),
         ) as mocked_process:
