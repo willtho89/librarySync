@@ -535,12 +535,23 @@ async def _enqueue_personal_watchlist_resync(
         await enqueue_personal_watchlist_sync(db, watchlist_item, media_item)
 
 
+def _normalize_episode_external_id(field: str, value: str | None) -> str | None:
+    if not value:
+        return None
+    # IMDb IDs are treated as case-insensitive elsewhere (e.g. routes_history),
+    # so we normalize them to lowercase here to ensure consistent matching.
+    if field == "imdb_id":
+        return value.lower()
+    return value
+
+
 def _register_episode_external_ids(
     index: dict[str, dict[str, EpisodeItem]],
     episode: EpisodeItem,
 ) -> None:
     for field in EPISODE_EXTERNAL_ID_FIELDS:
-        value = getattr(episode, field, None)
+        raw_value = getattr(episode, field, None)
+        value = _normalize_episode_external_id(field, raw_value)
         if value:
             index.setdefault(field, {})[value] = episode
 
@@ -557,7 +568,8 @@ def _find_target_episode_match(
 
     matches: dict[str, EpisodeItem] = {}
     for field in EPISODE_EXTERNAL_ID_FIELDS:
-        value = getattr(source_episode, field, None)
+        raw_value = getattr(source_episode, field, None)
+        value = _normalize_episode_external_id(field, raw_value)
         if not value:
             continue
         matched = target_by_external_id.get(field, {}).get(value)
