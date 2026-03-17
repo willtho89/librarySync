@@ -775,14 +775,20 @@ async def _repoint_active_provider_watchlist_jobs(
     if not watchlist_item_id_map:
         return
 
+    target_item_ids = set(watchlist_item_id_map.values())
+    # We need both source (keys) and target (values) watchlist_item_ids:
+    # - source ids: jobs to be repointed
+    # - target ids: existing jobs to deduplicate against
+    watchlist_ids_for_query = set(watchlist_item_id_map.keys()) | target_item_ids
+
     result = await db.execute(
         select(OutboxJob).where(
             OutboxJob.job_type.in_(PROVIDER_WATCHLIST_JOB_TYPES),
             OutboxJob.status.in_(ACTIVE_OUTBOX_STATUSES),
+            OutboxJob.payload["watchlist_item_id"].as_string().in_(watchlist_ids_for_query),
         )
     )
     jobs = result.scalars().all()
-    target_item_ids = set(watchlist_item_id_map.values())
     jobs_by_target_key = {
         f"{job.user_id}:{job.target_provider}:{job.job_type}:{payload_watchlist_item_id}": job
         for job in jobs
