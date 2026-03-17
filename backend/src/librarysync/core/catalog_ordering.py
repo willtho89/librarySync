@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Literal
 
 from sqlalchemy import Float, cast, func, select
 from sqlalchemy.sql import ColumnElement
 from sqlalchemy.sql.selectable import Select
 
+from librarysync.core.release_dates import get_release_now_date
 from librarysync.db.models import EpisodeItem, WatchedItem
 
 CatalogOrderBy = Literal[
@@ -50,7 +51,7 @@ def apply_catalog_ordering(
         )
         order_expression = last_watched_subq.c.last_watched_at
     elif order_by in {"episodes_left", "progress"}:
-        now_date = now_date or datetime.now(timezone.utc).date()
+        now_date = now_date or get_release_now_date()
         progress_subq = build_show_progress_subquery(user_id, now_date)
         updated_query = updated_query.outerjoin(
             progress_subq,
@@ -63,7 +64,7 @@ def apply_catalog_ordering(
                 progress_subq.c.total_released, 0
             )
     elif order_by == "last_episode_air_date":
-        now_date = now_date or datetime.now(timezone.utc).date()
+        now_date = now_date or get_release_now_date()
         last_episode_subq = _build_last_episode_air_subquery(now_date)
         updated_query = updated_query.outerjoin(
             last_episode_subq,
@@ -71,7 +72,7 @@ def apply_catalog_ordering(
         )
         order_expression = last_episode_subq.c.last_episode_air_date
     elif order_by == "next_episode_air_date":
-        now_date = now_date or datetime.now(timezone.utc).date()
+        now_date = now_date or get_release_now_date()
         next_episode_subq = _build_next_episode_air_subquery(now_date)
         updated_query = updated_query.outerjoin(
             next_episode_subq,

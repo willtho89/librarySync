@@ -17,6 +17,7 @@ from librarysync.core.catalog_ordering import (
     apply_catalog_ordering,
 )
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
+from librarysync.core.release_dates import get_release_now_date
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
     apply_combined_status_filter,
@@ -534,7 +535,7 @@ async def list_watchlist_items(
     )
 
     if status and status != "all" and status_filter_values:
-        filter_now_date = datetime.now(timezone.utc).date()
+        filter_now_date = get_release_now_date()
         query = apply_combined_status_filter(
             query,
             user_id=current_user.id,
@@ -598,6 +599,7 @@ async def list_watchlist_items(
         release_date_col=release_date_expr,
         base_media_id_col=MediaItem.id,
         tie_breaker_col=WatchlistItem.id,
+        now_date=get_release_now_date(),
     )
     query = query.offset(offset).limit(limit)
     result = await db.execute(query)
@@ -626,7 +628,7 @@ async def list_watchlist_items(
                 )
             )
 
-    now_date = datetime.now(timezone.utc).date()
+    now_date = get_release_now_date()
     tv_media_ids = [media.id for _, media in rows if media.media_type == "tv"]
     progress_map = await _get_show_progress_bulk(db, current_user.id, tv_media_ids)
     items = []
@@ -772,7 +774,7 @@ async def mark_watchlist_item_watched(
     if media_item.media_type == "tv":
         # Logic to find next episode:
         # a) Get all released episodes
-        now_date = datetime.now(timezone.utc).date()
+        now_date = get_release_now_date()
         episodes_result = await db.execute(
             select(EpisodeItem)
             .where(
@@ -900,7 +902,7 @@ async def _get_show_progress_bulk(
     if not media_item_ids:
         return {}
 
-    now = datetime.now(timezone.utc).date()
+    now = get_release_now_date()
     released_subq = (
         select(
             EpisodeItem.show_media_item_id.label("media_item_id"),
@@ -992,7 +994,7 @@ async def _refresh_watchlist_statuses_for_filter(
     if not rows:
         return
 
-    now_date = datetime.now(timezone.utc).date()
+    now_date = get_release_now_date()
     tv_media_ids = [media.id for _, media in rows if media.media_type == "tv"]
     progress_map = await _get_show_progress_bulk(db, user_id, tv_media_ids)
     status_changed = False

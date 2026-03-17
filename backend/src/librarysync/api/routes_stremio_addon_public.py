@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from importlib import metadata
 from typing import Any, Literal
 
@@ -10,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_db
 from librarysync.core.catalog_ordering import apply_catalog_ordering, build_show_progress_subquery
+from librarysync.core.release_dates import get_release_now_date
 from librarysync.core.stremio_addon import (
     DEFAULT_PAGE_SIZE,
     DEFAULT_SHOW_IN_HOME,
@@ -277,7 +277,7 @@ async def _build_watchlist_query(
     is_show_catalog = normalized_media_type in {"tv", "anime", "series"}
     if statuses:
         if is_show_catalog:
-            now_date = datetime.now(timezone.utc).date()
+            now_date = get_release_now_date()
             query, _ = apply_show_status_filter(
                 query,
                 user_id=user_id,
@@ -296,7 +296,7 @@ async def _build_in_progress_query(
     catalog: dict | None,
     search: str | None,
 ):
-    now_date = datetime.now(timezone.utc).date()
+    now_date = get_release_now_date()
     progress_subq = build_show_progress_subquery(user_id, now_date)
     query = (
         select(MediaItem)
@@ -370,6 +370,7 @@ def _apply_ordering(
         release_date_col=release_date_col,
         base_media_id_col=base_media_id_col,
         tie_breaker_col=tie_breaker_col,
+        now_date=get_release_now_date(),
     )
 
 

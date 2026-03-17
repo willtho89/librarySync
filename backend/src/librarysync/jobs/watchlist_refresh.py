@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from librarysync.core.release_dates import get_release_now_date
 from librarysync.core.scheduler import (
     claim_scheduled_job,
     complete_scheduled_job,
@@ -98,7 +99,7 @@ async def _load_watchlist_rows_for_refresh(
         return (await db.execute(base_query)).all()
 
     now = datetime.now(timezone.utc)
-    now_date = now.date()
+    now_date = get_release_now_date(now)
     last_run_date = last_run_at.date()
 
     media_ids: set[str] = set()
@@ -245,7 +246,7 @@ async def _refresh_movie_status(
     item: WatchlistItem,
     media: MediaItem,
 ) -> None:
-    now_date = datetime.now(timezone.utc).date()
+    now_date = get_release_now_date()
     has_watched = item.status == "watched"
     new_status = determine_movie_watchlist_status(
         media,

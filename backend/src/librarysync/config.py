@@ -42,6 +42,7 @@ class Settings:
     enable_dashboard_stats: bool
     trakt_max_batch_size: int
     simkl_max_batch_size: int
+    release_date_timezone: str
 
 
 def load_settings() -> Settings:
@@ -114,6 +115,9 @@ def load_settings() -> Settings:
         ),
         simkl_max_batch_size=int(
             _get_env("LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE", "750") or "750"
+        ),
+        release_date_timezone=(
+            _get_env("LIBRARYSYNC_RELEASE_DATE_TIMEZONE", "UTC") or "UTC"
         ),
     )
 

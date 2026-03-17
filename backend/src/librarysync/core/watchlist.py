@@ -10,6 +10,7 @@ from librarysync.connectors.metadata.base import EpisodeMetadataProvider
 from librarysync.core.catalog_ordering import build_show_progress_subquery
 from librarysync.core.metadata_providers import MetadataProviderService
 from librarysync.core.rate_limiter import RATE_LIMITER
+from librarysync.core.release_dates import get_release_now_date
 from librarysync.db.models import (
     EpisodeItem,
     MediaItem,
@@ -492,7 +493,7 @@ async def refresh_watchlist_from_history(
     if not media_item:
         return
 
-    now_date = datetime.now(timezone.utc).date()
+    now_date = get_release_now_date()
     if media_item.media_type == "movie":
         watch_result = await db.execute(
             select(WatchedItem.id)
@@ -536,7 +537,7 @@ async def evaluate_show_watchlist_status(
         return
 
     # Find released episodes
-    now_date = datetime.now(timezone.utc).date()
+    now_date = get_release_now_date()
 
     result = await db.execute(
         select(EpisodeItem).where(
