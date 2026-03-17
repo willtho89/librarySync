@@ -2039,15 +2039,21 @@ async def _deliver_stremio_remove(
         if await _has_newer_stremio_series_job(db, job, item_id):
             external_id = _coerce_str(payload.get("video_id")) or item_id
             return 200, external_id
-        change = await _build_stremio_series_change(
-            db,
-            client,
-            auth_key,
-            job.user_id,
-            payload,
-            datetime.now(timezone.utc),
-            allow_empty=True,
-        )
+        try:
+            change = await _build_stremio_series_change(
+                db,
+                client,
+                auth_key,
+                job.user_id,
+                payload,
+                datetime.now(timezone.utc),
+                allow_empty=True,
+            )
+        except StremioError as exc:
+            if str(exc) == "Cinemeta returned no episodes":
+                external_id = _coerce_str(payload.get("video_id")) or item_id
+                return 200, external_id
+            raise
         if change is None:
             external_id = _coerce_str(payload.get("video_id")) or item_id
             return 200, external_id

@@ -181,7 +181,7 @@ librarySync/
 ## 7) Worker Modes & Jobs
 
 ### Worker Modes
-Configured via `LIBRARYSYNC_WORKER_MODES`: `outbox`, `metadata`, `metadata_cache`, `quick_import`, `import_all`, `watchlist`, `merge_all_history`
+Configured via `LIBRARYSYNC_WORKER_MODES`: `outbox`, `metadata`, `metadata_backfill`, `metadata_cache`, `quick_import`, `import_all`, `watchlist`, `merge_history`, `merge_all_history`
 
 ### Job Types
 
@@ -191,6 +191,7 @@ Handles job types: `push_watched`, `push_rating`, `update_history`, `remove_hist
 #### Metadata Jobs
 - **`metadata_lookup`**: Resolves lookup requests into candidates
 - **`metadata_cache`**: Scans recent candidates and seeds `media_items` to accelerate search
+- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history and episode lists that are missing posters or identifiers
 
 #### Import Jobs
 - **`quick_import`**: Runs 7-day import window

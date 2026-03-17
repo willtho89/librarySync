@@ -62,7 +62,7 @@ All defaults below are from `.env.example`.
 
 ### Worker Modes
 - `LIBRARYSYNC_WORKER_MODES` (default `all`): comma-separated list of worker loops.
-  Options: `outbox`, `metadata`, `metadata_cache`, `quick_import`, `import_all`, `watchlist`.
+  Options: `outbox`, `metadata`, `metadata_backfill`, `metadata_cache`, `quick_import`, `import_all`, `watchlist`, `merge_history`, `merge_all_history`.
 - `LIBRARYSYNC_WORKER_OUTBOX_CONCURRENCY` (default `1`): outbox loop concurrency.
 - `LIBRARYSYNC_WORKER_METADATA_CONCURRENCY` (default `1`): metadata loop concurrency.
 - `LIBRARYSYNC_WORKER_METADATA_CACHE_CONCURRENCY` (default `1`): metadata cache loop concurrency.
@@ -105,15 +105,17 @@ Example values (replace `example.com` with your domain):
 
 ## Development (uv + Ruff)
 
-1. Install Python 3.14 and `uv`.
+1. Install Python 3.13 or 3.14 and `uv` (`python3 -m pip install --upgrade pip && python3 -m pip install uv`).
 2. Sync deps:
-   - `uv sync`
+   - `cd backend && uv sync --extra tests`
 3. Run API:
    `cd backend && uv run uvicorn librarysync.main:app --reload`
 4. Run worker:
    `cd backend && uv run python -m librarysync.worker`
 5. Lint:
-   `uv run ruff check ./backend/`
+   `cd backend && uv run ruff check src tests`
+6. Run tests:
+   `cd backend && uv run pytest -q tests`
 
 If you’re using `docker compose` with the `scaled-workers` profile, `worker-metadata-cache`
 is now available and will run the metadata cache loop (`LIBRARYSYNC_WORKER_MODES=metadata_cache`).

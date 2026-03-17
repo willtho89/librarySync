@@ -6,7 +6,7 @@ librarySync is a self-hosted, Docker-compose-deployable, multi-user hub for watc
 
 ## Tech Stack
 
-- **Backend**: Python 3.11+ with FastAPI
+- **Backend**: Python 3.13+ with FastAPI
 - **Database**: PostgreSQL with SQLAlchemy 2.0+ and Alembic migrations
 - **Frontend**: Static HTML + vanilla JavaScript with Tailwind CSS
 - **Architecture**: Async worker pattern with outbox-based delivery
@@ -100,7 +100,7 @@ Worker modes (configurable via `LIBRARYSYNC_WORKER_MODES`):
 
 ## Development Setup
 
-1. Install Python 3.11+ and uv
+1. Install Python 3.13+ and uv
 2. Copy `.env.example` to `.env` and configure
 3. Run with Docker: `docker compose up --build`
 4. Access at `http://localhost:8000`

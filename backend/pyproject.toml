@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "librarysync"
 version = "0.13.2"
 description = "librarySync backend"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
   "fastapi>=0.133.1",
   "uvicorn[standard]>=0.41.0",
@@ -21,6 +21,11 @@ dependencies = [
   "python-jose[cryptography]>=3.5.0",
   "greenlet>=3.3.2",
   "parsett>=1.8.5",
+]
+
+[project.optional-dependencies]
+tests = [
+  "pytest>=7.1",
 ]
 
 [tool.setuptools.packages.find]
