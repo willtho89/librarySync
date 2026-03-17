@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-
 from librarysync.api import routes_dashboard
 
 
