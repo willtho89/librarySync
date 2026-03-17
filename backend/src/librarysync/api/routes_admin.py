@@ -1,17 +1,27 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_admin_api_key, get_db
 from librarysync.connectors.metadata.base import MediaCandidate, MetadataProvider
+from librarysync.core.anime import is_anime
 from librarysync.core.metadata_enrichment import apply_refresh_candidate
 from librarysync.core.metadata_providers import load_random_provider
+from librarysync.core.watch_pipeline import (
+    ACTIVE_OUTBOX_STATUSES,
+    build_publicmetadb_payload,
+    build_simkl_payload,
+    build_stremio_payload,
+    build_trakt_payload,
+)
 from librarysync.core.watchlist import normalize_media_ids
+from librarysync.core.watchlist_sync import enqueue_personal_watchlist_sync
 from librarysync.db.models import (
     EpisodeItem,
     MediaItem,
@@ -23,6 +33,7 @@ from librarysync.db.models import (
     WatchEvent,
     WatchlistItem,
     WatchlistSourceItem,
+    WatchSync,
 )
 from librarysync.jobs.merge_history import merge_history_for_user
 from librarysync.jobs.metadata_backfill import (
@@ -33,6 +44,7 @@ from librarysync.jobs.metadata_cache import METADATA_CACHE_JOB
 from librarysync.jobs.watchlist_refresh import WATCHLIST_REFRESH_JOB
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+logger = logging.getLogger(__name__)
 
 IMPORT_EVENT_PROVIDERS = {
     "aiostreams",
@@ -70,8 +82,16 @@ WATCHLIST_STATUS_RANK = {
     "waiting": 4,
     "watched": 5,
 }
-ACTIVE_OUTBOX_STATUSES = {"pending", "failed_retryable", "in_progress"}
 PROVIDER_WATCHLIST_JOB_TYPES = {"push_watchlist", "remove_watchlist"}
+ACTIVE_SYNC_JOB_TYPES = {
+    "push_watched",
+    "push_rating",
+    "update_history",
+    "remove_history",
+    "update_log_entry",
+    "delete_log_entry",
+    "remove_watched",
+}
 
 
 class MediaItemExternalIdsUpdateIn(BaseModel):
@@ -225,6 +245,294 @@ def _merge_catalog_item_fields(
         target.position = source.position
     if source.created_at and source.created_at < target.created_at:
         target.created_at = source.created_at
+
+
+def _copy_payload_fields(
+    target: dict[str, object],
+    source: dict[str, object],
+    fields: tuple[str, ...],
+) -> None:
+    for field in fields:
+        if field in source:
+            target[field] = source[field]
+
+
+def _build_letterboxd_sync_payload(
+    media_item: MediaItem,
+    watched: WatchedItem,
+    current_payload: dict[str, object],
+) -> dict[str, object] | None:
+    if media_item.media_type not in {"movie", "anime"}:
+        return None
+    imdb_id = media_item.imdb_id.lower() if media_item.imdb_id else None
+    tmdb_id = media_item.tmdb_id or None
+    if not imdb_id and not tmdb_id:
+        return None
+    payload: dict[str, object] = {
+        "imdb_id": imdb_id,
+        "tmdb_id": tmdb_id,
+        "watched_at": watched.watched_at.isoformat(),
+        "is_rewatch": bool(current_payload.get("is_rewatch")),
+    }
+    if watched.rating is not None:
+        payload["rating"] = watched.rating
+    _copy_payload_fields(
+        payload,
+        current_payload,
+        ("watch_sync_id", "watched_item_id", "entry_id", "force_update_rating", "tags", "like"),
+    )
+    return payload
+
+
+def _build_anilist_sync_payload(
+    media_item: MediaItem,
+    watched: WatchedItem,
+    episode_item: EpisodeItem | None,
+    watch_sync: WatchSync | None,
+    current_payload: dict[str, object],
+    job_type: str,
+) -> dict[str, object] | None:
+    if not is_anime(media_item):
+        return None
+
+    if job_type == "push_watched":
+        if not media_item.anilist_id:
+            return None
+        payload: dict[str, object] = {
+            "anilist_id": media_item.anilist_id,
+            "watched_at": watched.watched_at.isoformat(),
+            "is_rewatch": bool(current_payload.get("is_rewatch")),
+        }
+        if watched.rating is not None:
+            payload["rating"] = watched.rating
+        if episode_item:
+            payload["is_episode"] = True
+            payload["episode_number"] = episode_item.episode_number
+        _copy_payload_fields(payload, current_payload, ("watch_sync_id", "watched_item_id"))
+        return payload
+
+    if job_type == "push_rating":
+        entry_id = current_payload.get("entry_id") or (
+            watch_sync.external_id if watch_sync else None
+        )
+        if not entry_id or not media_item.anilist_id or watched.rating is None:
+            return None
+        payload = {
+            "entry_id": entry_id,
+            "anilist_id": media_item.anilist_id,
+            "rating": watched.rating,
+        }
+        _copy_payload_fields(payload, current_payload, ("watch_sync_id", "watched_item_id"))
+        return payload
+
+    if job_type == "remove_history":
+        entry_id = current_payload.get("entry_id") or (
+            watch_sync.external_id if watch_sync else None
+        )
+        payload = {"watched_item_id": watched.id}
+        if entry_id:
+            payload["entry_id"] = entry_id
+        if media_item.anilist_id:
+            payload["anilist_id"] = media_item.anilist_id
+        if len(payload) == 1:
+            return None
+        _copy_payload_fields(payload, current_payload, ("watch_sync_id",))
+        return payload
+
+    return None
+
+
+def _rebuild_history_sync_payload(
+    provider: str,
+    media_item: MediaItem,
+    watched: WatchedItem,
+    episode_item: EpisodeItem | None,
+    current_payload: dict[str, object],
+) -> dict[str, object] | None:
+    payload_builder = {
+        "trakt": build_trakt_payload,
+        "simkl": build_simkl_payload,
+        "publicmetadb": build_publicmetadb_payload,
+    }.get(provider)
+    if not payload_builder:
+        return None
+    payload = payload_builder(media_item, episode_item, watched.watched_at, watched.rating)
+    if not payload:
+        return None
+    _copy_payload_fields(
+        payload,
+        current_payload,
+        ("watch_sync_id", "watched_item_id", "history_id", "external_id", "previous_watched_at"),
+    )
+    return payload
+
+
+async def _load_watched_sync_context(
+    db: AsyncSession,
+    watched_item_id: str,
+    provider: str,
+    watch_sync_id: str | None,
+) -> tuple[WatchedItem | None, MediaItem | None, EpisodeItem | None, WatchSync | None]:
+    watched = await db.get(WatchedItem, watched_item_id)
+    if not watched:
+        return None, None, None, None
+
+    episode_item = None
+    media_item = None
+    if watched.media_item_id:
+        media_item = await db.get(MediaItem, watched.media_item_id)
+    if watched.episode_item_id:
+        episode_item = await db.get(EpisodeItem, watched.episode_item_id)
+        if episode_item and not media_item:
+            media_item = await db.get(MediaItem, episode_item.show_media_item_id)
+
+    watch_sync = None
+    if watch_sync_id:
+        watch_sync = await db.get(WatchSync, watch_sync_id)
+    if not watch_sync:
+        result = await db.execute(
+            select(WatchSync).where(
+                WatchSync.watched_item_id == watched.id,
+                WatchSync.provider == provider,
+            )
+        )
+        watch_sync = result.scalars().first()
+
+    return watched, media_item, episode_item, watch_sync
+
+
+async def _rebuild_active_sync_job_payload(
+    db: AsyncSession,
+    job: OutboxJob,
+) -> dict[str, object] | None:
+    payload = dict(job.payload or {})
+    watched_item_id = payload.get("watched_item_id")
+    if not isinstance(watched_item_id, str) or not watched_item_id:
+        return None
+
+    watch_sync_id = payload.get("watch_sync_id")
+    watch_sync_id_value = (
+        str(watch_sync_id)
+        if isinstance(watch_sync_id, str) and watch_sync_id
+        else None
+    )
+    watched, media_item, episode_item, watch_sync = await _load_watched_sync_context(
+        db,
+        watched_item_id,
+        job.target_provider,
+        watch_sync_id_value,
+    )
+    if not watched or not media_item:
+        return None
+
+    if job.target_provider in {"trakt", "simkl", "publicmetadb"}:
+        rebuilt = _rebuild_history_sync_payload(
+            job.target_provider,
+            media_item,
+            watched,
+            episode_item,
+            payload,
+        )
+        if not rebuilt:
+            return None
+        if job.job_type == "remove_history":
+            rebuilt.pop("watched_at", None)
+            rebuilt.pop("rating", None)
+        return rebuilt
+
+    if job.target_provider == "letterboxd":
+        if job.job_type in {"push_watched", "push_rating"}:
+            return _build_letterboxd_sync_payload(media_item, watched, payload)
+        if job.job_type == "update_log_entry":
+            rebuilt = {
+                "entry_id": payload.get("entry_id"),
+                "watched_item_id": watched.id,
+            }
+            if "watch_sync_id" in payload:
+                rebuilt["watch_sync_id"] = payload["watch_sync_id"]
+            if "watched_at" in payload:
+                rebuilt["watched_at"] = watched.watched_at.isoformat()
+            if "rating" in payload and watched.rating is not None:
+                rebuilt["rating"] = watched.rating
+            return rebuilt
+        if job.job_type == "delete_log_entry":
+            rebuilt = {
+                "entry_id": payload.get("entry_id"),
+                "watched_item_id": watched.id,
+            }
+            if "watch_sync_id" in payload:
+                rebuilt["watch_sync_id"] = payload["watch_sync_id"]
+            return rebuilt
+        return None
+
+    if job.target_provider == "stremio":
+        if job.job_type not in {"push_watched", "remove_watched"}:
+            return None
+        rebuilt = build_stremio_payload(media_item, episode_item, watched.watched_at)
+        if not rebuilt:
+            return None
+        _copy_payload_fields(rebuilt, payload, ("watch_sync_id", "watched_item_id"))
+        if job.job_type == "remove_watched":
+            rebuilt.pop("watched_at", None)
+        return rebuilt
+
+    if job.target_provider == "anilist":
+        return _build_anilist_sync_payload(
+            media_item,
+            watched,
+            episode_item,
+            watch_sync,
+            payload,
+            job.job_type,
+        )
+
+    return None
+
+
+async def _refresh_active_sync_jobs_for_media_item(
+    db: AsyncSession,
+    media_item: MediaItem,
+) -> None:
+    watched_result = await db.execute(
+        select(WatchedItem.id)
+        .outerjoin(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .where(
+            or_(
+                WatchedItem.media_item_id == media_item.id,
+                EpisodeItem.show_media_item_id == media_item.id,
+            )
+        )
+    )
+    watched_item_ids = [str(watched_id) for watched_id in watched_result.scalars().all()]
+    if not watched_item_ids:
+        return
+
+    result = await db.execute(
+        select(OutboxJob).where(
+            OutboxJob.job_type.in_(ACTIVE_SYNC_JOB_TYPES),
+            OutboxJob.status.in_(ACTIVE_OUTBOX_STATUSES),
+            OutboxJob.payload["watched_item_id"].as_string().in_(watched_item_ids),
+        )
+    )
+    jobs = result.scalars().all()
+    for job in jobs:
+        rebuilt_payload = await _rebuild_active_sync_job_payload(db, job)
+        if rebuilt_payload:
+            job.payload = rebuilt_payload
+
+
+async def _enqueue_personal_watchlist_resync(
+    db: AsyncSession,
+    media_item: MediaItem,
+) -> None:
+    result = await db.execute(
+        select(WatchlistItem).where(
+            WatchlistItem.media_item_id == media_item.id,
+            WatchlistItem.status != "removed",
+        )
+    )
+    for watchlist_item in result.scalars().all():
+        await enqueue_personal_watchlist_sync(db, watchlist_item, media_item)
 
 
 def _register_episode_external_ids(
@@ -550,6 +858,11 @@ async def _refresh_media_item_metadata(
         try:
             candidate = await _fetch_refresh_candidate(provider, media_item)
         except Exception:
+            logger.exception(
+                "Admin media refresh failed for provider %s on media item %s",
+                provider_name,
+                media_item.id,
+            )
             errors.append(provider_name)
             continue
         if not candidate:
@@ -896,6 +1209,8 @@ async def update_media_item_external_ids(
 
         await db.flush()
         refresh_result = await _refresh_media_item_metadata(db, media_item)
+        await _refresh_active_sync_jobs_for_media_item(db, media_item)
+        await _enqueue_personal_watchlist_resync(db, media_item)
         await db.commit()
     except HTTPException:
         await db.rollback()

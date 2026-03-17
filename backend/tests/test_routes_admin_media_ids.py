@@ -79,6 +79,8 @@ def test_update_media_item_external_ids_merges_conflicts_and_refreshes(monkeypat
     )
     db = AsyncMock()
     merge_calls: list[str] = []
+    refreshed_sync_jobs: list[str] = []
+    resynced_watchlists: list[str] = []
 
     async def fake_load_media_item_for_update(db, media_item_id):
         assert media_item_id == "media-1"
@@ -103,6 +105,14 @@ def test_update_media_item_external_ids_merges_conflicts_and_refreshes(monkeypat
             "errors": [],
         }
 
+    async def fake_refresh_active_sync_jobs_for_media_item(db, media_item):
+        assert media_item is target
+        refreshed_sync_jobs.append(media_item.id)
+
+    async def fake_enqueue_personal_watchlist_resync(db, media_item):
+        assert media_item is target
+        resynced_watchlists.append(media_item.id)
+
     monkeypatch.setattr(
         routes_admin,
         "_load_media_item_for_update",
@@ -118,6 +128,16 @@ def test_update_media_item_external_ids_merges_conflicts_and_refreshes(monkeypat
         routes_admin,
         "_refresh_media_item_metadata",
         fake_refresh_media_item_metadata,
+    )
+    monkeypatch.setattr(
+        routes_admin,
+        "_refresh_active_sync_jobs_for_media_item",
+        fake_refresh_active_sync_jobs_for_media_item,
+    )
+    monkeypatch.setattr(
+        routes_admin,
+        "_enqueue_personal_watchlist_resync",
+        fake_enqueue_personal_watchlist_resync,
     )
 
     response = asyncio.run(
@@ -136,6 +156,8 @@ def test_update_media_item_external_ids_merges_conflicts_and_refreshes(monkeypat
     assert payload["updated_ids"] == {"imdb_id": "tt40197357"}
     assert payload["merged_media_item_ids"] == ["media-dup"]
     assert payload["metadata_refresh"]["refreshed"] is True
+    assert refreshed_sync_jobs == ["media-1"]
+    assert resynced_watchlists == ["media-1"]
     db.flush.assert_awaited_once()
     db.commit.assert_awaited_once()
     db.rollback.assert_not_awaited()
@@ -269,3 +291,80 @@ def test_repoint_active_provider_watchlist_jobs_dedupes_merged_watchlist_rows() 
     )
 
     db.delete.assert_awaited_once_with(source_job)
+
+
+def test_rebuild_active_sync_job_payload_refreshes_trakt_movie_ids() -> None:
+    watched = SimpleNamespace(
+        id="watched-1",
+        user_id="user-1",
+        watched_at="2026-03-17T12:00:00+00:00",
+        rating=4.0,
+    )
+    watched.watched_at = routes_admin.datetime.fromisoformat(watched.watched_at)
+    media_item = _make_media_item(
+        id="media-1",
+        media_type="movie",
+        imdb_id="tt40197357",
+        tmdb_id="295778",
+        tvdb_id=None,
+    )
+    watch_sync = SimpleNamespace(id="sync-1", external_id="history-1")
+    job = SimpleNamespace(
+        target_provider="trakt",
+        job_type="update_history",
+        payload={
+            "watched_item_id": "watched-1",
+            "watch_sync_id": "sync-1",
+            "movie_ids": {"imdb": "tt-old"},
+            "history_id": "history-1",
+            "previous_watched_at": "2026-03-10T12:00:00+00:00",
+        },
+    )
+    db = AsyncMock()
+
+    async def fake_load_context(db, watched_item_id, provider, watch_sync_id):
+        assert watched_item_id == "watched-1"
+        assert provider == "trakt"
+        assert watch_sync_id == "sync-1"
+        return watched, media_item, None, watch_sync
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(routes_admin, "_load_watched_sync_context", fake_load_context)
+    try:
+        rebuilt = asyncio.run(routes_admin._rebuild_active_sync_job_payload(db, job))
+    finally:
+        monkeypatch.undo()
+
+    assert rebuilt == {
+        "media_type": "movie",
+        "movie_ids": {"imdb": "tt40197357", "tmdb": "295778"},
+        "watched_at": "2026-03-17T12:00:00+00:00",
+        "rating": 4.0,
+        "watch_sync_id": "sync-1",
+        "watched_item_id": "watched-1",
+        "history_id": "history-1",
+        "previous_watched_at": "2026-03-10T12:00:00+00:00",
+    }
+
+
+def test_enqueue_personal_watchlist_resync_queues_existing_items(monkeypatch) -> None:
+    media_item = _make_media_item(id="media-1", media_type="movie", imdb_id="tt40197357")
+    active_item = SimpleNamespace(id="watchlist-1", media_item_id="media-1", status="added")
+    hidden_item = SimpleNamespace(id="watchlist-2", media_item_id="media-1", status="hidden")
+    db = AsyncMock()
+    db.execute.return_value = _scalar_result([active_item, hidden_item])
+    queued_ids: list[str] = []
+
+    async def fake_enqueue_personal_watchlist_sync(db, watchlist_item, item):
+        assert item is media_item
+        queued_ids.append(watchlist_item.id)
+
+    monkeypatch.setattr(
+        routes_admin,
+        "enqueue_personal_watchlist_sync",
+        fake_enqueue_personal_watchlist_sync,
+    )
+
+    asyncio.run(routes_admin._enqueue_personal_watchlist_resync(db, media_item))
+
+    assert queued_ids == ["watchlist-1", "watchlist-2"]
