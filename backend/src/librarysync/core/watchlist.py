@@ -314,7 +314,7 @@ async def _persist_episode_list_for_media_item(
         if episode.title and not episode_item.title:
             episode_item.title = episode.title
             dirty = True
-        if air_date and not episode_item.air_date:
+        if air_date and episode_item.air_date != air_date:
             episode_item.air_date = air_date
             dirty = True
         if tmdb_id and not episode_item.tmdb_id:
