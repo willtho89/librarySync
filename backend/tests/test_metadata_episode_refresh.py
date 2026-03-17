@@ -15,7 +15,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT / "src"))
 
 from librarysync.connectors.metadata.base import EpisodeSummary  # noqa: E402
-from librarysync.core import metadata_enrichment  # noqa: E402
 from librarysync.core.metadata_enrichment import (  # noqa: E402
     _apply_episode_metadata,
     _needs_media_enrichment,
