@@ -740,6 +740,9 @@ async def _repoint_active_watchlist_jobs(
         select(OutboxJob).where(
             OutboxJob.job_type == "watchlist_update",
             OutboxJob.status.in_(ACTIVE_OUTBOX_STATUSES),
+            OutboxJob.payload["media_item_id"]
+            .as_string()
+            .in_([source_media_item_id, target_media_item_id]),
         )
     )
     jobs = result.scalars().all()
