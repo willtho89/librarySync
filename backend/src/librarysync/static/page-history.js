@@ -888,7 +888,9 @@ async function handleHistoryRefreshMetadata(item) {
     return;
   }
   const mediaItemId = item.metadata.media_item_id;
+  const episodeItemId = item.metadata.episode_item_id || null;
   await window.refreshMediaItemMetadata(mediaItemId, {
+    episodeItemId,
     onStart: () => setMessage("history-message", "Refreshing metadata..."),
     onSuccess: async () => {
       setMessage("history-message", "Metadata refreshed successfully.");

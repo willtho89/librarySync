@@ -497,7 +497,7 @@ function closeMetadataModal() {
 window.librarysyncOnMetadataRefresh = null;
 
 async function refreshMediaItemMetadata(mediaItemId, options = {}) {
-  const { onSuccess, onError, onStart } = options;
+  const { onSuccess, onError, onStart, episodeItemId } = options;
   if (!mediaItemId) {
     const error = "Cannot refresh: missing media item ID.";
     if (onError) {
@@ -511,8 +511,12 @@ async function refreshMediaItemMetadata(mediaItemId, options = {}) {
     if (onStart) {
       onStart();
     }
+    let url = `/api/metadata/local/${encodeURIComponent(mediaItemId)}/refresh`;
+    if (episodeItemId) {
+      url += `?episode_item_id=${encodeURIComponent(episodeItemId)}`;
+    }
     const response = await requestJSON(
-      `/api/metadata/local/${encodeURIComponent(mediaItemId)}/refresh`,
+      url,
       {
         method: "POST",
       }
@@ -546,7 +550,11 @@ async function refreshMediaItemMetadata(mediaItemId, options = {}) {
 }
 
 async function handleMetadataModalRefresh(mediaItemId, item) {
+  const episodeItemId = item && item.metadata && item.metadata.episode_item_id
+    ? item.metadata.episode_item_id
+    : null;
   await refreshMediaItemMetadata(mediaItemId, {
+    episodeItemId,
     onSuccess: async (updatedCandidate) => {
       showToast("Metadata refreshed successfully.");
       if (typeof window.librarysyncOnMetadataRefresh === "function") {

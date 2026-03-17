@@ -18,7 +18,7 @@ from librarysync.connectors.metadata.base import (
 from librarysync.connectors.metadata.publicmetadb import PublicMetaDbMetadataProvider
 from librarysync.connectors.metadata.tmdb import TmdbMetadataProvider
 from librarysync.connectors.metadata.tvdb import TvdbMetadataProvider
-from librarysync.core.metadata_enrichment import apply_refresh_candidate
+from librarysync.core.metadata_enrichment import apply_refresh_candidate, refresh_episode_metadata
 from librarysync.core.metadata_providers import (
     METADATA_PROVIDER_REGISTRY,
     AniListProviderSettings,
@@ -1432,6 +1432,9 @@ async def _validate_publicmetadb_credentials(api_key: str) -> None:
 )
 async def refresh_local_metadata(
     media_item_id: str = Path(..., description="Media item ID to refresh"),
+    episode_item_id: str | None = Query(
+        None, description="Episode item ID to also refresh episode metadata"
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CandidateOut:
@@ -1551,6 +1554,17 @@ async def refresh_local_metadata(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=detail,
         )
+
+    if episode_item_id and media_item.media_type == "tv":
+        ep_result = await db.execute(
+            select(EpisodeItem).where(
+                EpisodeItem.id == episode_item_id,
+                EpisodeItem.show_media_item_id == media_item.id,
+            )
+        )
+        episode_item = ep_result.scalars().first()
+        if episode_item:
+            await refresh_episode_metadata(db, current_user.id, media_item, episode_item)
 
     await db.commit()
 

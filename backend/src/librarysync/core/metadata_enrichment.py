@@ -132,6 +132,12 @@ def _needs_media_enrichment(media_item: MediaItem, episode_item: EpisodeItem | N
         and bool(media_item.tmdb_id)
         and not episode_item.tmdb_id
     )
+    episode_needs_title = (
+        episode_item is not None
+        and media_item.media_type == "tv"
+        and bool(media_item.tmdb_id)
+        and not episode_item.title
+    )
     missing_overview = not media_item.overview
     missing_genres = not media_item.genres
     missing_runtime = media_item.runtime_in_seconds is None
@@ -145,6 +151,7 @@ def _needs_media_enrichment(media_item: MediaItem, episode_item: EpisodeItem | N
         or poster_missing
         or missing_year
         or episode_needs_tmdb
+        or episode_needs_title
         or missing_overview
         or missing_genres
         or missing_runtime
@@ -575,6 +582,32 @@ async def apply_refresh_candidate(
         media_item.raw = candidate.raw
 
 
+async def refresh_episode_metadata(
+    db: AsyncSession,
+    user_id: str,
+    media_item: MediaItem,
+    episode_item: EpisodeItem,
+    provider_overrides: dict[str, MetadataProvider] | None = None,
+) -> bool:
+    """Force-refresh a single episode's metadata, overwriting title/air_date if provider returns them.
+
+    Returns True if any update was made.
+    """  # noqa: E501
+    if media_item.media_type != "tv" or not media_item.tmdb_id:
+        return False
+    overrides = provider_overrides or {}
+    tmdb = overrides.get("tmdb")
+    if tmdb is None:
+        service = MetadataProviderService(db, user_id)
+        tmdb = await service.load_provider("tmdb")
+    if not tmdb or not isinstance(tmdb, EpisodeMetadataProvider):
+        return False
+    title_before = episode_item.title
+    air_date_before = episode_item.air_date
+    await _apply_episode_metadata(tmdb, media_item, episode_item, force=True)
+    return episode_item.title != title_before or episode_item.air_date != air_date_before
+
+
 async def _apply_anime_candidate(
     db: AsyncSession, media_item: MediaItem, candidate: MediaCandidate
 ) -> None:
@@ -590,12 +623,14 @@ async def _apply_episode_metadata(
     provider: EpisodeMetadataProvider,
     media_item: MediaItem,
     episode_item: EpisodeItem,
+    *,
+    force: bool = False,
 ) -> None:
     if media_item.media_type != "tv":
         return
     if not media_item.tmdb_id:
         return
-    if episode_item.tmdb_id and episode_item.title:
+    if not force and episode_item.tmdb_id and episode_item.title:
         return
     try:
         episodes = await provider.list_episodes(media_item.tmdb_id, episode_item.season_number)
@@ -607,9 +642,9 @@ async def _apply_episode_metadata(
             continue
         if summary.provider_id and not episode_item.tmdb_id:
             episode_item.tmdb_id = summary.provider_id
-        if summary.title and not episode_item.title:
+        if summary.title and (force or not episode_item.title):
             episode_item.title = summary.title
-        if summary.air_date and not episode_item.air_date:
+        if summary.air_date and (force or not episode_item.air_date):
             episode_item.air_date = _parse_date(summary.air_date)
         break
 
