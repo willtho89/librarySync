@@ -12,20 +12,22 @@ def test_mixed_provider_limits_even_split() -> None:
         40, process_outbox.MIXED_PROVIDER_ORDER
     )
     assert limits == {
-        "trakt": 10,
-        "simkl": 10,
-        "letterboxd": 10,
-        "stremio": 10,
+        "trakt": 8,
+        "simkl": 8,
+        "publicmetadb": 8,
+        "letterboxd": 8,
+        "stremio": 8,
     }
 
 
 def test_mixed_provider_limits_remainder() -> None:
     limits = process_outbox._mixed_provider_limits(
-        10, process_outbox.MIXED_PROVIDER_ORDER
+        12, process_outbox.MIXED_PROVIDER_ORDER
     )
     assert limits == {
         "trakt": 3,
         "simkl": 3,
+        "publicmetadb": 2,
         "letterboxd": 2,
         "stremio": 2,
     }
