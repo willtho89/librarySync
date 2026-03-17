@@ -8,6 +8,7 @@ Covers:
 import asyncio
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +21,7 @@ from librarysync.core.metadata_enrichment import (  # noqa: E402
     _needs_media_enrichment,
     refresh_episode_metadata,
 )
+from librarysync.core.watchlist import _persist_episode_list_for_media_item  # noqa: E402
 
 
 def _make_media_item(**kwargs):
@@ -308,6 +310,46 @@ class TestRefreshEpisodeMetadata(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(episode_item.title, "Override Title")
+
+
+class TestWatchlistEpisodeBackfill(unittest.TestCase):
+    def test_backfill_updates_stale_air_date(self) -> None:
+        db = AsyncMock()
+        existing_episode = MagicMock()
+        existing_episode.episode_number = 1
+        existing_episode.tmdb_id = "99999"
+        existing_episode.title = "Episode 1"
+        existing_episode.air_date = date(2025, 3, 1)
+        existing_episode.raw = {}
+
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = [existing_episode]
+        db.execute.return_value = result
+
+        media_item = MagicMock()
+        media_item.id = "show-1"
+
+        changed = asyncio.run(
+            _persist_episode_list_for_media_item(
+                db,
+                media_item,
+                "tmdb",
+                "12345",
+                15,
+                [
+                    EpisodeSummary(
+                        episode_number=1,
+                        title="Episode 1",
+                        provider_id="99999",
+                        air_date="2026-04-01",
+                        still_url=None,
+                    )
+                ],
+            )
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(existing_episode.air_date, date(2026, 4, 1))
 
 
 if __name__ == "__main__":
