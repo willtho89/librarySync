@@ -1184,6 +1184,8 @@ async def _persist_episode_list(
         media_item = await _find_media_item_for_provider(db, provider, provider_item_id)
         if not media_item:
             details = await provider_instance.get_details(provider_item_id, "tv")
+            if not details:
+                return
             media_item = await _upsert_media_item(db, details)
 
         result = await db.execute(

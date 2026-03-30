@@ -82,7 +82,7 @@ class TvmazeMetadataProvider(MetadataProvider[TvmazeConfig, None]):
         candidate = self._normalize_candidate(payload)
         return [candidate] if candidate.provider_id else []
 
-    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate | None:
         payload = await self._get(f"/shows/{provider_id}", {})
         if not isinstance(payload, dict):
             raise httpx.HTTPError("TVMaze details response missing")

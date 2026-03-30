@@ -143,7 +143,7 @@ class MetadataProvider(ABC, Generic[ConfigT, SecretsT]):
         return []
 
     @abstractmethod
-    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate | None:
         raise NotImplementedError
 
     @abstractmethod

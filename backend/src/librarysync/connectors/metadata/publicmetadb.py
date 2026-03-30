@@ -223,7 +223,7 @@ class PublicMetaDbMetadataProvider(MetadataProvider[PublicMetaDbConfig, PublicMe
             )
         return candidates
 
-    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate | None:
         normalized_type = _normalize_media_type(media_type, MEDIA_TYPE_MOVIE)
         payload: dict[str, Any] = {}
         try:

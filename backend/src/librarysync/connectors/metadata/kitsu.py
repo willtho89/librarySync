@@ -114,7 +114,7 @@ class KitsuMetadataProvider(MetadataProvider[KitsuConfig, None]):
         items = payload.get("data") or []
         return [self._normalize_candidate(item) for item in items]
 
-    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate | None:
         payload = await self._get(f"/anime/{provider_id}", {})
         data = payload.get("data") or {}
         return self._normalize_candidate(data)

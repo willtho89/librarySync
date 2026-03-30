@@ -118,7 +118,7 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
 
         return [self._normalize_candidate(item) for item in media_list]
 
-    async def get_details(self, provider_item_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_item_id: str, media_type: str) -> MediaCandidate | None:
         """Get anime details by AniList ID."""
         # AniList only supports anime, ignore media_type parameter
         if media_type not in (MEDIA_TYPE_ANIME, "all"):

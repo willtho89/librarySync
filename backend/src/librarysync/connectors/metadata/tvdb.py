@@ -178,7 +178,7 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
             return candidates
         return [candidate for candidate in candidates if candidate.media_type == normalized_scope]
 
-    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate | None:
         normalized = _normalize_media_type(media_type, MEDIA_TYPE_TV)
         normalized_id = _normalize_tvdb_id(provider_id) or provider_id
         if normalized == MEDIA_TYPE_MOVIE:

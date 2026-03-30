@@ -152,7 +152,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             candidates.extend([self._normalize_candidate(item, MEDIA_TYPE_TV) for item in results])
         return candidates
 
-    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate | None:
         normalized = _normalize_media_type(media_type, MEDIA_TYPE_MOVIE)
         path = f"/movie/{provider_id}" if normalized == MEDIA_TYPE_MOVIE else f"/tv/{provider_id}"
         payload = await self._get(
