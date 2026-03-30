@@ -1325,7 +1325,7 @@ async def _upsert_media_item(db: AsyncSession, candidate: MediaCandidate) -> Med
     if not item:
         item = MediaItem(
             media_type=candidate.media_type,
-            title=candidate.title,
+            title=candidate.title or "",
             year=candidate.year,
             tmdb_id=tmdb_id,
             tvdb_id=tvdb_id,
@@ -1337,7 +1337,8 @@ async def _upsert_media_item(db: AsyncSession, candidate: MediaCandidate) -> Med
             raw=candidate.raw,
         )
     else:
-        item.title = candidate.title
+        if candidate.title:
+            item.title = candidate.title
         item.year = candidate.year
         item.media_type = candidate.media_type or item.media_type
         item.tmdb_id = tmdb_id or item.tmdb_id

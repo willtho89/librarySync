@@ -42,12 +42,12 @@ def _poster_url(cover_image: dict[str, Any] | None) -> str | None:
     return cover_image.get("extraLarge") or cover_image.get("large") or cover_image.get("medium")
 
 
-def _normalize_title(title: dict[str, Any] | None) -> str:
+def _normalize_title(title: dict[str, Any] | None) -> str | None:
     """Extract title from AniList title object."""
     if not title or not isinstance(title, dict):
-        return "Unknown title"
+        return None
     # Prefer English when available, then romaji, then native
-    return title.get("english") or title.get("romaji") or title.get("native") or "Unknown title"
+    return title.get("english") or title.get("romaji") or title.get("native") or None
 
 
 class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
@@ -157,7 +157,10 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
         if not media:
             raise ValueError(f"AniList ID {provider_item_id} not found")
 
-        return self._normalize_candidate(media)
+        candidate = self._normalize_candidate(media)
+        if not candidate.title:
+            return None
+        return candidate
 
     async def validate_credentials(self) -> None:
         """AniList metadata operations don't require authentication."""

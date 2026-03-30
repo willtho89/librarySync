@@ -53,21 +53,21 @@ def _normalize_media_type(value: str | None, fallback: str) -> str:
     return fallback if fallback in {MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV} else MEDIA_TYPE_MOVIE
 
 
-def _title_for_type(raw: dict[str, Any], media_type: str) -> str:
+def _title_for_type(raw: dict[str, Any], media_type: str) -> str | None:
     if media_type == MEDIA_TYPE_TV:
         return (
             raw.get("name")
             or raw.get("original_name")
             or raw.get("title")
             or raw.get("original_title")
-            or "Unknown title"
+            or None
         )
     return (
         raw.get("title")
         or raw.get("original_title")
         or raw.get("name")
         or raw.get("original_name")
-        or "Unknown title"
+        or None
     )
 
 
@@ -161,7 +161,10 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
                 "language": self._language,
             },
         )
-        return self._normalize_candidate(payload, normalized)
+        candidate = self._normalize_candidate(payload, normalized)
+        if not candidate.title:
+            return None
+        return candidate
 
     async def validate_credentials(self) -> None:
         await self._get("/configuration", {})

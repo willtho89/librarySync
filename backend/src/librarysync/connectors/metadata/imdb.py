@@ -121,7 +121,10 @@ class ImdbMetadataProvider(MetadataProvider[ImdbConfig, None]):
                 continue
             if str(item.get("id") or "").lower() != provider_id.lower():
                 continue
-            return self._normalize_candidate(item)
+            candidate = self._normalize_candidate(item)
+            if not candidate.title:
+                return None
+            return candidate
         return None
 
     async def validate_credentials(self) -> None:
@@ -143,7 +146,7 @@ class ImdbMetadataProvider(MetadataProvider[ImdbConfig, None]):
 
     def _normalize_candidate(self, raw: dict[str, Any]) -> MediaCandidate:
         imdb_id = raw.get("id") or ""
-        title = raw.get("l") or raw.get("title") or "Unknown title"
+        title = raw.get("l") or raw.get("title") or None
         year = _extract_year(raw.get("y") or raw.get("year"))
         poster_url = _poster_url(raw.get("i"))
         media_type = _normalize_media_type(raw)

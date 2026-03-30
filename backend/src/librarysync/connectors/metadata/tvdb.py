@@ -185,7 +185,10 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
             data = await self._get_details_data(normalized_id, "movies")
         else:
             data = await self._get_details_data(normalized_id, "series")
-        return self._normalize_candidate(data, normalized)
+        candidate = self._normalize_candidate(data, normalized)
+        if not candidate.title:
+            return None
+        return candidate
 
     async def validate_credentials(self) -> None:
         await self._get("/languages", {})
@@ -258,7 +261,7 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
     def _normalize_candidate(self, raw: dict[str, Any], media_type: str) -> MediaCandidate:
         tvdb_id = _normalize_tvdb_id(raw.get("tvdb_id") or raw.get("id"))
         normalized = _normalize_media_type(media_type, MEDIA_TYPE_TV)
-        title = raw.get("name") or raw.get("title") or raw.get("slug") or "Unknown title"
+        title = raw.get("name") or raw.get("title") or raw.get("slug") or None
         year = _extract_year(
             raw.get("year")
             or raw.get("firstAired")

@@ -86,7 +86,10 @@ class TvmazeMetadataProvider(MetadataProvider[TvmazeConfig, None]):
         payload = await self._get(f"/shows/{provider_id}", {})
         if not isinstance(payload, dict):
             raise httpx.HTTPError("TVMaze details response missing")
-        return self._normalize_candidate(payload)
+        candidate = self._normalize_candidate(payload)
+        if not candidate.title:
+            return None
+        return candidate
 
     async def validate_credentials(self) -> None:
         await self._get("/shows/1", {})
@@ -99,7 +102,7 @@ class TvmazeMetadataProvider(MetadataProvider[TvmazeConfig, None]):
 
     def _normalize_candidate(self, raw: dict[str, Any]) -> MediaCandidate:
         tvmaze_id = raw.get("id")
-        title = raw.get("name") or raw.get("title") or "Unknown title"
+        title = raw.get("name") or raw.get("title") or None
         year = _extract_year(raw.get("premiered"))
         poster_url = _poster_url(raw.get("image"))
         externals = raw.get("externals") or {}

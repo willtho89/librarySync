@@ -604,7 +604,7 @@ async def _select_candidate_for_entry(
     title_matches: list[MediaCandidate] = []
     if title_key:
         for candidate in scoped:
-            if _normalize_title_key(candidate.title) == title_key:
+            if candidate.title and _normalize_title_key(candidate.title) == title_key:
                 title_matches.append(candidate)
     if entry.year is not None:
         year_matches = [candidate for candidate in title_matches if candidate.year == entry.year]

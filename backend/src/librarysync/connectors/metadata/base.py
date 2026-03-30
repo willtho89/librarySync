@@ -16,7 +16,7 @@ class MediaCandidate(BaseModel):
     provider: str
     provider_id: str
     media_type: str
-    title: str
+    title: str | None
     year: int | None
     poster_url: str | None
     imdb_id: str | None
