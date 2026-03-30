@@ -17,7 +17,7 @@ from librarysync.connectors.services.stremio import has_required_stremio_fields
 from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.anime import is_anime
 from librarysync.core.integrations import load_integration_with_secrets
-from librarysync.core.metadata_enrichment import enrich_watched_metadata
+from librarysync.core.metadata_enrichment import enrich_watched_metadata, refresh_episode_metadata
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.watchlist import (
     backfill_show_episodes,
@@ -307,6 +307,8 @@ async def process_new_item_job(db: AsyncSession, job: OutboxJob) -> None:
     is_rewatch = bool(payload.get("is_rewatch"))
 
     await enrich_watched_metadata(db, watched.user_id, media_item, episode_item)
+    if episode_item and media_item:
+        await refresh_episode_metadata(db, watched.user_id, media_item, episode_item)
     if media_item and media_item.media_type in {"tv", "anime"}:
         await backfill_show_episodes(db, watched.user_id, media_item)
     if media_item:
