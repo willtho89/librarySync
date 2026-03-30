@@ -493,8 +493,11 @@ function renderCandidates(candidates) {
           await handleRefreshMetadata(candidate.id, candidate);
         });
 
+        const externalLinks = buildExternalMenuLinks(candidate);
+
         menuPanel.appendChild(viewMetadataButton);
         menuPanel.appendChild(refreshMetadataButton);
+        externalLinks.forEach((link) => menuPanel.appendChild(link));
 
         const menuContainer = document.createElement("div");
         menuContainer.className = "candidate-menu-container";

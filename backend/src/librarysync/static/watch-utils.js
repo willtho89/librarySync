@@ -231,7 +231,7 @@ function buildExternalLinks(item) {
     const section = mediaType === "movie" ? "movies" : "series";
     addLink(
       "TVDB",
-      `https://thetvdb.com/${section}/${encodeURIComponent(ids.tvdb_id)}`
+      `https://thetvdb.com/dereferrer/${section}/${encodeURIComponent(ids.tvdb_id)}`
     );
   }
   if (ids.tvmaze_id) {
