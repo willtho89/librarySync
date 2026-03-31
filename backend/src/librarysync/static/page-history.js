@@ -701,12 +701,10 @@ async function loadHistory() {
     const blacklistButton = document.createElement("button");
     blacklistButton.type = "button";
     blacklistButton.setAttribute("role", "menuitem");
-    blacklistButton.textContent =
-      item.media_type === "movie" ? "Add to blacklist" : "Add show to blacklist";
+    blacklistButton.textContent = "Add show to blacklist";
     blacklistButton.addEventListener("click", async () => {
       closeHistoryMenus();
-      const label = item.media_type === "movie" ? `"${item.title}"` : `show "${item.title}"`;
-      const confirmed = window.confirm(`Add ${label} to the blacklist?`);
+      const confirmed = window.confirm(`Add show "${item.title}" to the blacklist?`);
       if (!confirmed) {
         return;
       }
@@ -742,7 +740,9 @@ async function loadHistory() {
       menuPanel.appendChild(refreshMetadataButton);
     }
     externalLinks.forEach((link) => menuPanel.appendChild(link));
-    menuPanel.appendChild(blacklistButton);
+    if (item.media_type === "tv" || item.media_type === "anime") {
+      menuPanel.appendChild(blacklistButton);
+    }
     menuPanel.appendChild(deleteButton);
 
     actions.appendChild(menuButton);
@@ -924,7 +924,7 @@ function buildBlacklistPayloadFromHistoryItem(item) {
   return {
     provider,
     provider_item_id,
-    media_type: item.media_type,
+    media_type: "tv",
     title: item.title,
     year: item.year || null,
     poster_url: item.poster_url || null,

@@ -3319,7 +3319,7 @@ function renderBlacklistEntries() {
   if (!blacklistState.entries.length) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
-    empty.textContent = "Nothing is blacklisted yet.";
+    empty.textContent = "No shows are blacklisted yet.";
     container.appendChild(empty);
     return;
   }

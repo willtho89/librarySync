@@ -20,7 +20,7 @@ router = APIRouter(
 class BlacklistItemIn(BaseModel):
     provider: str = Field(..., min_length=1, max_length=32)
     provider_item_id: str = Field(..., min_length=1, max_length=64)
-    media_type: Literal["tv", "movie", "anime"] = "tv"
+    media_type: Literal["tv"] = "tv"
     title: str = Field(..., min_length=1, max_length=255)
     year: int | None = None
     poster_url: str | None = None
@@ -53,7 +53,7 @@ class BlacklistListOut(BaseModel):
     "",
     summary="List blacklist entries",
     description=(
-        "Return the blacklist for the current user. Blacklisted items are only "
+        "Return the TV blacklist for the current user. Blacklisted shows are only "
         "applied during imports; manual history entries are unaffected."
     ),
 )
@@ -92,7 +92,7 @@ async def list_blacklist(
     "",
     summary="Add blacklist entry",
     description=(
-        "Add an item to the blacklist for the current user. Blacklisted items are "
+        "Add a TV show to the blacklist for the current user. Blacklisted shows are "
         "only applied during imports; manual history entries are unaffected."
     ),
 )
@@ -146,7 +146,7 @@ async def create_blacklist(
 
     item = BlacklistItem(
         user_id=current_user.id,
-        media_type=payload.media_type,
+        media_type="tv",
         provider=provider,
         provider_item_id=provider_item_id,
         title=title,
