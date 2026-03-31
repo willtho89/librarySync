@@ -698,6 +698,33 @@ async function loadHistory() {
 
     const externalLinks = buildExternalMenuLinks(item);
 
+    const blacklistButton = document.createElement("button");
+    blacklistButton.type = "button";
+    blacklistButton.setAttribute("role", "menuitem");
+    blacklistButton.textContent = "Add show to blacklist";
+    blacklistButton.addEventListener("click", async () => {
+      closeHistoryMenus();
+      const confirmed = window.confirm(`Add show "${item.title}" to the blacklist?`);
+      if (!confirmed) {
+        return;
+      }
+      const payload = buildBlacklistPayloadFromHistoryItem(item);
+      if (!payload) {
+        setMessage("history-message", "Cannot blacklist: no provider ID available.", true);
+        return;
+      }
+      try {
+        setMessage("history-message", "Adding to blacklist...");
+        await requestJSON("/api/blacklist", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setMessage("history-message", `"${item.title}" added to blacklist.`);
+      } catch (error) {
+        setMessage("history-message", error.message, true);
+      }
+    });
+
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "danger-button";
@@ -713,6 +740,9 @@ async function loadHistory() {
       menuPanel.appendChild(refreshMetadataButton);
     }
     externalLinks.forEach((link) => menuPanel.appendChild(link));
+    if (item.media_type === "tv" || item.media_type === "anime") {
+      menuPanel.appendChild(blacklistButton);
+    }
     menuPanel.appendChild(deleteButton);
 
     actions.appendChild(menuButton);
@@ -870,6 +900,39 @@ function buildRatingSelect(currentValue) {
     select.value = String(currentValue);
   }
   return select;
+}
+
+function buildBlacklistPayloadFromHistoryItem(item) {
+  let provider = null;
+  let provider_item_id = null;
+  if (item.tmdb_id) {
+    provider = "tmdb";
+    provider_item_id = item.tmdb_id;
+  } else if (item.tvdb_id) {
+    provider = "tvdb";
+    provider_item_id = item.tvdb_id;
+  } else if (item.imdb_id) {
+    provider = "imdb";
+    provider_item_id = item.imdb_id;
+  } else if (item.tvmaze_id) {
+    provider = "tvmaze";
+    provider_item_id = item.tvmaze_id;
+  }
+  if (!provider) {
+    return null;
+  }
+  return {
+    provider,
+    provider_item_id,
+    media_type: "tv",
+    title: item.title,
+    year: item.year || null,
+    poster_url: item.poster_url || null,
+    imdb_id: item.imdb_id || null,
+    tmdb_id: item.tmdb_id || null,
+    tvdb_id: item.tvdb_id || null,
+    tvmaze_id: item.tvmaze_id || null,
+  };
 }
 
 async function loadIntegrationsForHistory() {
