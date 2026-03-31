@@ -341,7 +341,9 @@ def _select_anime_candidate(
     if not target_key:
         return None
     matches = [
-        candidate for candidate in candidates if _normalize_title_key(candidate.title) == target_key
+        candidate
+        for candidate in candidates
+        if candidate.title and _normalize_title_key(candidate.title) == target_key
     ]
     if not matches:
         return None

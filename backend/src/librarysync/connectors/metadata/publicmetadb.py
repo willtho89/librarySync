@@ -223,7 +223,7 @@ class PublicMetaDbMetadataProvider(MetadataProvider[PublicMetaDbConfig, PublicMe
             )
         return candidates
 
-    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate | None:
         normalized_type = _normalize_media_type(media_type, MEDIA_TYPE_MOVIE)
         payload: dict[str, Any] = {}
         try:
@@ -231,7 +231,10 @@ class PublicMetaDbMetadataProvider(MetadataProvider[PublicMetaDbConfig, PublicMe
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 404:
                 raise
-        return self._build_candidate(provider_id, normalized_type, payload)
+        candidate = self._build_candidate(provider_id, normalized_type, payload)
+        if not candidate.title:
+            return None
+        return candidate
 
     async def validate_credentials(self) -> None:
         await self._get(
@@ -279,7 +282,7 @@ class PublicMetaDbMetadataProvider(MetadataProvider[PublicMetaDbConfig, PublicMe
             or payload.get("name")
             or payload.get("original_title")
             or payload.get("original_name")
-            or f"TMDB {tmdb_id}"
+            or None
         )
         poster_url = payload.get("poster_url") or payload.get("poster")
         release_date = payload.get("release_date")

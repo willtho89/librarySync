@@ -141,7 +141,7 @@ def _candidate_to_model(
         provider=candidate.provider,
         provider_item_id=candidate.provider_id,
         media_type=candidate.media_type,
-        title=candidate.title,
+        title=candidate.title or "",
         year=candidate.year,
         poster_url=candidate.poster_url,
         imdb_id=candidate.imdb_id,

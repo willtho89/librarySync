@@ -62,7 +62,7 @@ class ProviderIdLookupStrategy(LookupStrategy):
             except Exception as exc:
                 last_error = exc
                 continue
-            if candidate.provider_id:
+            if candidate and candidate.provider_id:
                 return [candidate]
         if last_error:
             raise last_error
@@ -131,10 +131,10 @@ class MetadataLookupEngine:
         for idx, candidate in enumerate(candidates):
             if idx < self._detail_limit and candidate.provider_id:
                 try:
-                    enriched.append(
-                        await provider.get_details(candidate.provider_id, candidate.media_type)
-                    )
-                    continue
+                    detail = await provider.get_details(candidate.provider_id, candidate.media_type)
+                    if detail is not None:
+                        enriched.append(detail)
+                        continue
                 except Exception:
                     pass
             enriched.append(candidate)

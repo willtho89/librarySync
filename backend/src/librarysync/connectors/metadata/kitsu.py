@@ -59,7 +59,7 @@ def _normalize_title(raw: dict[str, Any], language: str | None) -> str:
         or titles.get("en_jp")
         or titles.get("ja_jp")
         or attributes.get("slug")
-        or "Unknown title"
+        or None
     )
 
 
@@ -114,10 +114,13 @@ class KitsuMetadataProvider(MetadataProvider[KitsuConfig, None]):
         items = payload.get("data") or []
         return [self._normalize_candidate(item) for item in items]
 
-    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate | None:
         payload = await self._get(f"/anime/{provider_id}", {})
         data = payload.get("data") or {}
-        return self._normalize_candidate(data)
+        candidate = self._normalize_candidate(data)
+        if not candidate.title:
+            return None
+        return candidate
 
     async def validate_credentials(self) -> None:
         await self._get(

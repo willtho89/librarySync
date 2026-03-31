@@ -40,9 +40,9 @@ def _poster_url(images: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _normalize_title(raw: dict[str, Any]) -> str:
+def _normalize_title(raw: dict[str, Any]) -> str | None:
     return (
-        raw.get("title_english") or raw.get("title") or raw.get("title_japanese") or "Unknown title"
+        raw.get("title_english") or raw.get("title") or raw.get("title_japanese") or None
     )
 
 
@@ -78,10 +78,13 @@ class MyAnimeListMetadataProvider(MetadataProvider[MyAnimeListConfig, None]):
             return []
         return []
 
-    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate | None:
         payload = await self._get(f"/anime/{provider_id}", {})
         data = payload.get("data") or {}
-        return self._normalize_candidate(data)
+        candidate = self._normalize_candidate(data)
+        if not candidate.title:
+            return None
+        return candidate
 
     async def validate_credentials(self) -> None:
         await self._get(

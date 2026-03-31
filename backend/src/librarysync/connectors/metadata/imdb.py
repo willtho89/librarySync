@@ -113,7 +113,7 @@ class ImdbMetadataProvider(MetadataProvider[ImdbConfig, None]):
             return [candidate]
         return []
 
-    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate:
+    async def get_details(self, provider_id: str, media_type: str) -> MediaCandidate | None:
         payload = await self._get_suggestions(provider_id)
         items = payload.get("d") or []
         for item in items:
@@ -121,17 +121,11 @@ class ImdbMetadataProvider(MetadataProvider[ImdbConfig, None]):
                 continue
             if str(item.get("id") or "").lower() != provider_id.lower():
                 continue
-            return self._normalize_candidate(item)
-        return MediaCandidate(
-            provider=self.provider,
-            provider_id=provider_id,
-            media_type=_normalize_media_type({"qid": media_type}),
-            title="Unknown title",
-            year=None,
-            poster_url=None,
-            imdb_id=provider_id,
-            raw={"id": provider_id},
-        )
+            candidate = self._normalize_candidate(item)
+            if not candidate.title:
+                return None
+            return candidate
+        return None
 
     async def validate_credentials(self) -> None:
         await self._get_suggestions("matrix")
@@ -152,7 +146,7 @@ class ImdbMetadataProvider(MetadataProvider[ImdbConfig, None]):
 
     def _normalize_candidate(self, raw: dict[str, Any]) -> MediaCandidate:
         imdb_id = raw.get("id") or ""
-        title = raw.get("l") or raw.get("title") or "Unknown title"
+        title = raw.get("l") or raw.get("title") or None
         year = _extract_year(raw.get("y") or raw.get("year"))
         poster_url = _poster_url(raw.get("i"))
         media_type = _normalize_media_type(raw)
