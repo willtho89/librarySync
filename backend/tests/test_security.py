@@ -1,10 +1,9 @@
 import base64
 import hashlib
 
+import librarysync.core.security
 import pytest
 from cryptography.fernet import Fernet
-
-import librarysync.core.security
 
 
 def _make_test_fernet():

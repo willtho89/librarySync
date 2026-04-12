@@ -1,6 +1,4 @@
-import math
 import pytest
-
 from librarysync.core.ratings import (
     coerce_star_rating,
     normalize_star_rating,
