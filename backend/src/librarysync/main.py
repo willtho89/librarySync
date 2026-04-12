@@ -215,9 +215,9 @@ def create_app() -> FastAPI:
         **context: object,
     ):
         return templates.TemplateResponse(
+            request,
             template_name,
             {
-                "request": request,
                 "app_version": app_version,
                 "auth_state": "auth" if current_user else "guest",
                 "current_user": current_user,
