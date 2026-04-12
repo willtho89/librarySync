@@ -23,11 +23,6 @@ dependencies = [
   "parsett>=1.8.5",
 ]
 
-[project.optional-dependencies]
-tests = [
-  "pytest>=7.1",
-]
-
 [tool.setuptools.packages.find]
 where = ["src"]
 
@@ -44,5 +39,5 @@ librarysync = [
   "db/migrations/**/*",
 ]
 
-[tool.uv]
-dev-dependencies = ["ruff>=0.15.3"]
+[dependency-groups]
+dev = ["ruff>=0.15.3", "pytest>=8.0", "pytest-asyncio>=0.23.0"]

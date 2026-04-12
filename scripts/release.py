@@ -8,9 +8,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION_FILES = (
-    ROOT / "backend/pyproject.toml",
-)
+VERSION_FILES = (ROOT / "backend/pyproject.toml",)
 UV_LOCK = ROOT / "uv.lock"
 
 VERSION_LINE = re.compile(r'^(?P<indent>\s*)version\s*=\s*"(?P<version>[^"]+)"\s*$')
@@ -82,7 +80,7 @@ def ensure_clean_worktree() -> None:
 
 def run_checks() -> None:
     run(["uv", "run", "ruff", "check", "./backend/"])
-    run(["uv", "run", "python", "-m", "unittest", "discover", "backend/tests"])
+    run(["uv", "run", "python", "-m", "pytest", "backend/tests"])
 
 
 def main() -> int:

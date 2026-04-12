@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from importlib import metadata
 from pathlib import Path
 
@@ -81,7 +82,7 @@ def create_app() -> FastAPI:
     # CORS configuration
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=['*'],
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -199,10 +200,13 @@ def create_app() -> FastAPI:
     async def webmanifest_512() -> FileResponse:
         return _static_asset("web-app-manifest-512x512.png")
 
-    @app.on_event("startup")
-    def _startup() -> None:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         run_migrations()
         init_session_factory()
+        yield
+
+    app.router.lifespan_context = lifespan
 
     def _render_page(
         request: Request,

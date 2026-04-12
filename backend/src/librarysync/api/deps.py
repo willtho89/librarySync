@@ -74,7 +74,7 @@ async def get_optional_user(
 
 
 async def get_admin_api_key(
-    admin_api_key: str = Header(alias="X-API-Key", example="your-admin-api-key"),
+    admin_api_key: str = Header(alias="X-API-Key", examples=["your-admin-api-key"]),
 ) -> str:
     if not settings.admin_api_key:
         raise HTTPException(
