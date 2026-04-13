@@ -102,7 +102,7 @@ logger = logging.getLogger(__name__)
 
 def _get_provider_batch_sizes() -> dict[str, int]:
     """Get provider batch sizes from settings.
-    
+
     Returns a dictionary mapping provider names to their configured maximum
     batch sizes. Called during batch processing to retrieve current settings.
     """
@@ -151,9 +151,7 @@ class LetterboxdOutboxHandler(OutboxHandler):
 
     async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
         if job.job_type == "push_watched":
-            response_code, external_id, resolved_rewatch = await _deliver_letterboxd_watch(
-                db, job
-            )
+            response_code, external_id, resolved_rewatch = await _deliver_letterboxd_watch(db, job)
             return DeliveryResult(response_code, external_id, resolved_rewatch)
         if job.job_type == "push_rating":
             response_code, external_id, resolved_rewatch = await _deliver_letterboxd_watch(
@@ -314,31 +312,31 @@ async def _deliver_anilist_watch(db: AsyncSession, job: OutboxJob) -> tuple[int 
     rating = payload.get("rating")
     is_episode = payload.get("is_episode", False)
     episode_number = payload.get("episode_number")
-    
+
     if not anilist_id:
         raise AniListError("AniList ID is required")
-    
+
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "anilist")
     if not integration or not secret_data:
         raise AniListError("AniList credentials are missing", status_code=401)
     if not has_required_anilist_fields(secret_data):
         raise AniListError("AniList credentials are incomplete", status_code=401)
-    
+
     access_token = secret_data.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         raise AniListError("AniList access token is missing", status_code=401)
-    
+
     client = AniListClient(access_token=access_token)
-    
+
     # Get viewer info to get user ID
     viewer = await client.get_viewer()
     user_id = viewer.get("id")
     if not user_id:
         raise AniListError("Failed to get AniList user ID")
-    
+
     # Convert rating from 0.5-5.0 to 0-10 scale for AniList
     anilist_score = convert_rating_to_anilist_scale(rating)
-    
+
     # For episodes, use CURRENT status and set progress
     # For movies or completed series, use COMPLETED status
     if is_episode and episode_number is not None:
@@ -358,10 +356,10 @@ async def _deliver_anilist_watch(db: AsyncSession, job: OutboxJob) -> tuple[int 
             score=anilist_score,
             completed_at=watched_at,
         )
-    
+
     entry_id = result.get("id")
     external_id = str(entry_id) if entry_id else None
-    
+
     return 200, external_id
 
 
@@ -373,34 +371,34 @@ async def _deliver_anilist_rating(
     entry_id = payload.get("entry_id")
     rating = payload.get("rating")
     anilist_id = payload.get("anilist_id")
-    
+
     if not entry_id:
         raise AniListError("AniList entry ID is required for rating update")
     if not anilist_id:
         raise AniListError("AniList media ID is required")
-    
+
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "anilist")
     if not integration or not secret_data:
         raise AniListError("AniList credentials are missing", status_code=401)
     if not has_required_anilist_fields(secret_data):
         raise AniListError("AniList credentials are incomplete", status_code=401)
-    
+
     access_token = secret_data.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         raise AniListError("AniList access token is missing", status_code=401)
-    
+
     client = AniListClient(access_token=access_token)
-    
+
     # Convert rating from 0.5-5.0 to 0-10 scale
     anilist_score = convert_rating_to_anilist_scale(rating)
-    
+
     # Update the existing entry
     await client.add_media_list_entry(
         media_id=int(anilist_id),
         status="COMPLETED",
         score=anilist_score,
     )
-    
+
     return 200, str(entry_id)
 
 
@@ -411,20 +409,20 @@ async def _deliver_anilist_remove(
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
     anilist_id = payload.get("anilist_id")
-    
+
     if not entry_id and not anilist_id:
         raise AniListError("AniList entry ID or media ID is required for removal")
-    
+
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "anilist")
     if not integration or not secret_data:
         raise AniListError("AniList credentials are missing", status_code=401)
     if not has_required_anilist_fields(secret_data):
         raise AniListError("AniList credentials are incomplete", status_code=401)
-    
+
     access_token = secret_data.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         raise AniListError("AniList access token is missing", status_code=401)
-    
+
     client = AniListClient(access_token=access_token)
 
     if not entry_id:
@@ -438,13 +436,13 @@ async def _deliver_anilist_remove(
         if not entry or not entry.get("id"):
             return 200, None
         entry_id = entry.get("id")
-    
+
     # Delete the entry
     success = await client.delete_media_list_entry(int(entry_id))
-    
+
     if not success:
         raise AniListError("Failed to delete AniList entry")
-    
+
     return 200, None
 
 
@@ -467,10 +465,7 @@ def _group_batchable_jobs(jobs: list[OutboxJob]) -> tuple[list[list[OutboxJob]],
     grouped: dict[tuple[str, str, str], list[OutboxJob]] = {}
     remaining: list[OutboxJob] = []
     for job in jobs:
-        if (
-            job.target_provider in BATCHABLE_PROVIDERS
-            and job.job_type in BATCHABLE_JOB_TYPES
-        ):
+        if job.target_provider in BATCHABLE_PROVIDERS and job.job_type in BATCHABLE_JOB_TYPES:
             key = (job.user_id, job.target_provider, job.job_type)
             grouped.setdefault(key, []).append(job)
         else:
@@ -635,13 +630,9 @@ async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
             .with_for_update(skip_locked=True)
         )
         jobs: list[OutboxJob] = []
-        for provider, provider_limit in _mixed_provider_limits(
-            limit, MIXED_PROVIDER_ORDER
-        ).items():
+        for provider, provider_limit in _mixed_provider_limits(limit, MIXED_PROVIDER_ORDER).items():
             result = await db.execute(
-                base_query.where(OutboxJob.target_provider == provider).limit(
-                    provider_limit
-                )
+                base_query.where(OutboxJob.target_provider == provider).limit(provider_limit)
             )
             jobs.extend(result.scalars().all())
         remaining_limit = limit - len(jobs)
@@ -650,9 +641,7 @@ async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
             remainder_filters = []
             if claimed_ids:
                 remainder_filters.append(~OutboxJob.id.in_(claimed_ids))
-            result = await db.execute(
-                base_query.where(*remainder_filters).limit(remaining_limit)
-            )
+            result = await db.execute(base_query.where(*remainder_filters).limit(remaining_limit))
             jobs.extend(result.scalars().all())
         for job in jobs:
             job.status = "in_progress"
@@ -807,9 +796,7 @@ async def _deliver_letterboxd_watch(
         refresh_token=str(secret_data.get("refresh_token")),
         cookies=_safe_cookies(secret_data.get("cookies")),
     )
-    access_token = await _ensure_letterboxd_access_token(
-        db, integration.id, secret_data, client
-    )
+    access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     if force_update_rating and rating is not None and entry_id:
         _, response_code = await client.update_log_entry_rating(
             str(entry_id), rating, access_token=access_token
@@ -895,9 +882,7 @@ async def _deliver_letterboxd_watchlist_change(
         refresh_token=str(secret_data.get("refresh_token")),
         cookies=_safe_cookies(secret_data.get("cookies")),
     )
-    access_token = await _ensure_letterboxd_access_token(
-        db, integration.id, secret_data, client
-    )
+    access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     if not film_id:
         film_id = await client.resolve_film_id(access_token, imdb_id, tmdb_id)
     if in_watchlist:
@@ -950,9 +935,7 @@ async def _deliver_letterboxd_log_update(
         refresh_token=str(secret_data.get("refresh_token")),
         cookies=_safe_cookies(secret_data.get("cookies")),
     )
-    access_token = await _ensure_letterboxd_access_token(
-        db, integration.id, secret_data, client
-    )
+    access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     response, response_code = await client.update_log_entry(
         str(entry_id),
         watched_at=watched_at,
@@ -987,9 +970,7 @@ async def _deliver_letterboxd_delete(
         refresh_token=str(secret_data.get("refresh_token")),
         cookies=_safe_cookies(secret_data.get("cookies")),
     )
-    access_token = await _ensure_letterboxd_access_token(
-        db, integration.id, secret_data, client
-    )
+    access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     _, response_code = await client.delete_log_entry(str(entry_id), access_token=access_token)
     return response_code, str(entry_id)
 
@@ -1002,8 +983,10 @@ async def _ensure_letterboxd_access_token(
 ) -> str:
     access_token = secret_data.get("access_token")
     expires_at = parse_letterboxd_expires_at(secret_data.get("expires_at"))
-    if isinstance(access_token, str) and access_token and not is_letterboxd_token_expired(
-        expires_at
+    if (
+        isinstance(access_token, str)
+        and access_token
+        and not is_letterboxd_token_expired(expires_at)
     ):
         return access_token
     token = await client.refresh_access_token_payload()
@@ -1048,9 +1031,7 @@ async def _ensure_letterboxd_member(
     return member_id
 
 
-def _merge_payload_list(
-    payloads: list[dict[str, Any]], keys: tuple[str, ...]
-) -> dict[str, Any]:
+def _merge_payload_list(payloads: list[dict[str, Any]], keys: tuple[str, ...]) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     for payload in payloads:
         for key in keys:
@@ -1062,12 +1043,8 @@ def _merge_payload_list(
     return merged
 
 
-async def _deliver_trakt_watch_batch(
-    db: AsyncSession, jobs: list[OutboxJob]
-) -> int | None:
-    integration, secret_data = await load_integration_with_secrets(
-        db, jobs[0].user_id, "trakt"
-    )
+async def _deliver_trakt_watch_batch(db: AsyncSession, jobs: list[OutboxJob]) -> int | None:
+    integration, secret_data = await load_integration_with_secrets(db, jobs[0].user_id, "trakt")
     if not integration or not secret_data:
         raise TraktError("Trakt credentials are missing", status_code=401)
     if not has_required_trakt_fields(secret_data):
@@ -1090,12 +1067,8 @@ async def _deliver_trakt_watch_batch(
     return response_code
 
 
-async def _deliver_trakt_rating_batch(
-    db: AsyncSession, jobs: list[OutboxJob]
-) -> int | None:
-    integration, secret_data = await load_integration_with_secrets(
-        db, jobs[0].user_id, "trakt"
-    )
+async def _deliver_trakt_rating_batch(db: AsyncSession, jobs: list[OutboxJob]) -> int | None:
+    integration, secret_data = await load_integration_with_secrets(db, jobs[0].user_id, "trakt")
     if not integration or not secret_data:
         raise TraktError("Trakt credentials are missing", status_code=401)
     if not has_required_trakt_fields(secret_data):
@@ -1118,12 +1091,8 @@ async def _deliver_trakt_rating_batch(
     return response_code
 
 
-async def _deliver_simkl_watch_batch(
-    db: AsyncSession, jobs: list[OutboxJob]
-) -> int | None:
-    integration, secret_data = await load_integration_with_secrets(
-        db, jobs[0].user_id, "simkl"
-    )
+async def _deliver_simkl_watch_batch(db: AsyncSession, jobs: list[OutboxJob]) -> int | None:
+    integration, secret_data = await load_integration_with_secrets(db, jobs[0].user_id, "simkl")
     if not integration or not secret_data:
         raise SimklError("SIMKL credentials are missing", status_code=401)
     if not has_required_simkl_fields(secret_data):
@@ -1146,12 +1115,8 @@ async def _deliver_simkl_watch_batch(
     return response_code
 
 
-async def _deliver_simkl_rating_batch(
-    db: AsyncSession, jobs: list[OutboxJob]
-) -> int | None:
-    integration, secret_data = await load_integration_with_secrets(
-        db, jobs[0].user_id, "simkl"
-    )
+async def _deliver_simkl_rating_batch(db: AsyncSession, jobs: list[OutboxJob]) -> int | None:
+    integration, secret_data = await load_integration_with_secrets(db, jobs[0].user_id, "simkl")
     if not integration or not secret_data:
         raise SimklError("SIMKL credentials are missing", status_code=401)
     if not has_required_simkl_fields(secret_data):
@@ -1194,9 +1159,7 @@ async def _deliver_trakt_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | 
     existing_watched_at = None
     if job.attempts > 1:
         try:
-            existing = await _find_trakt_history_for_day(
-                client, access_token, payload, watched_at
-            )
+            existing = await _find_trakt_history_for_day(client, access_token, payload, watched_at)
             if existing:
                 existing_history_id, existing_watched_at = existing
         except TraktError as exc:
@@ -1283,9 +1246,7 @@ async def _deliver_trakt_update(db: AsyncSession, job: OutboxJob) -> tuple[int |
     if not watched_at:
         raise ValueError("Trakt update requires watched_at")
     previous_watched_at = _parse_optional_datetime(payload.get("previous_watched_at"))
-    history_id = _coerce_str(payload.get("history_id")) or _coerce_str(
-        payload.get("external_id")
-    )
+    history_id = _coerce_str(payload.get("history_id")) or _coerce_str(payload.get("external_id"))
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
     if not integration or not secret_data:
         raise TraktError("Trakt credentials are missing", status_code=401)
@@ -1315,22 +1276,21 @@ async def _deliver_trakt_update(db: AsyncSession, job: OutboxJob) -> tuple[int |
             )
             if match:
                 history_id, _ = match
-        if not history_id:
-            raise ValueError("Trakt update could not locate prior history entry")
-        remove_payload = _build_trakt_remove_payload_for_id(history_id)
-        _, response_code = await client.remove_history(remove_payload, access_token)
-        if response_code and response_code >= 400:
-            raise TraktError(
-                f"Trakt history remove returned {response_code}",
-                status_code=response_code,
+        if history_id:
+            remove_payload = _build_trakt_remove_payload_for_id(history_id)
+            _, response_code = await client.remove_history(remove_payload, access_token)
+            if response_code and response_code >= 400:
+                raise TraktError(
+                    f"Trakt history remove returned {response_code}",
+                    status_code=response_code,
+                )
+            history_payload = _build_trakt_history_payload(payload, watched_at)
+            response, response_code = await client.add_history(history_payload, access_token)
+            external_id = _extract_trakt_history_id(
+                response,
+                _coerce_str(payload.get("media_type")),
             )
-        history_payload = _build_trakt_history_payload(payload, watched_at)
-        response, response_code = await client.add_history(history_payload, access_token)
-        external_id = _extract_trakt_history_id(
-            response,
-            _coerce_str(payload.get("media_type")),
-        )
-        return response_code, external_id
+            return response_code, external_id
     try:
         if history_id:
             _, response_code = await client.update_history(
@@ -1340,10 +1300,6 @@ async def _deliver_trakt_update(db: AsyncSession, job: OutboxJob) -> tuple[int |
             )
             return response_code, history_id
     except TraktError as exc:
-        # Treat 400 (Bad Request) as recoverable here because Trakt can return 400
-        # for invalid/obsolete history IDs or payload shape; in these cases we fall
-        # back to clearing history_id and re-creating the history entry instead of
-        # failing the job outright, similar to 404/405.
         if exc.status_code in {400, 404, 405}:
             history_id = None
         else:
@@ -1747,14 +1703,39 @@ async def _deliver_publicmetadb_watch(
                 return 200, existing_history_id
         except PublicMetaDbError as exc:
             logger.info("PublicMetaDB history precheck failed: %s", exc)
-    response, response_code = await client.mark_watched(
-        api_key,
-        tmdb_id=tmdb_id,
-        media_type=media_type,
-        season=season_number,
-        episode=episode_number,
-        watched_at=watched_at,
-    )
+    try:
+        response, response_code = await client.mark_watched(
+            api_key,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            season=season_number,
+            episode=episode_number,
+            watched_at=watched_at,
+        )
+    except PublicMetaDbError as exc:
+        if exc.status_code == 409:
+            existing_id = await _resolve_publicmetadb_watched_id(
+                client,
+                api_key,
+                tmdb_id=tmdb_id,
+                media_type=media_type,
+                season=season_number,
+                episode=episode_number,
+            )
+            if existing_id:
+                await client.delete_watched(api_key, existing_id)
+                response, response_code = await client.mark_watched(
+                    api_key,
+                    tmdb_id=tmdb_id,
+                    media_type=media_type,
+                    season=season_number,
+                    episode=episode_number,
+                    watched_at=watched_at,
+                )
+            else:
+                raise
+        else:
+            raise
     return response_code, _extract_publicmetadb_entry_id(response)
 
 
@@ -1948,29 +1929,109 @@ async def _deliver_publicmetadb_rating(
             raise ValueError(
                 "PublicMetaDB TV rating sync requires season_number and episode_number"
             )
-        _response_payload, response_code = await client.create_episode_rating(
+        existing_id = await _find_publicmetadb_rating_id(
+            client,
             api_key,
             tmdb_id=tmdb_id,
             media_type=media_type,
             season=season_number,
             episode=episode_number,
-            score=score,
             label=label,
         )
+        if existing_id:
+            await client.delete_episode_rating(api_key, existing_id)
+        try:
+            _response_payload, response_code = await client.create_episode_rating(
+                api_key,
+                tmdb_id=tmdb_id,
+                media_type=media_type,
+                season=season_number,
+                episode=episode_number,
+                score=score,
+                label=label,
+            )
+        except PublicMetaDbError as exc:
+            if exc.status_code == 409 and existing_id:
+                await client.delete_episode_rating(api_key, existing_id)
+                _response_payload, response_code = await client.create_episode_rating(
+                    api_key,
+                    tmdb_id=tmdb_id,
+                    media_type=media_type,
+                    season=season_number,
+                    episode=episode_number,
+                    score=score,
+                    label=label,
+                )
+            else:
+                raise
         return response_code, None
-    _response_payload, response_code = await client.create_rating(
+    existing_id = await _find_publicmetadb_rating_id(
+        client,
         api_key,
         tmdb_id=tmdb_id,
         media_type=media_type,
-        score=score,
         label=label,
     )
+    if existing_id:
+        await client.delete_rating(api_key, existing_id)
+    try:
+        _response_payload, response_code = await client.create_rating(
+            api_key,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            score=score,
+            label=label,
+        )
+    except PublicMetaDbError as exc:
+        if exc.status_code == 409 and existing_id:
+            await client.delete_rating(api_key, existing_id)
+            _response_payload, response_code = await client.create_rating(
+                api_key,
+                tmdb_id=tmdb_id,
+                media_type=media_type,
+                score=score,
+                label=label,
+            )
+        else:
+            raise
     return response_code, None
 
 
-async def _deliver_stremio_watch(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _find_publicmetadb_rating_id(
+    client: PublicMetaDbClient,
+    api_key: str,
+    *,
+    tmdb_id: int,
+    media_type: str,
+    season: int | None = None,
+    episode: int | None = None,
+    label: str,
+) -> str | None:
+    if media_type == "tv" and season is not None and episode is not None:
+        rating_list, _ = await client.list_episode_ratings(
+            api_key,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            season=season,
+            episode=episode,
+            label=label,
+        )
+    else:
+        rating_list, _ = await client.list_ratings(
+            api_key,
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            label=label,
+        )
+    items = rating_list.get("items") if isinstance(rating_list, dict) else []
+    for item in items if isinstance(items, list) else []:
+        item_id = item.get("id")
+        if isinstance(item_id, (str, int)):
+            return str(item_id)
+    return None
+
+
+async def _deliver_stremio_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     watched_at = _parse_datetime(payload.get("watched_at"))
     item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
@@ -2305,16 +2366,12 @@ async def _resolve_show_media_item_id(
         show_media_item_id = result.scalars().first()
         if show_media_item_id:
             return str(show_media_item_id)
-    result = await db.execute(
-        select(MediaItem.id).where(MediaItem.imdb_id == item_id).limit(1)
-    )
+    result = await db.execute(select(MediaItem.id).where(MediaItem.imdb_id == item_id).limit(1))
     media_id = result.scalars().first()
     if media_id:
         return str(media_id)
     result = await db.execute(
-        select(MediaItem.id)
-        .where(MediaItem.raw["stremio_id"].as_string() == item_id)
-        .limit(1)
+        select(MediaItem.id).where(MediaItem.raw["stremio_id"].as_string() == item_id).limit(1)
     )
     media_id = result.scalars().first()
     if media_id:
@@ -2896,9 +2953,7 @@ def _parse_trakt_datetime(value: object) -> datetime | None:
 
 
 def _parse_trakt_page_count(headers: dict[str, str]) -> int | None:
-    value = headers.get("x-pagination-page-count") or headers.get(
-        "X-Pagination-Page-Count"
-    )
+    value = headers.get("x-pagination-page-count") or headers.get("X-Pagination-Page-Count")
     if not value:
         return None
     try:
