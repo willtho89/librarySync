@@ -19,7 +19,7 @@ dependencies = [
   "httpx>=0.28.1",
   "passlib[bcrypt]>=1.7",
   "python-jose[cryptography]>=3.5.0",
-  "greenlet>=3.3.2",
+  "greenlet>=3.4.0",
   "parsett>=1.8.5",
 ]
 
