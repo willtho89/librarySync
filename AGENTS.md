@@ -347,7 +347,7 @@ Primary audit sources: `watch_events`, `outbox`, `sync_attempts`, `watch_syncs`
 - **HTTP Requests**: Always use `get_http_client()` from `core/http_client.py` to ensure consistent User-Agent headers (`librarySync Version/<version>`)
 
 ### Tooling
-- **Linter**: Ruff with 100-character line length (see `pyproject.toml`)
+- **Linter**: Ruff with 120-character line length (see `pyproject.toml`)
 - **Styles**: Edit `frontend/input.css` (not `backend/src/librarysync/static/styles.css` directly)
 - **Build**: Rebuild `backend/src/librarysync/static/styles.css` after Tailwind changes
 
