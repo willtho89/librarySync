@@ -639,17 +639,16 @@ async def create_external_catalog(
     source_kind = normalize_external_source_kind(payload.source_kind)
     source_provider = normalize_external_source_provider(payload.source_provider)
     source_url = (payload.source_url or payload.manifest_url or "").strip()
-    manifest_url = (
-        normalize_external_manifest_url(source_url)
-        if source_kind == "manifest"
-        else source_url
-    )
-    if not manifest_url:
-        detail = (
-            "Manifest URL is required"
+    try:
+        manifest_url = (
+            await normalize_external_manifest_url(source_url)
             if source_kind == "manifest"
-            else "Source URL is required"
+            else source_url
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not manifest_url:
+        detail = "Manifest URL is required" if source_kind == "manifest" else "Source URL is required"
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
     source_catalog_id = payload.source_catalog_id.strip()
     if not source_catalog_id:

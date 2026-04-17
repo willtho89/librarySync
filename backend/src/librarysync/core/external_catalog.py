@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
 from sqlalchemy import delete, or_, select
@@ -125,7 +125,7 @@ def _decode_external_json(response: httpx.Response, context: str) -> dict[str, A
     return payload
 
 
-def normalize_external_manifest_url(value: str) -> str:
+def _normalize_external_manifest_url_path(value: str) -> str:
     manifest_url = (value or "").strip()
     if not manifest_url:
         return ""
@@ -134,12 +134,19 @@ def normalize_external_manifest_url(value: str) -> str:
         raise ValueError("Manifest URL must use http or https")
     if not parsed.netloc:
         raise ValueError("Manifest URL host is required")
-    _validate_external_manifest_host(parsed.hostname)
 
     path = parsed.path or ""
     if not path.endswith("/manifest.json"):
         path = f"{path.rstrip('/')}/manifest.json" if path else "/manifest.json"
     return urlunparse(parsed._replace(path=path))
+
+
+async def normalize_external_manifest_url(value: str) -> str:
+    normalized_url = _normalize_external_manifest_url_path(value)
+    if not normalized_url:
+        return ""
+    await _validate_external_manifest_host(urlparse(normalized_url).hostname)
+    return normalized_url
 
 
 def normalize_external_source_kind(value: str | None) -> str:
@@ -279,7 +286,7 @@ async def discover_external_catalog_source(
 
 
 async def _discover_manifest_catalogs(manifest_url: str) -> dict[str, Any]:
-    normalized_url = normalize_external_manifest_url(manifest_url)
+    normalized_url = await normalize_external_manifest_url(manifest_url)
     if not normalized_url:
         raise ValueError("Manifest URL is required")
 
@@ -317,15 +324,18 @@ async def _discover_manifest_catalogs(manifest_url: str) -> dict[str, Any]:
     }
 
 
-async def refresh_external_catalog(
-    db: AsyncSession,
-    catalog: StremioExternalCatalog,
-    *,
-    max_items: int | None = None,
 @dataclass(frozen=True)
 class _ExternalMediaItemLookup:
     by_stremio_id: dict[tuple[str, str], str]
     by_imdb_id: dict[tuple[str, str], str]
+
+
+def _media_item_type_to_stremio_type(media_type: str) -> str | None:
+    if media_type == "movie":
+        return "movie"
+    if media_type in {"tv", "anime", "series"}:
+        return "series"
+    return None
 
 
 async def _prefetch_external_media_item_ids(
@@ -333,27 +343,25 @@ async def _prefetch_external_media_item_ids(
     metas: list[dict[str, Any]],
     default_stremio_type: str | None,
 ) -> _ExternalMediaItemLookup:
-    stremio_ids: set[str] = set()
-    imdb_ids: set[str] = set()
+    filters = []
 
     for meta in metas:
         stremio_id = str(meta.get("id") or "").strip()
         stremio_type = str(meta.get("type") or default_stremio_type or "").strip().lower()
-        if not stremio_id or stremio_type not in {"movie", "series"}:
+        media_types = stremio_type_to_media_types(stremio_type)
+        if not stremio_id or not media_types:
             continue
-        stremio_ids.add(stremio_id)
+
+        filters.append(
+            MediaItem.media_type.in_(media_types) & (MediaItem.raw["stremio_id"].as_string() == stremio_id)
+        )
+
         imdb_id = _extract_imdb_id(meta, stremio_id)
         if imdb_id:
-            imdb_ids.add(imdb_id)
+            filters.append(MediaItem.media_type.in_(media_types) & (MediaItem.imdb_id == imdb_id))
 
-    if not stremio_ids and not imdb_ids:
+    if not filters:
         return _ExternalMediaItemLookup(by_stremio_id={}, by_imdb_id={})
-
-    filters = []
-    if stremio_ids:
-        filters.append(MediaItem.stremio_id.in_(stremio_ids))
-    if imdb_ids:
-        filters.append(MediaItem.imdb_id.in_(imdb_ids))
 
     result = await db.execute(select(MediaItem).where(or_(*filters)))
     media_items = result.scalars().all()
@@ -362,22 +370,21 @@ async def _prefetch_external_media_item_ids(
     by_imdb_id: dict[tuple[str, str], str] = {}
     for media_item in media_items:
         media_type = str(getattr(media_item, "media_type", "") or "").strip().lower()
-        if media_type not in {"movie", "series"}:
+        stremio_type = _media_item_type_to_stremio_type(media_type)
+        if stremio_type is None:
             continue
 
         media_item_id = str(media_item.id)
-        item_stremio_id = str(getattr(media_item, "stremio_id", "") or "").strip()
+        raw = media_item.raw if isinstance(media_item.raw, dict) else {}
+        item_stremio_id = str(raw.get("stremio_id") or "").strip()
         if item_stremio_id:
-            by_stremio_id.setdefault((media_type, item_stremio_id), media_item_id)
+            by_stremio_id.setdefault((stremio_type, item_stremio_id), media_item_id)
 
         item_imdb_id = str(getattr(media_item, "imdb_id", "") or "").strip()
         if item_imdb_id:
-            by_imdb_id.setdefault((media_type, item_imdb_id), media_item_id)
+            by_imdb_id.setdefault((stremio_type, item_imdb_id), media_item_id)
 
-    return _ExternalMediaItemLookup(
-        by_stremio_id=by_stremio_id,
-        by_imdb_id=by_imdb_id,
-    )
+    return _ExternalMediaItemLookup(by_stremio_id=by_stremio_id, by_imdb_id=by_imdb_id)
 
 
 def _lookup_prefetched_external_media_item_id(
@@ -394,11 +401,36 @@ def _lookup_prefetched_external_media_item_id(
     return None
 
 
+def _build_external_manifest_catalog_url(
+    manifest_url: str,
+    catalog_type: str,
+    catalog_id: str,
+    *,
+    skip: int,
+    limit: int,
+) -> str:
+    parsed = urlparse(manifest_url)
+    if not parsed.path.endswith("/manifest.json"):
+        raise ValueError("Manifest URL must end with /manifest.json")
+
+    base_path = parsed.path[: -len("/manifest.json")]
+    catalog_path = (
+        f"{base_path}/catalog/{quote(catalog_type, safe='')}/{quote(catalog_id, safe='')}"
+        f"/skip={skip}&limit={limit}.json"
+    )
+    return urlunparse(parsed._replace(path=catalog_path))
+
+
+async def refresh_external_catalog(
+    db: AsyncSession,
+    catalog: StremioExternalCatalog,
+    *,
+    max_items: int | None = None,
 ) -> int:
     if normalize_external_source_kind(getattr(catalog, "source_kind", None)) == "list":
         return await _refresh_external_list_catalog(db, catalog, max_items=max_items)
 
-    normalized_manifest_url = normalize_external_manifest_url(catalog.manifest_url)
+    normalized_manifest_url = await normalize_external_manifest_url(catalog.manifest_url)
     max_catalog_items = max_items or settings.external_catalog_max_items
     fetched_at = datetime.now(timezone.utc)
 
@@ -410,14 +442,16 @@ def _lookup_prefetched_external_media_item_id(
             str(manifest_payload.get("name") or catalog.addon_name or "").strip() or None
         )
 
-        base_url = normalized_manifest_url[: -len("/manifest.json")]
         metas: list[dict[str, Any]] = []
         skip = 0
         while len(metas) < max_catalog_items:
             limit = min(EXTERNAL_CATALOG_FETCH_PAGE_SIZE, max_catalog_items - len(metas))
-            catalog_url = (
-                f"{base_url}/catalog/{catalog.source_catalog_type}/{catalog.source_catalog_id}"
-                f"/skip={skip}&limit={limit}.json"
+            catalog_url = _build_external_manifest_catalog_url(
+                normalized_manifest_url,
+                catalog.source_catalog_type,
+                catalog.source_catalog_id,
+                skip=skip,
+                limit=limit,
             )
             response = await client.get(catalog_url)
             response.raise_for_status()

@@ -12,9 +12,11 @@ from librarysync.api import (
 from librarysync.core.external_catalog import (
     ExternalCatalogListItem,
     ExternalCatalogProviderError,
+    _build_external_manifest_catalog_url,
     _dedupe_external_list_items,
     _dedupe_external_metas,
     _discover_tmdb_chart_catalogs,
+    _prefetch_external_media_item_ids,
     normalize_external_manifest_url,
 )
 from librarysync.core.stremio_addon import build_default_catalogs
@@ -254,13 +256,65 @@ class TestStremioAddonCatalogs(unittest.TestCase):
 
     def test_normalize_external_manifest_url_preserves_query(self) -> None:
         self.assertEqual(
-            normalize_external_manifest_url("https://addon.example/path?foo=bar"),
+            asyncio.run(normalize_external_manifest_url("https://addon.example/path?foo=bar")),
             "https://addon.example/path/manifest.json?foo=bar",
         )
 
     def test_normalize_external_manifest_url_rejects_disallowed_host(self) -> None:
         with self.assertRaises(ValueError):
-            normalize_external_manifest_url("http://127.0.0.1/manifest.json")
+            asyncio.run(normalize_external_manifest_url("http://127.0.0.1/manifest.json"))
+
+    def test_build_external_manifest_catalog_url_preserves_query(self) -> None:
+        self.assertEqual(
+            _build_external_manifest_catalog_url(
+                "https://addon.example/path/manifest.json?foo=bar",
+                "movie",
+                "top rated",
+                skip=100,
+                limit=50,
+            ),
+            "https://addon.example/path/catalog/movie/top%20rated/skip=100&limit=50.json?foo=bar",
+        )
+
+    def test_prefetch_external_media_item_ids_uses_raw_stremio_id_and_series_type(self) -> None:
+        class _FakeScalarResult:
+            def __init__(self, values):
+                self._values = values
+
+            def all(self):
+                return self._values
+
+        class _FakeExecuteResult:
+            def __init__(self, values):
+                self._values = values
+
+            def scalars(self):
+                return _FakeScalarResult(self._values)
+
+        class _FakeDb:
+            async def execute(self, query):
+                return _FakeExecuteResult(
+                    [
+                        MediaItem(
+                            id="media-1",
+                            media_type="tv",
+                            title="Example Show",
+                            imdb_id="tt1234567",
+                            raw={"stremio_id": "stremio:series:1"},
+                        )
+                    ]
+                )
+
+        lookup = asyncio.run(
+            _prefetch_external_media_item_ids(
+                _FakeDb(),
+                [{"id": "stremio:series:1", "type": "series", "imdb_id": "tt1234567"}],
+                "series",
+            )
+        )
+
+        self.assertEqual(lookup.by_stremio_id[("series", "stremio:series:1")], "media-1")
+        self.assertEqual(lookup.by_imdb_id[("series", "tt1234567")], "media-1")
 
     def test_refresh_external_catalog_or_502_maps_provider_errors(self) -> None:
         class _FakeDb:
