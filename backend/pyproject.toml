@@ -9,7 +9,7 @@ description = "librarySync backend"
 requires-python = ">=3.13"
 dependencies = [
   "fastapi>=0.133.1",
-  "uvicorn[standard]>=0.41.0",
+  "uvicorn[standard]>=0.44.0",
   "jinja2>=3.1.6",
   "sqlalchemy>=2.0.47",
   "alembic>=1.18.4",
