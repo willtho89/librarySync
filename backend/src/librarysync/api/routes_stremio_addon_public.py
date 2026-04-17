@@ -649,17 +649,18 @@ async def _serve_catalog(
         )
 
     result = await db.execute(query.offset(skip).limit(limit + 1))
-    rows = result.all()
-    has_more = len(rows) > limit
 
     if external_catalog:
+        rows = result.all()
+        has_more = len(rows) > limit
         metas = [
             meta
             for item, media in rows[:limit]
             if (meta := _build_external_item_meta(item, media, catalog_type)) is not None
         ]
     else:
-        media_items = [row[0] if isinstance(row, tuple) else row for row in rows]
+        media_items = result.scalars().all()
+        has_more = len(media_items) > limit
         metas = [
             meta
             for media in media_items[:limit]
