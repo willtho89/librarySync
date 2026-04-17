@@ -67,6 +67,25 @@ class TestStremioAddonCatalogs(unittest.TestCase):
         compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
         self.assertIn("watchlist_items.status in", compiled)
 
+    def test_watchlist_query_includes_rewatch_requested_items(self) -> None:
+        catalog = {"media_type": "movie", "filters": {"statuses": []}}
+        query = asyncio.run(
+            routes_stremio_addon_public._build_watchlist_query("user-id", catalog, None)
+        )
+
+        compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
+        self.assertIn("watchlist_items.rewatch_requested is true", compiled)
+
+    def test_watchlist_show_query_keeps_status_filter_and_rewatch_override(self) -> None:
+        catalog = {"media_type": "tv", "filters": {"statuses": []}}
+        query = asyncio.run(
+            routes_stremio_addon_public._build_watchlist_query("user-id", catalog, None)
+        )
+
+        compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
+        self.assertIn("watchlist_items.rewatch_requested is true", compiled)
+        self.assertIn("case", compiled)
+
     def test_slugify_normalizes(self) -> None:
         self.assertEqual(routes_stremio_addon._slugify("Curated Picks!"), "curated-picks")
 

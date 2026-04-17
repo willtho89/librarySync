@@ -6,6 +6,7 @@ const watchlistState = {
     status: "all",
     mediaType: "all",
     source: "all",
+    rewatch: "all",
     search: "",
     watchedDisplay: "overlay", // hide, overlay, show
     orderBy: "date_added",
@@ -51,12 +52,29 @@ function formatWatchlistSources(sources) {
   return sources.map((source) => formatWatchlistSourceLabel(source)).filter(Boolean);
 }
 
+function isWatchlistRewatchEligible(item) {
+  if (!item) return false;
+  if (item.media_type === "movie") {
+    return item.status === "watched" || item.status === "waiting";
+  }
+  if (item.media_type === "tv" || item.media_type === "anime") {
+    if (item.status === "watched" || item.status === "waiting") {
+      return true;
+    }
+    if (item.progress && item.progress.total > 0) {
+      return item.progress.watched >= item.progress.total;
+    }
+  }
+  return false;
+}
+
 function watchlistHasActiveFilters() {
   return (
     (watchlistState.filters.search && watchlistState.filters.search.trim()) ||
     watchlistState.filters.status !== "all" ||
     watchlistState.filters.mediaType !== "all" ||
     watchlistState.filters.source !== "all" ||
+    watchlistState.filters.rewatch !== "all" ||
     watchlistState.filters.orderBy !== "date_added" ||
     watchlistState.filters.orderDir !== "desc"
   );
@@ -87,6 +105,10 @@ function buildWatchlistQueryParams() {
 
   if (watchlistState.filters.source !== "all") {
     params.set("source", watchlistState.filters.source);
+  }
+
+  if (watchlistState.filters.rewatch !== "all") {
+    params.set("rewatch", watchlistState.filters.rewatch);
   }
 
   if (watchlistState.filters.search && watchlistState.filters.search.trim()) {
@@ -304,6 +326,9 @@ async function loadWatchlist() {
     if (sourceLabels.length) {
         detailParts.push(`Sources: ${sourceLabels.join(", ")}`);
     }
+    if (item.rewatch_requested) {
+        detailParts.push("Rewatch queued");
+    }
     
     detail.textContent = detailParts.join(" · ");
     
@@ -313,9 +338,16 @@ async function loadWatchlist() {
     const actions = document.createElement("div");
     actions.className = "history-actions";
 
+    const badgeGroup = document.createElement("div");
+    badgeGroup.className = "flex flex-wrap items-center gap-2";
+
     const pill = document.createElement("span");
     pill.className = "watchlist-pill";
     pill.textContent = item.media_type === "tv" ? "Caught up" : "Watched";
+
+    const rewatchBadge = document.createElement("span");
+    rewatchBadge.className = "watchlist-pill";
+    rewatchBadge.textContent = "Rewatch";
 
     // --- Menu ---
     const menuButton = document.createElement("button");
@@ -441,6 +473,27 @@ async function loadWatchlist() {
 
     const externalLinks = buildExternalMenuLinks(item);
 
+    if (isWatchlistRewatchEligible(item)) {
+        const rewatchButton = document.createElement("button");
+        rewatchButton.type = "button";
+        rewatchButton.textContent = item.rewatch_requested
+            ? "Remove rewatch from watchlist"
+            : "Add rewatch to watchlist";
+        rewatchButton.setAttribute("role", "menuitem");
+        rewatchButton.addEventListener("click", async () => {
+            closeWatchlistMenus();
+            try {
+                await requestJSON(`/api/watchlist/items/${item.id}/rewatch`, {
+                    method: item.rewatch_requested ? "DELETE" : "POST",
+                });
+                await loadWatchlist();
+            } catch (e) {
+                alert(e.message);
+            }
+        });
+        menuPanel.appendChild(rewatchButton);
+    }
+
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "danger-button";
@@ -462,8 +515,14 @@ async function loadWatchlist() {
     externalLinks.forEach((link) => menuPanel.appendChild(link));
     menuPanel.appendChild(deleteButton);
     
+    if (item.rewatch_requested) {
+      badgeGroup.appendChild(rewatchBadge);
+    }
     if (card.classList.contains("is-watched")) {
-      actions.appendChild(pill);
+      badgeGroup.appendChild(pill);
+    }
+    if (badgeGroup.childElementCount > 0) {
+      actions.appendChild(badgeGroup);
     }
     actions.appendChild(menuButton);
     actions.appendChild(menuPanel);
@@ -546,6 +605,16 @@ function bindWatchlistUi() {
         });
     }
 
+    const rewatchSelect = document.getElementById("watchlist-rewatch-filter");
+    if (rewatchSelect) {
+        rewatchSelect.value = watchlistState.filters.rewatch;
+        rewatchSelect.addEventListener("change", () => {
+            watchlistState.filters.rewatch = rewatchSelect.value || "all";
+            watchlistState.page = 1;
+            loadWatchlist();
+        });
+    }
+
     const watchedDisplaySelect = document.getElementById("watchlist-watched-display");
     if (watchedDisplaySelect) {
         watchedDisplaySelect.value = watchlistState.filters.watchedDisplay;
@@ -623,6 +692,7 @@ function bindWatchlistUi() {
             watchlistState.filters.search = "";
             watchlistState.filters.status = "all";
             watchlistState.filters.source = "all";
+            watchlistState.filters.rewatch = "all";
             watchlistState.filters.mediaType = "all";
             watchlistState.filters.orderBy = "date_added";
             watchlistState.filters.orderDir = "desc";
@@ -631,6 +701,7 @@ function bindWatchlistUi() {
             if (searchInput) searchInput.value = "";
             if (statusSelect) statusSelect.value = "all";
             if (sourceSelect) sourceSelect.value = "all";
+            if (rewatchSelect) rewatchSelect.value = "all";
             if (typeSelect) typeSelect.value = "all";
             if (orderBySelect) orderBySelect.value = "date_added";
             if (orderDirSelect) orderDirSelect.value = "desc";

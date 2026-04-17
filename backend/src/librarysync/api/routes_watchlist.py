@@ -21,11 +21,13 @@ from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
     apply_combined_status_filter,
     apply_watchlist_status_change,
+    clear_watchlist_rewatch_request,
     determine_movie_watchlist_status,
     determine_show_watchlist_status,
     log_watchlist_event,
     normalize_media_ids,
     normalize_watchlist_statuses,
+    set_watchlist_rewatch_request,
     upsert_watchlist_item,
 )
 from librarysync.core.watchlist_links import (
@@ -119,6 +121,8 @@ class WatchlistItemOut(BaseModel):
     genres: list[str] | None = None
     runtime_in_seconds: int | None = None
     progress: dict | None = None
+    rewatch_requested: bool = False
+    rewatch_requested_at: datetime | None = None
     sources: list[WatchlistItemSourceOut] = []
 
 
@@ -505,6 +509,9 @@ async def list_watchlist_items(
     media_type: Literal["movie", "tv", "anime"] | None = Query(None),
     search: str | None = Query(None, max_length=200),
     source: str | None = Query(None, max_length=32),
+    rewatch: Literal["all", "only", "exclude"] = Query(
+        "all", description="Filter rewatch-queued items"
+    ),
     order_by: CatalogOrderBy = Query(
         "date_added",
         description="Order by: date_added, release_date, last_watched, episodes_left, "
@@ -546,6 +553,11 @@ async def list_watchlist_items(
 
     if media_type:
         query = query.where(WatchlistItem.type == media_type)
+
+    if rewatch == "only":
+        query = query.where(WatchlistItem.rewatch_requested.is_(True))
+    elif rewatch == "exclude":
+        query = query.where(WatchlistItem.rewatch_requested.is_(False))
 
     if source:
         normalized_source = source.strip().lower()
@@ -690,6 +702,8 @@ async def list_watchlist_items(
                 genres=media.genres,
                 runtime_in_seconds=media.runtime_in_seconds,
                 progress=progress,
+                rewatch_requested=item.rewatch_requested,
+                rewatch_requested_at=item.rewatch_requested_at,
                 sources=[source.model_dump() for source in source_map.get(item.id, [])],
             ).model_dump()
         )
@@ -737,6 +751,120 @@ async def remove_watchlist_item(
     await db.delete(item)
     await db.commit()
     return {"status": "deleted"}
+
+
+@router.post(
+    "/items/{watchlist_id}/rewatch",
+    summary="Enable watchlist rewatch",
+    description="Force a watched item to stay in the watchlist until it is watched again.",
+)
+async def enable_watchlist_rewatch(
+    watchlist_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(WatchlistItem, MediaItem)
+        .join(MediaItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.id == watchlist_id,
+            WatchlistItem.user_id == current_user.id,
+        )
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
+        )
+    item, media_item = row
+    if item.status == "removed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Removed watchlist items cannot be queued for rewatch",
+        )
+
+    if media_item.media_type == "movie":
+        watched_result = await db.execute(
+            select(WatchedItem.id)
+            .where(
+                WatchedItem.user_id == current_user.id,
+                WatchedItem.media_item_id == media_item.id,
+            )
+            .limit(1)
+        )
+        is_eligible = watched_result.scalars().first() is not None
+    else:
+        progress = (await _get_show_progress_bulk(db, current_user.id, [media_item.id])).get(
+            media_item.id,
+            {"watched": 0, "total": 0, "earliest_air_date": None},
+        )
+        current_status = determine_show_watchlist_status(
+            total_released=progress["total"],
+            watched_count=progress["watched"],
+            first_air_date=media_item.first_air_date,
+            earliest_air_date=progress.get("earliest_air_date"),
+            now_date=datetime.now(timezone.utc).date(),
+        )
+        is_eligible = current_status == "watched"
+
+    if not is_eligible:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only watched items can be queued for rewatch",
+        )
+
+    changed = await set_watchlist_rewatch_request(
+        db,
+        item,
+        current_user.id,
+        item.media_item_id,
+        enabled=True,
+        reason="manual",
+    )
+    await db.commit()
+    return {
+        "id": item.id,
+        "rewatch_requested": item.rewatch_requested,
+        "rewatch_requested_at": item.rewatch_requested_at,
+        "status": "updated" if changed else "unchanged",
+    }
+
+
+@router.delete(
+    "/items/{watchlist_id}/rewatch",
+    summary="Disable watchlist rewatch",
+    description="Remove the rewatch override from a watchlist item.",
+)
+async def disable_watchlist_rewatch(
+    watchlist_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(WatchlistItem).where(
+            WatchlistItem.id == watchlist_id,
+            WatchlistItem.user_id == current_user.id,
+        )
+    )
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
+        )
+    changed = await clear_watchlist_rewatch_request(
+        db,
+        item,
+        current_user.id,
+        item.media_item_id,
+        reason="manual",
+    )
+    await db.commit()
+    return {
+        "id": item.id,
+        "rewatch_requested": item.rewatch_requested,
+        "rewatch_requested_at": item.rewatch_requested_at,
+        "status": "updated" if changed else "unchanged",
+    }
 
 
 @router.post(
@@ -867,6 +995,16 @@ async def mark_watchlist_item_watched(
 
     db.add_all([watched, event])
     await db.flush()
+
+    await clear_watchlist_rewatch_request(
+        db,
+        watchlist_item,
+        current_user.id,
+        watchlist_item.media_item_id,
+        reason="watched",
+        now=watched_at,
+        watched_at=watched_at,
+    )
 
     # 4. Enqueue Jobs
     await enqueue_new_item_job(

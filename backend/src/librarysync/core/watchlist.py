@@ -443,6 +443,8 @@ async def check_and_update_watchlist(
     db: AsyncSession,
     user_id: str,
     media_item_id: str,
+    *,
+    watched_at: datetime | None = None,
 ) -> None:
     result = await db.execute(
         select(WatchlistItem).where(
@@ -458,6 +460,15 @@ async def check_and_update_watchlist(
     media_item = result.scalars().first()
     if not media_item:
         return
+
+    await clear_watchlist_rewatch_request(
+        db,
+        item,
+        user_id,
+        media_item_id,
+        reason="watched",
+        watched_at=watched_at,
+    )
 
     if media_item.media_type == "movie":
         await apply_watchlist_status_change(
@@ -621,6 +632,63 @@ async def apply_watchlist_status_change(
         {"status": new_status, "previous_status": current_status, "reason": reason},
     )
     return True
+
+
+async def set_watchlist_rewatch_request(
+    db: AsyncSession,
+    watchlist_item: WatchlistItem,
+    user_id: str,
+    media_item_id: str,
+    *,
+    enabled: bool,
+    reason: str,
+    now: datetime | None = None,
+) -> bool:
+    if watchlist_item.status == "removed":
+        return False
+    if watchlist_item.rewatch_requested == enabled:
+        return False
+
+    effective_now = now or datetime.now(timezone.utc)
+    watchlist_item.rewatch_requested = enabled
+    watchlist_item.rewatch_requested_at = effective_now if enabled else None
+    watchlist_item.updated_at = effective_now
+    await log_watchlist_event(
+        db,
+        user_id,
+        media_item_id,
+        "watchlist_rewatch_updated",
+        {"enabled": enabled, "reason": reason},
+    )
+    return True
+
+
+async def clear_watchlist_rewatch_request(
+    db: AsyncSession,
+    watchlist_item: WatchlistItem,
+    user_id: str,
+    media_item_id: str,
+    *,
+    reason: str,
+    now: datetime | None = None,
+    watched_at: datetime | None = None,
+) -> bool:
+    if not watchlist_item.rewatch_requested:
+        return False
+
+    requested_at = watchlist_item.rewatch_requested_at
+    if watched_at is not None and requested_at is not None and watched_at < requested_at:
+        return False
+
+    return await set_watchlist_rewatch_request(
+        db,
+        watchlist_item,
+        user_id,
+        media_item_id,
+        enabled=False,
+        reason=reason,
+        now=now,
+    )
 
 
 async def log_watchlist_event(

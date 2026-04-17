@@ -312,7 +312,12 @@ async def process_new_item_job(db: AsyncSession, job: OutboxJob) -> None:
     if media_item and media_item.media_type in {"tv", "anime"}:
         await backfill_show_episodes(db, watched.user_id, media_item)
     if media_item:
-        await check_and_update_watchlist(db, watched.user_id, media_item.id)
+        await check_and_update_watchlist(
+            db,
+            watched.user_id,
+            media_item.id,
+            watched_at=watched.watched_at,
+        )
     await _sync_to_integrations(db, watched, media_item, episode_item, is_rewatch)
 
 

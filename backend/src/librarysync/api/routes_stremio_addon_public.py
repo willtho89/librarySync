@@ -278,14 +278,23 @@ async def _build_watchlist_query(
     if statuses:
         if is_show_catalog:
             now_date = datetime.now(timezone.utc).date()
-            query, _ = apply_show_status_filter(
+            query, status_clauses = apply_show_status_filter(
                 query,
                 user_id=user_id,
                 now_date=now_date,
                 statuses=statuses,
+                apply_filter=False,
             )
+            if status_clauses:
+                query = query.where(
+                    or_(WatchlistItem.rewatch_requested.is_(True), or_(*status_clauses))
+                )
         else:
-            query = query.where(WatchlistItem.status.in_(statuses))
+            query = query.where(
+                or_(WatchlistItem.rewatch_requested.is_(True), WatchlistItem.status.in_(statuses))
+            )
+    else:
+        query = query.where(WatchlistItem.rewatch_requested.is_(True))
     if search:
         query = _apply_search_filter(query, search)
     return query

@@ -387,9 +387,7 @@ class WatchSync(Base):
 
 class StremioAddonConfig(Base):
     __tablename__ = "stremio_addon_configs"
-    __table_args__ = (
-        UniqueConstraint("user_id", name="uq_stremio_addon_configs_user_id"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", name="uq_stremio_addon_configs_user_id"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(
@@ -490,6 +488,10 @@ class WatchlistItem(Base):
     # status: added, in_progress, watched, not_released, removed
     status: Mapped[str] = mapped_column(String(32), default="added", index=True)
     source: Mapped[str] = mapped_column(String(32), default="manual")
+    rewatch_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    rewatch_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
