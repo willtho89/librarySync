@@ -85,7 +85,7 @@ def _is_disallowed_host_address(value: str) -> bool:
     )
 
 
-def _validate_external_manifest_host(hostname: str | None) -> None:
+async def _validate_external_manifest_host(hostname: str | None) -> None:
     if not hostname:
         raise ValueError("Manifest URL host is required")
     if hostname.lower() == "localhost":
@@ -101,7 +101,11 @@ def _validate_external_manifest_host(hostname: str | None) -> None:
         pass
 
     try:
-        resolved = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+        resolved = await asyncio.get_running_loop().getaddrinfo(
+            hostname,
+            None,
+            proto=socket.IPPROTO_TCP,
+        )
     except socket.gaierror:
         return
 
