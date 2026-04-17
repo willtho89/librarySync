@@ -488,6 +488,14 @@ async def _refresh_external_catalog_or_502(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="External catalog refresh failed",
         ) from exc
+    except ValueError as exc:
+        await db.rollback()
+        await mark_external_catalog_refresh_failed(db, catalog, exc)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc) or "Invalid external catalog configuration",
+        ) from exc
     except Exception as exc:
         await db.rollback()
         await mark_external_catalog_refresh_failed(db, catalog, exc)
