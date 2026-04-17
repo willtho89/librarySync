@@ -576,7 +576,7 @@ async def _serve_catalog(
 
         if _resolve_stremio_type(custom_catalog.media_type) != catalog_type:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog not found")
-    else:
+    elif catalog:
         if not catalog.get("enabled", True):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog not found")
 

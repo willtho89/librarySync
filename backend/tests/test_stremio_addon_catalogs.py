@@ -2,13 +2,19 @@ import asyncio
 import copy
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from librarysync.api import (
     routes_stremio_addon,
     routes_stremio_addon_public,
 )
-from librarysync.core.external_catalog import _discover_tmdb_chart_catalogs
+from librarysync.core.external_catalog import (
+    ExternalCatalogListItem,
+    _dedupe_external_list_items,
+    _dedupe_external_metas,
+    _discover_tmdb_chart_catalogs,
+)
 from librarysync.core.stremio_addon import build_default_catalogs
 from librarysync.core.watchlist_links import (
     parse_imdb_chart_urls,
@@ -221,6 +227,106 @@ class TestStremioAddonCatalogs(unittest.TestCase):
         self.assertEqual(refs[0].username, "cb2131")
         self.assertEqual(refs[0].slug, "emby-imdb-top-rated-movies")
         self.assertEqual(refs[0].external_id, "mdblist:cb2131:emby-imdb-top-rated-movies")
+
+    def test_dedupe_external_metas_keeps_first_stremio_id(self) -> None:
+        metas = [
+            {"id": "tt1", "name": "First"},
+            {"id": "tt1", "name": "Duplicate"},
+            {"id": "tt2", "name": "Second"},
+        ]
+
+        deduped = _dedupe_external_metas(metas)
+
+        self.assertEqual(deduped, [{"id": "tt1", "name": "First"}, {"id": "tt2", "name": "Second"}])
+
+    def test_dedupe_external_list_items_keeps_first_stremio_id(self) -> None:
+        items = [
+            ExternalCatalogListItem("tt1", "movie", "First", 2000, None),
+            ExternalCatalogListItem("tt1", "movie", "Duplicate", 2001, None),
+            ExternalCatalogListItem("tt2", "movie", "Second", 2002, None),
+        ]
+
+        deduped = _dedupe_external_list_items(items)
+
+        self.assertEqual([item.title for item in deduped], ["First", "Second"])
+
+    def test_serve_catalog_supports_external_catalog_without_builtin_catalog(self) -> None:
+        class _FakeScalarResult:
+            def __init__(self, value):
+                self._value = value
+
+            def first(self):
+                return self._value
+
+        class _FakeExecuteResult:
+            def __init__(self, *, scalar=None, rows=None):
+                self._scalar = scalar
+                self._rows = rows or []
+
+            def scalars(self):
+                return _FakeScalarResult(self._scalar)
+
+            def all(self):
+                return self._rows
+
+        class _FakeQuery:
+            def order_by(self, *args):
+                return self
+
+            def offset(self, value):
+                return self
+
+            def limit(self, value):
+                return self
+
+        class _FakeDb:
+            def __init__(self):
+                self._results = [
+                    _FakeExecuteResult(
+                        scalar=SimpleNamespace(
+                            enabled=True,
+                            source_catalog_type="movie",
+                            order_by="source",
+                            order_dir="asc",
+                        )
+                    ),
+                    _FakeExecuteResult(rows=[]),
+                ]
+
+            async def execute(self, query):
+                return self._results.pop(0)
+
+        request = SimpleNamespace(query_params={})
+        config = SimpleNamespace(
+            is_enabled=True,
+            user_id="user-1",
+            default_catalogs=build_default_catalogs(),
+        )
+
+        with (
+            patch.object(
+                routes_stremio_addon_public,
+                "get_addon_config_by_id",
+                AsyncMock(return_value=config),
+            ),
+            patch.object(
+                routes_stremio_addon_public,
+                "_build_external_catalog_query",
+                AsyncMock(return_value=_FakeQuery()),
+            ),
+        ):
+            payload = asyncio.run(
+                routes_stremio_addon_public._serve_catalog(
+                    "addon-1",
+                    "movie",
+                    "top-rated-movies",
+                    request,
+                    _FakeDb(),
+                    None,
+                )
+            )
+
+        self.assertEqual(payload, {"metas": []})
 
 
 if __name__ == "__main__":

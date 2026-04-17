@@ -289,6 +289,7 @@ async def refresh_external_catalog(
         )
     )
 
+    metas = _dedupe_external_metas(metas)
     created = 0
     for position, meta in enumerate(metas):
         stremio_id = str(meta.get("id") or "").strip()
@@ -367,6 +368,7 @@ async def _refresh_external_list_catalog(
         raise ValueError("Unsupported list provider")
 
     items = [item for item in items if item.stremio_type == catalog.source_catalog_type]
+    items = _dedupe_external_list_items(items)
 
     fetched_at = datetime.now(timezone.utc)
     await db.execute(
@@ -408,6 +410,32 @@ async def _refresh_external_list_catalog(
     db.add(catalog)
     await db.flush()
     return created
+
+
+def _dedupe_external_metas(metas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for meta in metas:
+        stremio_id = str(meta.get("id") or "").strip()
+        if not stremio_id or stremio_id in seen_ids:
+            continue
+        seen_ids.add(stremio_id)
+        deduped.append(meta)
+    return deduped
+
+
+def _dedupe_external_list_items(
+    items: list[ExternalCatalogListItem],
+) -> list[ExternalCatalogListItem]:
+    deduped: list[ExternalCatalogListItem] = []
+    seen_ids: set[str] = set()
+    for item in items:
+        stremio_id = item.stremio_id.strip()
+        if not stremio_id or stremio_id in seen_ids:
+            continue
+        seen_ids.add(stremio_id)
+        deduped.append(item)
+    return deduped
 
 
 def _coerce_text(value: object) -> str | None:
