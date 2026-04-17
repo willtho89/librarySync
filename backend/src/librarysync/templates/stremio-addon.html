@@ -76,24 +76,24 @@
     <div class="card-header">
       <div>
         <h2 class="section-title">External catalogs</h2>
-        <p class="section-subtitle">Pull catalogs from other Stremio addons and filter out watched items.</p>
+        <p class="section-subtitle">Pull catalogs from Stremio manifests or supported list URLs and filter out watched items.</p>
       </div>
     </div>
     <form id="external-catalog-form" class="grid gap-4 md:grid-cols-4">
       <label class="field md:col-span-2">
-        <span>Addon manifest URL</span>
+        <span>Manifest or list URL</span>
         <input
           class="input"
           type="url"
           name="manifest_url"
-          placeholder="https://addon.example/manifest.json"
+          placeholder="https://addon.example/manifest.json or https://www.themoviedb.org/list/123"
           required
         />
       </label>
       <label class="field">
         <span>Catalog</span>
         <select class="select" name="catalog_key" disabled>
-          <option value="">Discover catalogs first</option>
+          <option value="">Discover a source first</option>
         </select>
       </label>
       <label class="field">
@@ -102,7 +102,7 @@
       </label>
       <div class="md:col-span-4 flex flex-wrap items-center gap-3">
         <button id="external-catalog-discover" class="btn btn-secondary btn-sm" type="button">
-          Discover catalogs
+          Discover source
         </button>
         <button class="btn btn-primary btn-sm" type="submit">Add external catalog</button>
         <p id="external-catalog-message" class="form-message" role="status" hidden></p>

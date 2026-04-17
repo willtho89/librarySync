@@ -494,6 +494,14 @@ def _build_watchlist_candidate(
     )
 
 
+def build_letterboxd_list_candidate(
+    entry: dict[str, Any],
+    *,
+    list_context: dict[str, Any] | None = None,
+) -> WatchlistCandidate | None:
+    return _build_watchlist_candidate(entry, list_context=list_context)
+
+
 async def _get_or_create_media_item(
     db: AsyncSession, film: FilmSummary
 ) -> MediaItem | None:

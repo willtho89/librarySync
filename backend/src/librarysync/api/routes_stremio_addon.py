@@ -15,9 +15,10 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.config import settings
+from librarysync.connectors.services.letterboxd import LetterboxdError
 from librarysync.core.catalog_ordering import CatalogOrderBy
 from librarysync.core.external_catalog import (
-    discover_external_catalogs,
+    discover_external_catalog_source,
     external_catalog_out,
     mark_external_catalog_refresh_failed,
     normalize_external_filters,
@@ -26,6 +27,8 @@ from librarysync.core.external_catalog import (
     normalize_external_order_dir,
     normalize_external_page_size,
     normalize_external_show_in_home,
+    normalize_external_source_kind,
+    normalize_external_source_provider,
     refresh_external_catalog,
 )
 from librarysync.core.stremio_addon import (
@@ -117,12 +120,16 @@ class StremioCustomCatalogReorder(BaseModel):
 
 
 class StremioExternalCatalogDiscoverPayload(BaseModel):
-    manifest_url: str
+    source_url: str | None = None
+    manifest_url: str | None = None
 
 
 class StremioExternalCatalogCreate(BaseModel):
     name: str
-    manifest_url: str
+    manifest_url: str | None = None
+    source_url: str | None = None
+    source_kind: Literal["manifest", "list"] | None = None
+    source_provider: Literal["tmdb", "tvdb", "letterboxd", "mdblist"] | None = None
     addon_name: str | None = None
     source_catalog_id: str
     source_catalog_type: Literal["movie", "series"]
@@ -472,7 +479,7 @@ async def _refresh_external_catalog_or_502(
         await db.commit()
         await db.refresh(catalog)
         return count
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, LetterboxdError) as exc:
         await db.rollback()
         await mark_external_catalog_refresh_failed(db, catalog, exc)
         await db.commit()
@@ -564,20 +571,26 @@ async def update_stremio_addon_config(
 )
 async def discover_stremio_external_catalogs(
     payload: StremioExternalCatalogDiscoverPayload,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
-    manifest_url = normalize_external_manifest_url(payload.manifest_url)
-    if not manifest_url:
+    source_url = (payload.source_url or payload.manifest_url or "").strip()
+    if not source_url:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Manifest URL is required",
+            detail="Source URL is required",
         )
     try:
-        return await discover_external_catalogs(manifest_url)
-    except httpx.HTTPError as exc:
+        return await discover_external_catalog_source(db, current_user.id, source_url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except (httpx.HTTPError, LetterboxdError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch addon manifest: {exc}",
+            detail=f"Failed to fetch external source: {exc}",
         ) from exc
 
 
@@ -614,12 +627,21 @@ async def create_external_catalog(
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is required")
-    manifest_url = normalize_external_manifest_url(payload.manifest_url)
+    source_kind = normalize_external_source_kind(payload.source_kind)
+    source_provider = normalize_external_source_provider(payload.source_provider)
+    source_url = (payload.source_url or payload.manifest_url or "").strip()
+    manifest_url = (
+        normalize_external_manifest_url(source_url)
+        if source_kind == "manifest"
+        else source_url
+    )
     if not manifest_url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Manifest URL is required",
+        detail = (
+            "Manifest URL is required"
+            if source_kind == "manifest"
+            else "Source URL is required"
         )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
     source_catalog_id = payload.source_catalog_id.strip()
     if not source_catalog_id:
         raise HTTPException(
@@ -631,11 +653,18 @@ async def create_external_catalog(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid source catalog type",
         )
+    if source_kind == "list" and not source_provider:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="List provider is required",
+        )
 
     catalog = StremioExternalCatalog(
         user_id=current_user.id,
         name=name,
         slug=await _build_unique_slug(db, current_user.id, name),
+        source_kind=source_kind,
+        source_provider=source_provider,
         addon_name=(payload.addon_name or "").strip() or None,
         manifest_url=manifest_url,
         source_catalog_id=source_catalog_id,
@@ -659,7 +688,7 @@ async def create_external_catalog(
         await refresh_external_catalog(db, catalog)
         await db.commit()
         await db.refresh(catalog)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, LetterboxdError) as exc:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

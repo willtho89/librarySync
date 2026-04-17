@@ -79,6 +79,25 @@ def _build_meta(media_item: MediaItem, catalog_type: str) -> dict[str, Any] | No
     return meta
 
 
+def _build_external_item_meta(
+    item: StremioExternalCatalogItem,
+    media_item: MediaItem | None,
+    catalog_type: str,
+) -> dict[str, Any] | None:
+    if media_item is not None:
+        return _build_meta(media_item, catalog_type)
+    stremio_id = str(item.stremio_id or "").strip()
+    stremio_type = str(item.stremio_type or "").strip().lower()
+    if not stremio_id or not stremio_type or stremio_type != catalog_type:
+        return None
+    meta = {"id": stremio_id, "type": stremio_type, "name": item.title or stremio_id}
+    if item.poster_url:
+        meta["poster"] = item.poster_url
+    if item.year:
+        meta["year"] = item.year
+    return meta
+
+
 def _extract_extra_param(request: Request, name: str) -> str | None:
     return request.query_params.get(name) or request.query_params.get(f"extra[{name}]")
 
@@ -377,11 +396,11 @@ async def _build_external_catalog_query(
     search: str | None,
 ):
     query = (
-        select(MediaItem)
-        .join(StremioExternalCatalogItem, StremioExternalCatalogItem.media_item_id == MediaItem.id)
+        select(StremioExternalCatalogItem, MediaItem)
+        .select_from(StremioExternalCatalogItem)
+        .outerjoin(MediaItem, StremioExternalCatalogItem.media_item_id == MediaItem.id)
         .where(
             StremioExternalCatalogItem.catalog_id == catalog.id,
-            StremioExternalCatalogItem.media_item_id.is_not(None),
         )
     )
     filters = normalize_external_filters(catalog.filters)
@@ -402,9 +421,32 @@ async def _build_external_catalog_query(
             progress_subq.c.total_released > 0,
             progress_subq.c.watched_count >= progress_subq.c.total_released,
         )
-        query = query.where(~or_(directly_watched_exists, completed_show_clause))
+        query = query.where(
+            or_(
+                StremioExternalCatalogItem.media_item_id.is_(None),
+                ~or_(directly_watched_exists, completed_show_clause),
+            )
+        )
     if search:
-        query = _apply_search_filter(query, search)
+        normalized_search = search.strip()
+        if normalized_search:
+            like_value = f"%{normalized_search}%"
+            search_clauses = [
+                StremioExternalCatalogItem.title.ilike(like_value),
+                StremioExternalCatalogItem.imdb_id.ilike(like_value),
+                MediaItem.title.ilike(like_value),
+                MediaItem.imdb_id.ilike(like_value),
+                MediaItem.tmdb_id.ilike(like_value),
+                MediaItem.tvdb_id.ilike(like_value),
+                MediaItem.tvmaze_id.ilike(like_value),
+                MediaItem.kitsu_id.ilike(like_value),
+                MediaItem.myanimelist_id.ilike(like_value),
+                MediaItem.anilist_id.ilike(like_value),
+            ]
+            if normalized_search.isdigit() and len(normalized_search) == 4:
+                search_clauses.append(StremioExternalCatalogItem.year == int(normalized_search))
+                search_clauses.append(MediaItem.year == int(normalized_search))
+            query = query.where(or_(*search_clauses))
     return query
 
 
@@ -607,13 +649,21 @@ async def _serve_catalog(
         )
 
     result = await db.execute(query.offset(skip).limit(limit + 1))
-    media_items = result.scalars().all()
-    has_more = len(media_items) > limit
+    rows = result.all()
+    has_more = len(rows) > limit
 
-    metas = [
-        meta
-        for media in media_items[:limit]
-        if (meta := _build_meta(media, catalog_type)) is not None
-    ]
+    if external_catalog:
+        metas = [
+            meta
+            for item, media in rows[:limit]
+            if (meta := _build_external_item_meta(item, media, catalog_type)) is not None
+        ]
+    else:
+        media_items = [row[0] if isinstance(row, tuple) else row for row in rows]
+        metas = [
+            meta
+            for media in media_items[:limit]
+            if (meta := _build_meta(media, catalog_type)) is not None
+        ]
 
     return {"metas": metas, "hasMore": has_more} if has_more else {"metas": metas}

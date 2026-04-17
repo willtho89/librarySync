@@ -4,7 +4,9 @@ const addonState = {
   externalCatalogs: [],
   customCatalogs: [],
   discoveredExternalCatalogs: [],
-  discoveredExternalManifestUrl: "",
+  discoveredExternalSourceUrl: "",
+  discoveredExternalSourceKind: "manifest",
+  discoveredExternalSourceProvider: "",
   discoveredExternalAddonName: "",
   selectedCatalogId: null,
   items: [],
@@ -374,7 +376,7 @@ function renderExternalCatalogDiscovery() {
   if (!addonState.discoveredExternalCatalogs.length) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "Discover catalogs first";
+    option.textContent = "Discover a source first";
     select.appendChild(option);
     select.disabled = true;
     return;
@@ -423,8 +425,12 @@ function renderExternalCatalogs() {
     title.textContent = catalog.name;
     const subtitle = document.createElement("p");
     subtitle.className = "text-xs text-muted";
-    const addonName = catalog.addon_name || "External addon";
-    subtitle.textContent = `${addonName} · ${catalog.source_catalog_id} · ${EXTERNAL_TYPE_LABELS[catalog.source_catalog_type] || catalog.source_catalog_type}`;
+    const addonName = catalog.addon_name || "External source";
+    const sourceLabel =
+      catalog.source_kind === "list"
+        ? `${(catalog.source_provider || "list").toUpperCase()} list`
+        : catalog.source_catalog_id;
+    subtitle.textContent = `${addonName} · ${sourceLabel} · ${EXTERNAL_TYPE_LABELS[catalog.source_catalog_type] || catalog.source_catalog_type}`;
     info.appendChild(title);
     info.appendChild(subtitle);
 
@@ -1098,21 +1104,23 @@ async function handleExternalCatalogDiscover() {
   }
   const manifestInput = form.querySelector('[name="manifest_url"]');
   const nameInput = form.querySelector('[name="name"]');
-  const manifestUrl = manifestInput ? manifestInput.value.trim() : "";
-  if (!manifestUrl) {
-    setMessage("external-catalog-message", "Manifest URL is required.", true);
+  const sourceUrl = manifestInput ? manifestInput.value.trim() : "";
+  if (!sourceUrl) {
+    setMessage("external-catalog-message", "Manifest or list URL is required.", true);
     return;
   }
   try {
-    setMessage("external-catalog-message", "Discovering catalogs...");
+    setMessage("external-catalog-message", "Discovering source...");
     const response = await requestJSON("/api/stremio-addon/external-catalogs/discover", {
       method: "POST",
-      body: JSON.stringify({ manifest_url: manifestUrl }),
+      body: JSON.stringify({ source_url: sourceUrl }),
     });
     addonState.discoveredExternalCatalogs = Array.isArray(response.catalogs)
       ? response.catalogs
       : [];
-    addonState.discoveredExternalManifestUrl = response.manifest_url || manifestUrl;
+    addonState.discoveredExternalSourceUrl = response.source_url || response.manifest_url || sourceUrl;
+    addonState.discoveredExternalSourceKind = response.source_kind || "manifest";
+    addonState.discoveredExternalSourceProvider = response.source_provider || "";
     addonState.discoveredExternalAddonName = response.addon_name || "";
     renderExternalCatalogDiscovery();
     if (nameInput && !nameInput.value.trim() && addonState.discoveredExternalCatalogs.length) {
@@ -1133,8 +1141,8 @@ async function handleExternalCatalogCreate(data, form) {
   const catalogKey = data.get("catalog_key") || "";
   const selectedCatalog = getDiscoveredExternalCatalog(String(catalogKey));
   const name = (data.get("name") || "").trim();
-  if (!addonState.discoveredExternalManifestUrl) {
-    setMessage("external-catalog-message", "Discover catalogs first.", true);
+  if (!addonState.discoveredExternalSourceUrl) {
+    setMessage("external-catalog-message", "Discover a source first.", true);
     return;
   }
   if (!selectedCatalog) {
@@ -1150,7 +1158,13 @@ async function handleExternalCatalogCreate(data, form) {
       method: "POST",
       body: JSON.stringify({
         name,
-        manifest_url: addonState.discoveredExternalManifestUrl,
+        manifest_url:
+          addonState.discoveredExternalSourceKind === "manifest"
+            ? addonState.discoveredExternalSourceUrl
+            : null,
+        source_url: addonState.discoveredExternalSourceUrl,
+        source_kind: addonState.discoveredExternalSourceKind,
+        source_provider: addonState.discoveredExternalSourceProvider || null,
         addon_name: addonState.discoveredExternalAddonName || null,
         source_catalog_id: selectedCatalog.id,
         source_catalog_type: selectedCatalog.type,
@@ -1162,7 +1176,9 @@ async function handleExternalCatalogCreate(data, form) {
       form.reset();
     }
     addonState.discoveredExternalCatalogs = [];
-    addonState.discoveredExternalManifestUrl = "";
+    addonState.discoveredExternalSourceUrl = "";
+    addonState.discoveredExternalSourceKind = "manifest";
+    addonState.discoveredExternalSourceProvider = "";
     addonState.discoveredExternalAddonName = "";
     renderExternalCatalogDiscovery();
     setMessage("external-catalog-message", "External catalog added.");

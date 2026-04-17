@@ -8,8 +8,16 @@ from librarysync.api import (
     routes_stremio_addon,
     routes_stremio_addon_public,
 )
+from librarysync.core.external_catalog import _discover_tmdb_chart_catalogs
 from librarysync.core.stremio_addon import build_default_catalogs
-from librarysync.db.models import MediaItem
+from librarysync.core.watchlist_links import (
+    parse_imdb_chart_urls,
+    parse_mdblist_urls,
+    parse_tmdb_chart_urls,
+    parse_tmdb_list_urls,
+    parse_tvdb_list_urls,
+)
+from librarysync.db.models import MediaItem, StremioExternalCatalogItem
 
 
 class TestStremioAddonCatalogs(unittest.TestCase):
@@ -137,6 +145,82 @@ class TestStremioAddonCatalogs(unittest.TestCase):
     def test_reorder_map_requires_all_items(self) -> None:
         with self.assertRaises(HTTPException):
             routes_stremio_addon._build_reorder_map(["a", "b"], ["a"])
+
+    def test_build_external_item_meta_uses_cached_fields_when_media_missing(self) -> None:
+        item = StremioExternalCatalogItem(
+            stremio_id="tt1234567",
+            stremio_type="movie",
+            title="Cached Movie",
+            year=1999,
+            poster_url="https://image.example/poster.jpg",
+        )
+        meta = routes_stremio_addon_public._build_external_item_meta(item, None, "movie")
+
+        self.assertEqual(
+            meta,
+            {
+                "id": "tt1234567",
+                "type": "movie",
+                "name": "Cached Movie",
+                "year": 1999,
+                "poster": "https://image.example/poster.jpg",
+            },
+        )
+
+    def test_parse_tmdb_list_url(self) -> None:
+        refs = parse_tmdb_list_urls(["https://www.themoviedb.org/list/12345-best-movies"])
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].list_id, "12345")
+        self.assertEqual(refs[0].external_id, "tmdb:12345")
+
+    def test_parse_tvdb_list_url(self) -> None:
+        refs = parse_tvdb_list_urls(["https://thetvdb.com/lists/top-shows"])
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].list_id, "top-shows")
+        self.assertEqual(refs[0].external_id, "tvdb:top-shows")
+
+    def test_parse_tmdb_chart_url(self) -> None:
+        refs = parse_tmdb_chart_urls(["https://www.themoviedb.org/movie/top-rated"])
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].media_type, "movie")
+        self.assertEqual(refs[0].chart_slug, "top-rated")
+        self.assertEqual(refs[0].external_id, "tmdb-chart:movie:top-rated")
+
+    def test_discover_tmdb_chart_catalog(self) -> None:
+        ref = parse_tmdb_chart_urls(["https://www.themoviedb.org/movie/top-rated"])[0]
+
+        payload = asyncio.run(_discover_tmdb_chart_catalogs(ref))
+
+        self.assertEqual(payload["source_provider"], "tmdb")
+        self.assertEqual(payload["catalogs"][0]["id"], "tmdb-chart:movie:top-rated")
+        self.assertEqual(payload["catalogs"][0]["type"], "movie")
+
+    def test_parse_imdb_chart_url_with_locale(self) -> None:
+        refs = parse_imdb_chart_urls(["https://www.imdb.com/de/chart/top/"])
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].chart_slug, "top")
+
+    def test_discover_payload_accepts_legacy_manifest_url_field(self) -> None:
+        payload = routes_stremio_addon.StremioExternalCatalogDiscoverPayload(
+            manifest_url="https://www.themoviedb.org/movie/top-rated"
+        )
+
+        self.assertEqual(payload.manifest_url, "https://www.themoviedb.org/movie/top-rated")
+        self.assertIsNone(payload.source_url)
+
+    def test_parse_mdblist_url(self) -> None:
+        refs = parse_mdblist_urls([
+            "https://mdblist.com/lists/cb2131/emby-imdb-top-rated-movies"
+        ])
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].username, "cb2131")
+        self.assertEqual(refs[0].slug, "emby-imdb-top-rated-movies")
+        self.assertEqual(refs[0].external_id, "mdblist:cb2131:emby-imdb-top-rated-movies")
 
 
 if __name__ == "__main__":

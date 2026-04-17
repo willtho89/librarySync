@@ -482,6 +482,8 @@ class StremioExternalCatalog(Base):
     )
     name: Mapped[str] = mapped_column(String(255))
     slug: Mapped[str] = mapped_column(String(64))
+    source_kind: Mapped[str] = mapped_column(String(32), default="manifest")
+    source_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     addon_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     manifest_url: Mapped[str] = mapped_column(String(500))
     source_catalog_id: Mapped[str] = mapped_column(String(255))
