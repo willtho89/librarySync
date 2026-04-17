@@ -1,7 +1,13 @@
 const addonState = {
   config: null,
   catalogs: [],
+  externalCatalogs: [],
   customCatalogs: [],
+  discoveredExternalCatalogs: [],
+  discoveredExternalSourceUrl: "",
+  discoveredExternalSourceKind: "manifest",
+  discoveredExternalSourceProvider: "",
+  discoveredExternalAddonName: "",
   selectedCatalogId: null,
   items: [],
   candidates: [],
@@ -60,6 +66,16 @@ const CUSTOM_ORDER_OPTIONS = [
   { value: "manual", label: "Manual" },
   ...ORDER_OPTIONS,
 ];
+
+const EXTERNAL_ORDER_OPTIONS = [
+  { value: "source", label: "Source order" },
+  ...ORDER_OPTIONS,
+];
+
+const EXTERNAL_TYPE_LABELS = {
+  movie: "Movie",
+  series: "Series",
+};
 
 function setAddonMessage(message, isError = false) {
   setMessage("stremio-addon-message", message, isError);
@@ -335,6 +351,242 @@ function renderBuiltInCatalogs() {
     card.appendChild(footer);
     fragment.appendChild(card);
   });
+  container.appendChild(fragment);
+}
+
+function getDiscoveredExternalCatalog(key) {
+  return (
+    addonState.discoveredExternalCatalogs.find(
+      (catalog) => `${catalog.type}::${catalog.id}` === key
+    ) || null
+  );
+}
+
+function renderExternalCatalogDiscovery() {
+  const form = document.getElementById("external-catalog-form");
+  if (!form) {
+    return;
+  }
+  const select = form.querySelector('[name="catalog_key"]');
+  if (!select) {
+    return;
+  }
+  const currentValue = select.value;
+  select.innerHTML = "";
+  if (!addonState.discoveredExternalCatalogs.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Discover a source first";
+    select.appendChild(option);
+    select.disabled = true;
+    return;
+  }
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Choose a catalog";
+  select.appendChild(placeholder);
+  addonState.discoveredExternalCatalogs.forEach((catalog) => {
+    const option = document.createElement("option");
+    option.value = `${catalog.type}::${catalog.id}`;
+    option.textContent = `${catalog.name} · ${EXTERNAL_TYPE_LABELS[catalog.type] || catalog.type}`;
+    if (option.value === currentValue) {
+      option.selected = true;
+    }
+    select.appendChild(option);
+  });
+  select.disabled = false;
+}
+
+function renderExternalCatalogs() {
+  const container = document.getElementById("external-catalog-list");
+  if (!container) {
+    return;
+  }
+  container.innerHTML = "";
+  if (!addonState.externalCatalogs.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No external catalogs yet. Discover an addon above.";
+    container.appendChild(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  addonState.externalCatalogs.forEach((catalog) => {
+    const card = document.createElement("div");
+    card.className = "rounded-2xl border border-line/60 bg-surface/80 p-5";
+    card.dataset.externalCatalogId = catalog.id;
+
+    const header = document.createElement("div");
+    header.className = "flex flex-wrap items-start justify-between gap-3";
+    const info = document.createElement("div");
+    const title = document.createElement("h3");
+    title.className = "font-display text-base font-semibold text-ink";
+    title.textContent = catalog.name;
+    const subtitle = document.createElement("p");
+    subtitle.className = "text-xs text-muted";
+    const addonName = catalog.addon_name || "External source";
+    const sourceLabel =
+      catalog.source_kind === "list"
+        ? `${(catalog.source_provider || "list").toUpperCase()} list`
+        : catalog.source_catalog_id;
+    subtitle.textContent = `${addonName} · ${sourceLabel} · ${EXTERNAL_TYPE_LABELS[catalog.source_catalog_type] || catalog.source_catalog_type}`;
+    info.appendChild(title);
+    info.appendChild(subtitle);
+
+    const actions = document.createElement("div");
+    actions.className = "flex flex-wrap items-center gap-2";
+    const refreshButton = document.createElement("button");
+    refreshButton.type = "button";
+    refreshButton.className = "btn btn-secondary btn-sm";
+    refreshButton.dataset.externalCatalogRefresh = catalog.id;
+    refreshButton.textContent = "Refresh";
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "btn btn-ghost btn-sm";
+    deleteButton.dataset.externalCatalogDelete = catalog.id;
+    deleteButton.textContent = "Delete";
+    actions.appendChild(refreshButton);
+    actions.appendChild(deleteButton);
+
+    header.appendChild(info);
+    header.appendChild(actions);
+
+    const body = document.createElement("div");
+    body.className = "mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]";
+
+    const visibilityBlock = document.createElement("div");
+    const visibilityLabel = document.createElement("p");
+    visibilityLabel.className = "text-xs font-semibold uppercase tracking-[0.2em] text-muted";
+    visibilityLabel.textContent = "Visibility";
+    const visibilityGroup = document.createElement("div");
+    visibilityGroup.className = "mt-2 space-y-2";
+
+    const enabledLabel = document.createElement("label");
+    enabledLabel.className = "inline-control";
+    const enabledInput = document.createElement("input");
+    enabledInput.type = "checkbox";
+    enabledInput.checked = catalog.enabled !== false;
+    enabledInput.dataset.externalCatalogEnabled = "true";
+    const enabledText = document.createElement("span");
+    enabledText.textContent = "Enabled";
+    enabledLabel.appendChild(enabledInput);
+    enabledLabel.appendChild(enabledText);
+
+    const watchedLabel = document.createElement("label");
+    watchedLabel.className = "inline-control";
+    const watchedInput = document.createElement("input");
+    watchedInput.type = "checkbox";
+    watchedInput.checked = normalizeShowWatched(catalog);
+    watchedInput.dataset.externalCatalogShowWatched = "true";
+    const watchedText = document.createElement("span");
+    watchedText.textContent = "Show watched";
+    watchedLabel.appendChild(watchedInput);
+    watchedLabel.appendChild(watchedText);
+
+    const homeLabel = document.createElement("label");
+    homeLabel.className = "inline-control";
+    const homeInput = document.createElement("input");
+    homeInput.type = "checkbox";
+    homeInput.checked = !!catalog.show_in_home;
+    homeInput.dataset.externalCatalogShowInHome = "true";
+    const homeText = document.createElement("span");
+    homeText.textContent = "Show in home";
+    homeLabel.appendChild(homeInput);
+    homeLabel.appendChild(homeText);
+
+    visibilityGroup.appendChild(enabledLabel);
+    visibilityGroup.appendChild(watchedLabel);
+    visibilityGroup.appendChild(homeLabel);
+    visibilityBlock.appendChild(visibilityLabel);
+    visibilityBlock.appendChild(visibilityGroup);
+
+    const configBlock = document.createElement("div");
+    configBlock.className = "space-y-3";
+
+    const nameField = document.createElement("label");
+    nameField.className = "field";
+    const nameLabel = document.createElement("span");
+    nameLabel.textContent = "Name";
+    const nameInput = document.createElement("input");
+    nameInput.className = "input";
+    nameInput.type = "text";
+    nameInput.value = catalog.name || "";
+    nameInput.dataset.externalCatalogName = "true";
+    nameField.appendChild(nameLabel);
+    nameField.appendChild(nameInput);
+
+    const orderField = document.createElement("label");
+    orderField.className = "field";
+    const orderLabel = document.createElement("span");
+    orderLabel.textContent = "Order";
+    const orderSelect = buildSelect(EXTERNAL_ORDER_OPTIONS, catalog.order_by || "source");
+    orderSelect.dataset.externalCatalogOrderBy = "true";
+    orderField.appendChild(orderLabel);
+    orderField.appendChild(orderSelect);
+
+    const dirField = document.createElement("label");
+    dirField.className = "field";
+    const dirLabel = document.createElement("span");
+    dirLabel.textContent = "Direction";
+    const dirSelect = buildSelect(
+      [
+        { value: "asc", label: "Ascending" },
+        { value: "desc", label: "Descending" },
+      ],
+      catalog.order_dir || "asc"
+    );
+    dirSelect.dataset.externalCatalogOrderDir = "true";
+    dirField.appendChild(dirLabel);
+    dirField.appendChild(dirSelect);
+
+    const sizeField = document.createElement("label");
+    sizeField.className = "field";
+    const sizeLabel = document.createElement("span");
+    sizeLabel.textContent = "Page size";
+    const sizeInput = document.createElement("input");
+    sizeInput.className = "input";
+    sizeInput.type = "number";
+    sizeInput.min = "1";
+    sizeInput.max = "100";
+    sizeInput.value = catalog.page_size || 30;
+    sizeInput.dataset.externalCatalogPageSize = "true";
+    sizeField.appendChild(sizeLabel);
+    sizeField.appendChild(sizeInput);
+
+    configBlock.appendChild(nameField);
+    configBlock.appendChild(orderField);
+    configBlock.appendChild(dirField);
+    configBlock.appendChild(sizeField);
+
+    body.appendChild(visibilityBlock);
+    body.appendChild(configBlock);
+
+    const footer = document.createElement("div");
+    footer.className = "mt-4 flex flex-wrap items-center justify-between gap-3";
+    const status = document.createElement("span");
+    status.className = "text-xs text-muted";
+    if (catalog.last_refresh_error) {
+      status.textContent = `Last refresh failed: ${catalog.last_refresh_error}`;
+    } else if (catalog.last_refreshed_at) {
+      status.textContent = `Refreshed ${formatMetadataDate(catalog.last_refreshed_at)}`;
+    } else {
+      status.textContent = "Never refreshed";
+    }
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.className = "btn btn-secondary btn-sm";
+    saveButton.dataset.externalCatalogSave = catalog.id;
+    saveButton.textContent = "Save changes";
+    footer.appendChild(status);
+    footer.appendChild(saveButton);
+
+    card.appendChild(header);
+    card.appendChild(body);
+    card.appendChild(footer);
+    fragment.appendChild(card);
+  });
+
   container.appendChild(fragment);
 }
 
@@ -845,6 +1097,175 @@ async function handleCustomItemMove(mediaItemId, direction) {
   }
 }
 
+async function handleExternalCatalogDiscover() {
+  const form = document.getElementById("external-catalog-form");
+  if (!form) {
+    return;
+  }
+  const manifestInput = form.querySelector('[name="manifest_url"]');
+  const nameInput = form.querySelector('[name="name"]');
+  const sourceUrl = manifestInput ? manifestInput.value.trim() : "";
+  if (!sourceUrl) {
+    setMessage("external-catalog-message", "Manifest or list URL is required.", true);
+    return;
+  }
+  try {
+    setMessage("external-catalog-message", "Discovering source...");
+    const response = await requestJSON("/api/stremio-addon/external-catalogs/discover", {
+      method: "POST",
+      body: JSON.stringify({ source_url: sourceUrl }),
+    });
+    addonState.discoveredExternalCatalogs = Array.isArray(response.catalogs)
+      ? response.catalogs
+      : [];
+    addonState.discoveredExternalSourceUrl = response.source_url || response.manifest_url || sourceUrl;
+    addonState.discoveredExternalSourceKind = response.source_kind || "manifest";
+    addonState.discoveredExternalSourceProvider = response.source_provider || "";
+    addonState.discoveredExternalAddonName = response.addon_name || "";
+    renderExternalCatalogDiscovery();
+    if (nameInput && !nameInput.value.trim() && addonState.discoveredExternalCatalogs.length) {
+      nameInput.value = addonState.discoveredExternalCatalogs[0].name || "";
+    }
+    setMessage(
+      "external-catalog-message",
+      addonState.discoveredExternalCatalogs.length
+        ? `Found ${addonState.discoveredExternalCatalogs.length} catalog(s).`
+        : "No supported catalogs found."
+    );
+  } catch (error) {
+    setMessage("external-catalog-message", error.message, true);
+  }
+}
+
+async function handleExternalCatalogCreate(data, form) {
+  const catalogKey = data.get("catalog_key") || "";
+  const selectedCatalog = getDiscoveredExternalCatalog(String(catalogKey));
+  const name = (data.get("name") || "").trim();
+  if (!addonState.discoveredExternalSourceUrl) {
+    setMessage("external-catalog-message", "Discover a source first.", true);
+    return;
+  }
+  if (!selectedCatalog) {
+    setMessage("external-catalog-message", "Choose a discovered catalog.", true);
+    return;
+  }
+  if (!name) {
+    setMessage("external-catalog-message", "Name is required.", true);
+    return;
+  }
+  try {
+    const response = await requestJSON("/api/stremio-addon/external-catalogs", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        manifest_url:
+          addonState.discoveredExternalSourceKind === "manifest"
+            ? addonState.discoveredExternalSourceUrl
+            : null,
+        source_url: addonState.discoveredExternalSourceUrl,
+        source_kind: addonState.discoveredExternalSourceKind,
+        source_provider: addonState.discoveredExternalSourceProvider || null,
+        addon_name: addonState.discoveredExternalAddonName || null,
+        source_catalog_id: selectedCatalog.id,
+        source_catalog_type: selectedCatalog.type,
+      }),
+    });
+    addonState.externalCatalogs = [...addonState.externalCatalogs, response];
+    renderExternalCatalogs();
+    if (form) {
+      form.reset();
+    }
+    addonState.discoveredExternalCatalogs = [];
+    addonState.discoveredExternalSourceUrl = "";
+    addonState.discoveredExternalSourceKind = "manifest";
+    addonState.discoveredExternalSourceProvider = "";
+    addonState.discoveredExternalAddonName = "";
+    renderExternalCatalogDiscovery();
+    setMessage("external-catalog-message", "External catalog added.");
+  } catch (error) {
+    setMessage("external-catalog-message", error.message, true);
+  }
+}
+
+async function handleExternalCatalogUpdate(catalogId, card) {
+  const nameInput = card.querySelector("[data-external-catalog-name]");
+  const enabledInput = card.querySelector("[data-external-catalog-enabled]");
+  const showWatchedInput = card.querySelector("[data-external-catalog-show-watched]");
+  const showInHomeInput = card.querySelector("[data-external-catalog-show-in-home]");
+  const orderBySelect = card.querySelector("[data-external-catalog-order-by]");
+  const orderDirSelect = card.querySelector("[data-external-catalog-order-dir]");
+  const pageSizeInput = card.querySelector("[data-external-catalog-page-size]");
+  const payload = {
+    name: nameInput ? nameInput.value.trim() : "",
+    enabled: enabledInput ? enabledInput.checked : true,
+    filters: {
+      show_watched: showWatchedInput ? showWatchedInput.checked : false,
+      statuses: [],
+    },
+    order_by: orderBySelect ? orderBySelect.value : "source",
+    order_dir: orderDirSelect ? orderDirSelect.value : "asc",
+    page_size: pageSizeInput ? Number(pageSizeInput.value || 30) : 30,
+    show_in_home: showInHomeInput ? showInHomeInput.checked : true,
+  };
+  if (!payload.name) {
+    setMessage("external-catalog-message", "Name is required.", true);
+    return;
+  }
+  try {
+    const response = await requestJSON(`/api/stremio-addon/external-catalogs/${catalogId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    addonState.externalCatalogs = addonState.externalCatalogs.map((entry) =>
+      entry.id === catalogId ? response : entry
+    );
+    renderExternalCatalogs();
+    setMessage("external-catalog-message", "External catalog updated.");
+  } catch (error) {
+    setMessage("external-catalog-message", error.message, true);
+  }
+}
+
+async function handleExternalCatalogDelete(catalogId) {
+  const confirmDelete = window.confirm(
+    "Delete this external catalog? Cached items will be removed from librarySync."
+  );
+  if (!confirmDelete) {
+    return;
+  }
+  try {
+    await requestJSON(`/api/stremio-addon/external-catalogs/${catalogId}`, {
+      method: "DELETE",
+    });
+    addonState.externalCatalogs = addonState.externalCatalogs.filter(
+      (entry) => entry.id !== catalogId
+    );
+    renderExternalCatalogs();
+    setMessage("external-catalog-message", "External catalog deleted.");
+  } catch (error) {
+    setMessage("external-catalog-message", error.message, true);
+  }
+}
+
+async function handleExternalCatalogRefresh(catalogId) {
+  try {
+    const response = await requestJSON(
+      `/api/stremio-addon/external-catalogs/${catalogId}/refresh`,
+      { method: "POST" }
+    );
+    addonState.externalCatalogs = addonState.externalCatalogs.map((entry) =>
+      entry.id === catalogId ? response.catalog : entry
+    );
+    renderExternalCatalogs();
+    setMessage(
+      "external-catalog-message",
+      `External catalog refreshed (${response.item_count || 0} items).`
+    );
+  } catch (error) {
+    setMessage("external-catalog-message", error.message, true);
+  }
+}
+
 async function handleCustomCatalogCreate(data, form) {
   setMessage("custom-catalog-message", "");
   const payload = {
@@ -1009,11 +1430,16 @@ async function loadAddonConfig() {
     const data = await requestJSON("/api/stremio-addon/config");
     addonState.config = data;
     addonState.catalogs = Array.isArray(data.catalogs) ? data.catalogs : [];
+    addonState.externalCatalogs = Array.isArray(data.external_catalogs)
+      ? data.external_catalogs
+      : [];
     addonState.customCatalogs = Array.isArray(data.custom_catalogs) ? data.custom_catalogs : [];
     updateInstallLinks(data);
     renderInstallSection();
     renderControlSection();
     renderBuiltInCatalogs();
+    renderExternalCatalogDiscovery();
+    renderExternalCatalogs();
     renderCustomCatalogs();
   } catch (error) {
     setAddonMessage(error.message, true);
@@ -1072,6 +1498,34 @@ function bindAddonActions() {
         return;
       }
       handleCatalogSave(button);
+    });
+  }
+
+  const externalDiscover = document.getElementById("external-catalog-discover");
+  if (externalDiscover) {
+    externalDiscover.addEventListener("click", handleExternalCatalogDiscover);
+  }
+
+  const externalList = document.getElementById("external-catalog-list");
+  if (externalList) {
+    externalList.addEventListener("click", (event) => {
+      const update = event.target.closest("[data-external-catalog-save]");
+      if (update) {
+        const card = update.closest("[data-external-catalog-id]");
+        if (card) {
+          handleExternalCatalogUpdate(update.dataset.externalCatalogSave, card);
+        }
+        return;
+      }
+      const refresh = event.target.closest("[data-external-catalog-refresh]");
+      if (refresh) {
+        handleExternalCatalogRefresh(refresh.dataset.externalCatalogRefresh);
+        return;
+      }
+      const remove = event.target.closest("[data-external-catalog-delete]");
+      if (remove) {
+        handleExternalCatalogDelete(remove.dataset.externalCatalogDelete);
+      }
     });
   }
 
@@ -1149,6 +1603,7 @@ window.librarysyncPageInit = async ({ user }) => {
   if (!user) {
     return;
   }
+  bindForm("external-catalog-form", handleExternalCatalogCreate);
   bindForm("custom-catalog-form", handleCustomCatalogCreate);
   bindForm("custom-catalog-items-lookup-form", handleCustomLookupSubmit);
   bindAddonActions();

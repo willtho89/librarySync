@@ -42,6 +42,8 @@ class Settings:
     enable_dashboard_stats: bool
     trakt_max_batch_size: int
     simkl_max_batch_size: int
+    external_catalog_refresh_hours: int
+    external_catalog_max_items: int
 
 
 def load_settings() -> Settings:
@@ -114,6 +116,12 @@ def load_settings() -> Settings:
         ),
         simkl_max_batch_size=int(
             _get_env("LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE", "750") or "750"
+        ),
+        external_catalog_refresh_hours=int(
+            _get_env("LIBRARYSYNC_EXTERNAL_CATALOG_REFRESH_HOURS", "3") or "3"
+        ),
+        external_catalog_max_items=int(
+            _get_env("LIBRARYSYNC_EXTERNAL_CATALOG_MAX_ITEMS", "500") or "500"
         ),
     )
 

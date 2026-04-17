@@ -10,6 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_db
 from librarysync.core.catalog_ordering import apply_catalog_ordering, build_show_progress_subquery
+from librarysync.core.external_catalog import (
+    external_catalog_manifest_entry,
+    normalize_external_filters,
+)
 from librarysync.core.stremio_addon import (
     DEFAULT_PAGE_SIZE,
     DEFAULT_SHOW_IN_HOME,
@@ -21,6 +25,9 @@ from librarysync.db.models import (
     MediaItem,
     StremioCustomCatalog,
     StremioCustomCatalogItem,
+    StremioExternalCatalog,
+    StremioExternalCatalogItem,
+    WatchedItem,
     WatchlistItem,
 )
 
@@ -69,6 +76,25 @@ def _build_meta(media_item: MediaItem, catalog_type: str) -> dict[str, Any] | No
         meta["poster"] = media_item.poster_url
     if media_item.year:
         meta["year"] = media_item.year
+    return meta
+
+
+def _build_external_item_meta(
+    item: StremioExternalCatalogItem,
+    media_item: MediaItem | None,
+    catalog_type: str,
+) -> dict[str, Any] | None:
+    if media_item is not None:
+        return _build_meta(media_item, catalog_type)
+    stremio_id = str(item.stremio_id or "").strip()
+    stremio_type = str(item.stremio_type or "").strip().lower()
+    if not stremio_id or not stremio_type or stremio_type != catalog_type:
+        return None
+    meta = {"id": stremio_id, "type": stremio_type, "name": item.title or stremio_id}
+    if item.poster_url:
+        meta["poster"] = item.poster_url
+    if item.year:
+        meta["year"] = item.year
     return meta
 
 
@@ -197,6 +223,7 @@ def _coerce_show_in_home(catalog: dict | None) -> bool:
 
 def _build_manifest(
     catalogs: list[dict],
+    external_catalogs: list[StremioExternalCatalog],
     custom_catalogs: list[StremioCustomCatalog],
 ) -> dict[str, Any]:
     manifest_catalogs: list[dict[str, Any]] = []
@@ -225,6 +252,12 @@ def _build_manifest(
             }
         )
         seen_types.add(stremio_type)
+
+    for external in external_catalogs:
+        if not external.enabled:
+            continue
+        manifest_catalogs.append(external_catalog_manifest_entry(external))
+        seen_types.add(external.source_catalog_type)
 
     for custom in custom_catalogs:
         stremio_type = _resolve_stremio_type(custom.media_type)
@@ -357,6 +390,66 @@ async def _build_custom_catalog_query(
     return query
 
 
+async def _build_external_catalog_query(
+    user_id: str,
+    catalog: StremioExternalCatalog,
+    search: str | None,
+):
+    query = (
+        select(StremioExternalCatalogItem, MediaItem)
+        .select_from(StremioExternalCatalogItem)
+        .outerjoin(MediaItem, StremioExternalCatalogItem.media_item_id == MediaItem.id)
+        .where(
+            StremioExternalCatalogItem.catalog_id == catalog.id,
+        )
+    )
+    filters = normalize_external_filters(catalog.filters)
+    if not filters.get("show_watched", False):
+        now_date = datetime.now(timezone.utc).date()
+        progress_subq = build_show_progress_subquery(user_id, now_date)
+        query = query.outerjoin(progress_subq, progress_subq.c.media_item_id == MediaItem.id)
+        directly_watched_exists = (
+            select(WatchedItem.id)
+            .where(
+                WatchedItem.user_id == user_id,
+                WatchedItem.media_item_id == MediaItem.id,
+            )
+            .exists()
+        )
+        completed_show_clause = and_(
+            MediaItem.media_type.in_(["tv", "anime"]),
+            progress_subq.c.total_released > 0,
+            progress_subq.c.watched_count >= progress_subq.c.total_released,
+        )
+        query = query.where(
+            or_(
+                StremioExternalCatalogItem.media_item_id.is_(None),
+                ~or_(directly_watched_exists, completed_show_clause),
+            )
+        )
+    if search:
+        normalized_search = search.strip()
+        if normalized_search:
+            like_value = f"%{normalized_search}%"
+            search_clauses = [
+                StremioExternalCatalogItem.title.ilike(like_value),
+                StremioExternalCatalogItem.imdb_id.ilike(like_value),
+                MediaItem.title.ilike(like_value),
+                MediaItem.imdb_id.ilike(like_value),
+                MediaItem.tmdb_id.ilike(like_value),
+                MediaItem.tvdb_id.ilike(like_value),
+                MediaItem.tvmaze_id.ilike(like_value),
+                MediaItem.kitsu_id.ilike(like_value),
+                MediaItem.myanimelist_id.ilike(like_value),
+                MediaItem.anilist_id.ilike(like_value),
+            ]
+            if normalized_search.isdigit() and len(normalized_search) == 4:
+                search_clauses.append(StremioExternalCatalogItem.year == int(normalized_search))
+                search_clauses.append(MediaItem.year == int(normalized_search))
+            query = query.where(or_(*search_clauses))
+    return query
+
+
 def _apply_ordering(
     query,
     *,
@@ -392,10 +485,18 @@ async def stremio_addon_manifest(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     catalogs = _normalize_catalogs(config.default_catalogs)
     custom_result = await db.execute(
-        select(StremioCustomCatalog).where(StremioCustomCatalog.user_id == config.user_id)
+        select(StremioCustomCatalog)
+        .where(StremioCustomCatalog.user_id == config.user_id)
+        .order_by(StremioCustomCatalog.created_at.asc())
     )
     custom_catalogs = custom_result.scalars().all()
-    return _build_manifest(catalogs, custom_catalogs)
+    external_result = await db.execute(
+        select(StremioExternalCatalog)
+        .where(StremioExternalCatalog.user_id == config.user_id)
+        .order_by(StremioExternalCatalog.created_at.asc())
+    )
+    external_catalogs = external_result.scalars().all()
+    return _build_manifest(catalogs, external_catalogs, custom_catalogs)
 
 
 @router.get("/{addon_id}/catalog/{catalog_type}/{catalog_id}.json", include_in_schema=False)
@@ -440,8 +541,29 @@ async def _serve_catalog(
     catalogs = _normalize_catalogs(config.default_catalogs)
     catalog = _catalogs_by_id(catalogs).get(catalog_id)
     custom_catalog = None
+    external_catalog = None
 
     if not catalog:
+        external_result = await db.execute(
+            select(StremioExternalCatalog).where(
+                StremioExternalCatalog.user_id == config.user_id,
+                StremioExternalCatalog.slug == catalog_id,
+            )
+        )
+        external_catalog = external_result.scalars().first()
+        if external_catalog:
+            if not external_catalog.enabled:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Catalog not found",
+                )
+            if external_catalog.source_catalog_type != catalog_type:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Catalog not found",
+                )
+
+    if not catalog and not external_catalog:
         custom_result = await db.execute(
             select(StremioCustomCatalog).where(
                 StremioCustomCatalog.user_id == config.user_id,
@@ -454,7 +576,7 @@ async def _serve_catalog(
 
         if _resolve_stremio_type(custom_catalog.media_type) != catalog_type:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog not found")
-    else:
+    elif catalog:
         if not catalog.get("enabled", True):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog not found")
 
@@ -463,7 +585,30 @@ async def _serve_catalog(
 
     skip, limit, search = _resolve_pagination(request, extra_overrides)
 
-    if custom_catalog:
+    if external_catalog:
+        query = await _build_external_catalog_query(config.user_id, external_catalog, search)
+        order_by = external_catalog.order_by or "source"
+        order_dir = external_catalog.order_dir or "asc"
+        if order_by == "source":
+            order_clause = StremioExternalCatalogItem.position.asc()
+            if order_dir == "desc":
+                order_clause = StremioExternalCatalogItem.position.desc()
+            query = query.order_by(order_clause, MediaItem.id)
+        elif order_by == "random":
+            query = query.order_by(func.random())
+        else:
+            release_date_expr = func.coalesce(MediaItem.release_date, MediaItem.first_air_date)
+            query = _apply_ordering(
+                query,
+                order_by=order_by,
+                order_dir=order_dir,
+                user_id=config.user_id,
+                date_added_col=StremioExternalCatalogItem.fetched_at,
+                release_date_col=release_date_expr,
+                base_media_id_col=MediaItem.id,
+                tie_breaker_col=MediaItem.id,
+            )
+    elif custom_catalog:
         query = await _build_custom_catalog_query(custom_catalog, search)
         order_by = custom_catalog.order_by or "manual"
         order_dir = custom_catalog.order_dir or "asc"
@@ -504,13 +649,22 @@ async def _serve_catalog(
         )
 
     result = await db.execute(query.offset(skip).limit(limit + 1))
-    media_items = result.scalars().all()
-    has_more = len(media_items) > limit
 
-    metas = [
-        meta
-        for media in media_items[:limit]
-        if (meta := _build_meta(media, catalog_type)) is not None
-    ]
+    if external_catalog:
+        rows = result.all()
+        has_more = len(rows) > limit
+        metas = [
+            meta
+            for item, media in rows[:limit]
+            if (meta := _build_external_item_meta(item, media, catalog_type)) is not None
+        ]
+    else:
+        media_items = result.scalars().all()
+        has_more = len(media_items) > limit
+        metas = [
+            meta
+            for media in media_items[:limit]
+            if (meta := _build_meta(media, catalog_type)) is not None
+        ]
 
     return {"metas": metas, "hasMore": has_more} if has_more else {"metas": metas}

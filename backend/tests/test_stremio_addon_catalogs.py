@@ -2,14 +2,32 @@ import asyncio
 import copy
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from librarysync.api import (
     routes_stremio_addon,
     routes_stremio_addon_public,
 )
+from librarysync.core.external_catalog import (
+    ExternalCatalogListItem,
+    ExternalCatalogProviderError,
+    _build_external_manifest_catalog_url,
+    _dedupe_external_list_items,
+    _dedupe_external_metas,
+    _discover_tmdb_chart_catalogs,
+    _prefetch_external_media_item_ids,
+    normalize_external_manifest_url,
+)
 from librarysync.core.stremio_addon import build_default_catalogs
-from librarysync.db.models import MediaItem
+from librarysync.core.watchlist_links import (
+    parse_imdb_chart_urls,
+    parse_mdblist_urls,
+    parse_tmdb_chart_urls,
+    parse_tmdb_list_urls,
+    parse_tvdb_list_urls,
+)
+from librarysync.db.models import MediaItem, StremioExternalCatalogItem
 
 
 class TestStremioAddonCatalogs(unittest.TestCase):
@@ -30,20 +48,62 @@ class TestStremioAddonCatalogs(unittest.TestCase):
 
     def test_build_manifest_includes_custom_and_enabled_catalogs(self) -> None:
         catalogs = build_default_catalogs()
+        external_catalog = SimpleNamespace(
+            name="Best Movies",
+            slug="best-movies",
+            enabled=True,
+            source_catalog_type="movie",
+            page_size=30,
+            show_in_home=True,
+        )
         custom_catalog = SimpleNamespace(
             name="Curated Picks", slug="curated_picks", media_type="movie"
         )
 
-        manifest = routes_stremio_addon_public._build_manifest(catalogs, [custom_catalog])
+        manifest = routes_stremio_addon_public._build_manifest(
+            catalogs,
+            [external_catalog],
+            [custom_catalog],
+        )
 
-        catalog_ids = {catalog["id"] for catalog in manifest["catalogs"]}
+        catalog_ids = [catalog["id"] for catalog in manifest["catalogs"]]
         self.assertIn("watchlist_movies", catalog_ids)
         self.assertIn("watchlist_shows", catalog_ids)
         self.assertIn("in_progress_shows", catalog_ids)
+        self.assertIn("best-movies", catalog_ids)
         self.assertIn("curated_picks", catalog_ids)
         self.assertNotIn("watchlist_anime", catalog_ids)
+        self.assertLess(catalog_ids.index("best-movies"), catalog_ids.index("curated_picks"))
         for catalog in manifest["catalogs"]:
             self.assertIn("extraSupported", catalog)
+
+    def test_external_catalog_query_hides_watched_items_by_default(self) -> None:
+        catalog = SimpleNamespace(id="external-1", filters={"show_watched": False})
+        query = asyncio.run(
+            routes_stremio_addon_public._build_external_catalog_query(
+                "user-id",
+                catalog,
+                None,
+            )
+        )
+
+        compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
+        self.assertIn("stremio_external_catalog_items", compiled)
+        self.assertIn("exists (select watched_items.id", compiled)
+
+    def test_external_catalog_query_can_include_watched_items(self) -> None:
+        catalog = SimpleNamespace(id="external-1", filters={"show_watched": True})
+        query = asyncio.run(
+            routes_stremio_addon_public._build_external_catalog_query(
+                "user-id",
+                catalog,
+                None,
+            )
+        )
+
+        compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
+        self.assertIn("stremio_external_catalog_items", compiled)
+        self.assertNotIn("not (exists", compiled)
 
     def test_build_meta_prefers_stremio_id(self) -> None:
         media_item = MediaItem(
@@ -95,6 +155,316 @@ class TestStremioAddonCatalogs(unittest.TestCase):
     def test_reorder_map_requires_all_items(self) -> None:
         with self.assertRaises(HTTPException):
             routes_stremio_addon._build_reorder_map(["a", "b"], ["a"])
+
+    def test_build_external_item_meta_uses_cached_fields_when_media_missing(self) -> None:
+        item = StremioExternalCatalogItem(
+            stremio_id="tt1234567",
+            stremio_type="movie",
+            title="Cached Movie",
+            year=1999,
+            poster_url="https://image.example/poster.jpg",
+        )
+        meta = routes_stremio_addon_public._build_external_item_meta(item, None, "movie")
+
+        self.assertEqual(
+            meta,
+            {
+                "id": "tt1234567",
+                "type": "movie",
+                "name": "Cached Movie",
+                "year": 1999,
+                "poster": "https://image.example/poster.jpg",
+            },
+        )
+
+    def test_parse_tmdb_list_url(self) -> None:
+        refs = parse_tmdb_list_urls(["https://www.themoviedb.org/list/12345-best-movies"])
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].list_id, "12345")
+        self.assertEqual(refs[0].external_id, "tmdb:12345")
+
+    def test_parse_tvdb_list_url(self) -> None:
+        refs = parse_tvdb_list_urls(["https://thetvdb.com/lists/top-shows"])
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].list_id, "top-shows")
+        self.assertEqual(refs[0].external_id, "tvdb:top-shows")
+
+    def test_parse_tmdb_chart_url(self) -> None:
+        refs = parse_tmdb_chart_urls(["https://www.themoviedb.org/movie/top-rated"])
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].media_type, "movie")
+        self.assertEqual(refs[0].chart_slug, "top-rated")
+        self.assertEqual(refs[0].external_id, "tmdb-chart:movie:top-rated")
+
+    def test_discover_tmdb_chart_catalog(self) -> None:
+        ref = parse_tmdb_chart_urls(["https://www.themoviedb.org/movie/top-rated"])[0]
+
+        payload = asyncio.run(_discover_tmdb_chart_catalogs(ref))
+
+        self.assertEqual(payload["source_provider"], "tmdb")
+        self.assertEqual(payload["catalogs"][0]["id"], "tmdb-chart:movie:top-rated")
+        self.assertEqual(payload["catalogs"][0]["type"], "movie")
+
+    def test_parse_imdb_chart_url_with_locale(self) -> None:
+        refs = parse_imdb_chart_urls(["https://www.imdb.com/de/chart/top/"])
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].chart_slug, "top")
+
+    def test_discover_payload_accepts_legacy_manifest_url_field(self) -> None:
+        payload = routes_stremio_addon.StremioExternalCatalogDiscoverPayload(
+            manifest_url="https://www.themoviedb.org/movie/top-rated"
+        )
+
+        self.assertEqual(payload.manifest_url, "https://www.themoviedb.org/movie/top-rated")
+        self.assertIsNone(payload.source_url)
+
+    def test_parse_mdblist_url(self) -> None:
+        refs = parse_mdblist_urls([
+            "https://mdblist.com/lists/cb2131/emby-imdb-top-rated-movies"
+        ])
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].username, "cb2131")
+        self.assertEqual(refs[0].slug, "emby-imdb-top-rated-movies")
+        self.assertEqual(refs[0].external_id, "mdblist:cb2131:emby-imdb-top-rated-movies")
+
+    def test_dedupe_external_metas_keeps_first_stremio_id(self) -> None:
+        metas = [
+            {"id": "tt1", "name": "First"},
+            {"id": "tt1", "name": "Duplicate"},
+            {"id": "tt2", "name": "Second"},
+        ]
+
+        deduped = _dedupe_external_metas(metas)
+
+        self.assertEqual(deduped, [{"id": "tt1", "name": "First"}, {"id": "tt2", "name": "Second"}])
+
+    def test_dedupe_external_list_items_keeps_first_stremio_id(self) -> None:
+        items = [
+            ExternalCatalogListItem("tt1", "movie", "First", 2000, None),
+            ExternalCatalogListItem("tt1", "movie", "Duplicate", 2001, None),
+            ExternalCatalogListItem("tt2", "movie", "Second", 2002, None),
+        ]
+
+        deduped = _dedupe_external_list_items(items)
+
+        self.assertEqual([item.title for item in deduped], ["First", "Second"])
+
+    def test_normalize_external_manifest_url_preserves_query(self) -> None:
+        self.assertEqual(
+            asyncio.run(normalize_external_manifest_url("https://addon.example/path?foo=bar")),
+            "https://addon.example/path/manifest.json?foo=bar",
+        )
+
+    def test_normalize_external_manifest_url_rejects_disallowed_host(self) -> None:
+        with self.assertRaises(ValueError):
+            asyncio.run(normalize_external_manifest_url("http://127.0.0.1/manifest.json"))
+
+    def test_build_external_manifest_catalog_url_preserves_query(self) -> None:
+        self.assertEqual(
+            _build_external_manifest_catalog_url(
+                "https://addon.example/path/manifest.json?foo=bar",
+                "movie",
+                "top rated",
+                skip=100,
+                limit=50,
+            ),
+            "https://addon.example/path/catalog/movie/top%20rated/skip=100&limit=50.json?foo=bar",
+        )
+
+    def test_prefetch_external_media_item_ids_uses_raw_stremio_id_and_series_type(self) -> None:
+        class _FakeScalarResult:
+            def __init__(self, values):
+                self._values = values
+
+            def all(self):
+                return self._values
+
+        class _FakeExecuteResult:
+            def __init__(self, values):
+                self._values = values
+
+            def scalars(self):
+                return _FakeScalarResult(self._values)
+
+        class _FakeDb:
+            async def execute(self, query):
+                return _FakeExecuteResult(
+                    [
+                        MediaItem(
+                            id="media-1",
+                            media_type="tv",
+                            title="Example Show",
+                            imdb_id="tt1234567",
+                            raw={"stremio_id": "stremio:series:1"},
+                        )
+                    ]
+                )
+
+        lookup = asyncio.run(
+            _prefetch_external_media_item_ids(
+                _FakeDb(),
+                [{"id": "stremio:series:1", "type": "series", "imdb_id": "tt1234567"}],
+                "series",
+            )
+        )
+
+        self.assertEqual(lookup.by_stremio_id[("series", "stremio:series:1")], "media-1")
+        self.assertEqual(lookup.by_imdb_id[("series", "tt1234567")], "media-1")
+
+    def test_refresh_external_catalog_or_502_maps_provider_errors(self) -> None:
+        class _FakeDb:
+            def __init__(self):
+                self.rollback_calls = 0
+                self.commit_calls = 0
+
+            async def rollback(self):
+                self.rollback_calls += 1
+
+            async def commit(self):
+                self.commit_calls += 1
+
+            async def refresh(self, catalog):
+                raise AssertionError("refresh should not be called")
+
+        db = _FakeDb()
+        catalog = SimpleNamespace()
+
+        with (
+            patch.object(
+                routes_stremio_addon,
+                "refresh_external_catalog",
+                AsyncMock(side_effect=ExternalCatalogProviderError("bad payload")),
+            ),
+            patch.object(
+                routes_stremio_addon,
+                "mark_external_catalog_refresh_failed",
+                AsyncMock(),
+            ) as mark_failed,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(routes_stremio_addon._refresh_external_catalog_or_502(db, catalog))
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertEqual(ctx.exception.detail, "External catalog refresh failed")
+        self.assertEqual(db.rollback_calls, 1)
+        self.assertEqual(db.commit_calls, 1)
+        mark_failed.assert_awaited_once()
+
+    def test_update_external_catalog_rejects_null_enabled(self) -> None:
+        class _FakeDb:
+            async def commit(self):
+                raise AssertionError("commit should not be called")
+
+            async def refresh(self, catalog):
+                raise AssertionError("refresh should not be called")
+
+            def add(self, catalog):
+                raise AssertionError("add should not be called")
+
+        payload = routes_stremio_addon.StremioExternalCatalogUpdate(enabled=None)
+        catalog = SimpleNamespace(id="catalog-1", name="Catalog")
+        user = SimpleNamespace(id="user-1")
+
+        with patch.object(
+            routes_stremio_addon,
+            "_load_external_catalog",
+            AsyncMock(return_value=catalog),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(
+                    routes_stremio_addon.update_external_catalog(
+                        "catalog-1",
+                        payload,
+                        user,
+                        _FakeDb(),
+                    )
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail, "Enabled must be true or false")
+
+    def test_serve_catalog_supports_external_catalog_without_builtin_catalog(self) -> None:
+        class _FakeScalarResult:
+            def __init__(self, value):
+                self._value = value
+
+            def first(self):
+                return self._value
+
+        class _FakeExecuteResult:
+            def __init__(self, *, scalar=None, rows=None):
+                self._scalar = scalar
+                self._rows = rows or []
+
+            def scalars(self):
+                return _FakeScalarResult(self._scalar)
+
+            def all(self):
+                return self._rows
+
+        class _FakeQuery:
+            def order_by(self, *args):
+                return self
+
+            def offset(self, value):
+                return self
+
+            def limit(self, value):
+                return self
+
+        class _FakeDb:
+            def __init__(self):
+                self._results = [
+                    _FakeExecuteResult(
+                        scalar=SimpleNamespace(
+                            enabled=True,
+                            source_catalog_type="movie",
+                            order_by="source",
+                            order_dir="asc",
+                        )
+                    ),
+                    _FakeExecuteResult(rows=[]),
+                ]
+
+            async def execute(self, query):
+                return self._results.pop(0)
+
+        request = SimpleNamespace(query_params={})
+        config = SimpleNamespace(
+            is_enabled=True,
+            user_id="user-1",
+            default_catalogs=build_default_catalogs(),
+        )
+
+        with (
+            patch.object(
+                routes_stremio_addon_public,
+                "get_addon_config_by_id",
+                AsyncMock(return_value=config),
+            ),
+            patch.object(
+                routes_stremio_addon_public,
+                "_build_external_catalog_query",
+                AsyncMock(return_value=_FakeQuery()),
+            ),
+        ):
+            payload = asyncio.run(
+                routes_stremio_addon_public._serve_catalog(
+                    "addon-1",
+                    "movie",
+                    "top-rated-movies",
+                    request,
+                    _FakeDb(),
+                    None,
+                )
+            )
+
+        self.assertEqual(payload, {"metas": []})
 
 
 if __name__ == "__main__":

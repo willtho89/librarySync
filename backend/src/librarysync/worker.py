@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from librarysync.config import settings
+from librarysync.jobs.external_catalog_refresh import process_external_catalog_refresh_once
 from librarysync.jobs.imports import process_import_all_once, process_quick_import_once
 from librarysync.jobs.merge_history import (
     process_merge_all_history_once,
@@ -34,6 +35,9 @@ MODE_CONFIGS: dict[str, ModeConfig] = {
     "metadata_cache": ModeConfig("metadata_cache", process_metadata_cache_refresh_once, 60.0, 5.0),
     "quick_import": ModeConfig("quick_import", process_quick_import_once, 2.0, 0.5),
     "import_all": ModeConfig("import_all", process_import_all_once, 2.0, 0.5),
+    "external_catalog_refresh": ModeConfig(
+        "external_catalog_refresh", process_external_catalog_refresh_once, 60.0, 10.0
+    ),
     "watchlist": ModeConfig("watchlist", process_watchlist_refresh_once, 60.0, 10.0),
     "merge_history": ModeConfig("merge_history", process_merge_history_once, 60.0, 10.0),
     "merge_all_history": ModeConfig(

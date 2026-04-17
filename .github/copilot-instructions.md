@@ -11,12 +11,12 @@ librarySync is a self-hosted, Docker-compose-deployable, multi-user hub for watc
 - **Frontend**: Static HTML + vanilla JavaScript with Tailwind CSS
 - **Architecture**: Async worker pattern with outbox-based delivery
 - **Package Manager**: uv (preferred) with pyproject.toml
-- **Linter**: Ruff with 100 character line length
+- **Linter**: Ruff with 120 character line length
 
 ## Code Style & Conventions
 
 ### Python
-- Line length: 100 characters (configured in pyproject.toml)
+- Line length: 120 characters (configured in pyproject.toml)
 - Use async/await patterns throughout the codebase
 - Follow existing patterns for database models and SQLAlchemy queries
 - Use type hints consistently

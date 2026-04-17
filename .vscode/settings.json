@@ -7,7 +7,7 @@
   "python.terminal.activateEnvironment": true,
   "ruff.enable": true,
   "ruff.lint.run": "onSave",
-  "editor.rulers": [100],
+  "editor.rulers": [120],
   "[python]": {
     "editor.defaultFormatter": "charliermarsh.ruff",
     "editor.formatOnSave": true,
