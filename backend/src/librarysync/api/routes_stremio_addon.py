@@ -18,6 +18,7 @@ from librarysync.config import settings
 from librarysync.connectors.services.letterboxd import LetterboxdError
 from librarysync.core.catalog_ordering import CatalogOrderBy
 from librarysync.core.external_catalog import (
+    ExternalCatalogProviderError,
     discover_external_catalog_source,
     external_catalog_out,
     mark_external_catalog_refresh_failed,
@@ -479,13 +480,13 @@ async def _refresh_external_catalog_or_502(
         await db.commit()
         await db.refresh(catalog)
         return count
-    except (httpx.HTTPError, LetterboxdError) as exc:
+    except (httpx.HTTPError, LetterboxdError, ExternalCatalogProviderError) as exc:
         await db.rollback()
         await mark_external_catalog_refresh_failed(db, catalog, exc)
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"External catalog refresh failed: {exc}",
+            detail="External catalog refresh failed",
         ) from exc
     except Exception as exc:
         await db.rollback()
@@ -587,10 +588,10 @@ async def discover_stremio_external_catalogs(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
-    except (httpx.HTTPError, LetterboxdError) as exc:
+    except (httpx.HTTPError, LetterboxdError, ExternalCatalogProviderError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch external source: {exc}",
+            detail="Failed to fetch external source",
         ) from exc
 
 
@@ -688,11 +689,11 @@ async def create_external_catalog(
         await refresh_external_catalog(db, catalog)
         await db.commit()
         await db.refresh(catalog)
-    except (httpx.HTTPError, LetterboxdError) as exc:
+    except (httpx.HTTPError, LetterboxdError, ExternalCatalogProviderError) as exc:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"External catalog refresh failed: {exc}",
+            detail="External catalog refresh failed",
         ) from exc
     except Exception:
         await db.rollback()
@@ -727,7 +728,12 @@ async def update_external_catalog(
             )
         catalog.name = name
     if "enabled" in fields:
-        catalog.enabled = bool(payload.enabled)
+        if payload.enabled is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Enabled must be true or false",
+            )
+        catalog.enabled = payload.enabled
     if "filters" in fields:
         catalog.filters = normalize_external_filters(
             payload.filters.model_dump(exclude_none=True) if payload.filters else None

@@ -11,9 +11,11 @@ from librarysync.api import (
 )
 from librarysync.core.external_catalog import (
     ExternalCatalogListItem,
+    ExternalCatalogProviderError,
     _dedupe_external_list_items,
     _dedupe_external_metas,
     _discover_tmdb_chart_catalogs,
+    normalize_external_manifest_url,
 )
 from librarysync.core.stremio_addon import build_default_catalogs
 from librarysync.core.watchlist_links import (
@@ -249,6 +251,88 @@ class TestStremioAddonCatalogs(unittest.TestCase):
         deduped = _dedupe_external_list_items(items)
 
         self.assertEqual([item.title for item in deduped], ["First", "Second"])
+
+    def test_normalize_external_manifest_url_preserves_query(self) -> None:
+        self.assertEqual(
+            normalize_external_manifest_url("https://addon.example/path?foo=bar"),
+            "https://addon.example/path/manifest.json?foo=bar",
+        )
+
+    def test_normalize_external_manifest_url_rejects_disallowed_host(self) -> None:
+        with self.assertRaises(ValueError):
+            normalize_external_manifest_url("http://127.0.0.1/manifest.json")
+
+    def test_refresh_external_catalog_or_502_maps_provider_errors(self) -> None:
+        class _FakeDb:
+            def __init__(self):
+                self.rollback_calls = 0
+                self.commit_calls = 0
+
+            async def rollback(self):
+                self.rollback_calls += 1
+
+            async def commit(self):
+                self.commit_calls += 1
+
+            async def refresh(self, catalog):
+                raise AssertionError("refresh should not be called")
+
+        db = _FakeDb()
+        catalog = SimpleNamespace()
+
+        with (
+            patch.object(
+                routes_stremio_addon,
+                "refresh_external_catalog",
+                AsyncMock(side_effect=ExternalCatalogProviderError("bad payload")),
+            ),
+            patch.object(
+                routes_stremio_addon,
+                "mark_external_catalog_refresh_failed",
+                AsyncMock(),
+            ) as mark_failed,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(routes_stremio_addon._refresh_external_catalog_or_502(db, catalog))
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertEqual(ctx.exception.detail, "External catalog refresh failed")
+        self.assertEqual(db.rollback_calls, 1)
+        self.assertEqual(db.commit_calls, 1)
+        mark_failed.assert_awaited_once()
+
+    def test_update_external_catalog_rejects_null_enabled(self) -> None:
+        class _FakeDb:
+            async def commit(self):
+                raise AssertionError("commit should not be called")
+
+            async def refresh(self, catalog):
+                raise AssertionError("refresh should not be called")
+
+            def add(self, catalog):
+                raise AssertionError("add should not be called")
+
+        payload = routes_stremio_addon.StremioExternalCatalogUpdate(enabled=None)
+        catalog = SimpleNamespace(id="catalog-1", name="Catalog")
+        user = SimpleNamespace(id="user-1")
+
+        with patch.object(
+            routes_stremio_addon,
+            "_load_external_catalog",
+            AsyncMock(return_value=catalog),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(
+                    routes_stremio_addon.update_external_catalog(
+                        "catalog-1",
+                        payload,
+                        user,
+                        _FakeDb(),
+                    )
+                )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail, "Enabled must be true or false")
 
     def test_serve_catalog_supports_external_catalog_without_builtin_catalog(self) -> None:
         class _FakeScalarResult:

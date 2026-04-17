@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import socket
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from sqlalchemy import delete, or_, select
@@ -66,13 +69,73 @@ class ExternalCatalogListItem:
     tvdb_id: str | None = None
 
 
+class ExternalCatalogProviderError(Exception):
+    pass
+
+
+def _is_disallowed_host_address(value: str) -> bool:
+    ip = ipaddress.ip_address(value)
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _validate_external_manifest_host(hostname: str | None) -> None:
+    if not hostname:
+        raise ValueError("Manifest URL host is required")
+    if hostname.lower() == "localhost":
+        raise ValueError("Manifest URL host is not allowed")
+
+    try:
+        if _is_disallowed_host_address(hostname):
+            raise ValueError("Manifest URL host is not allowed")
+        return
+    except ValueError as exc:
+        if str(exc) == "Manifest URL host is not allowed":
+            raise
+        pass
+
+    try:
+        resolved = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return
+
+    for entry in resolved:
+        address = entry[4][0]
+        if _is_disallowed_host_address(address):
+            raise ValueError("Manifest URL host is not allowed")
+
+
+def _decode_external_json(response: httpx.Response, context: str) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ExternalCatalogProviderError(f"{context} returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ExternalCatalogProviderError(f"{context} returned an invalid payload")
+    return payload
+
+
 def normalize_external_manifest_url(value: str) -> str:
     manifest_url = (value or "").strip()
     if not manifest_url:
         return ""
-    if manifest_url.endswith("/manifest.json"):
-        return manifest_url
-    return f"{manifest_url.rstrip('/')}/manifest.json"
+    parsed = urlparse(manifest_url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("Manifest URL must use http or https")
+    if not parsed.netloc:
+        raise ValueError("Manifest URL host is required")
+    _validate_external_manifest_host(parsed.hostname)
+
+    path = parsed.path or ""
+    if not path.endswith("/manifest.json"):
+        path = f"{path.rstrip('/')}/manifest.json" if path else "/manifest.json"
+    return urlunparse(parsed._replace(path=path))
 
 
 def normalize_external_source_kind(value: str | None) -> str:
@@ -87,8 +150,16 @@ def normalize_external_source_provider(value: str | None) -> str | None:
 
 def normalize_external_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
     base = filters if isinstance(filters, dict) else {}
-    statuses = base.get("statuses") if isinstance(base.get("statuses"), list) else []
-    show_watched = base.get("show_watched") if isinstance(base.get("show_watched"), bool) else False
+    statuses = (
+        base.get("statuses")
+        if isinstance(base.get("statuses"), list)
+        else EXTERNAL_CATALOG_DEFAULT_FILTERS["statuses"]
+    )
+    show_watched = (
+        base.get("show_watched")
+        if isinstance(base.get("show_watched"), bool)
+        else EXTERNAL_CATALOG_DEFAULT_FILTERS["show_watched"]
+    )
     return {"statuses": [str(value) for value in statuses if value], "show_watched": show_watched}
 
 
@@ -211,7 +282,7 @@ async def _discover_manifest_catalogs(manifest_url: str) -> dict[str, Any]:
     async with get_http_client() as client:
         response = await client.get(normalized_url)
         response.raise_for_status()
-        payload = response.json()
+        payload = _decode_external_json(response, "External manifest")
 
     addon_name = str(payload.get("name") or "External addon").strip() or "External addon"
     discovered: list[dict[str, str]] = []
@@ -258,7 +329,7 @@ async def refresh_external_catalog(
     async with get_http_client() as client:
         manifest_response = await client.get(normalized_manifest_url)
         manifest_response.raise_for_status()
-        manifest_payload = manifest_response.json()
+        manifest_payload = _decode_external_json(manifest_response, "External manifest")
         catalog.addon_name = (
             str(manifest_payload.get("name") or catalog.addon_name or "").strip() or None
         )
@@ -274,8 +345,8 @@ async def refresh_external_catalog(
             )
             response = await client.get(catalog_url)
             response.raise_for_status()
-            payload = response.json()
-            batch = payload.get("metas") if isinstance(payload, dict) else None
+            payload = _decode_external_json(response, "External catalog")
+            batch = payload.get("metas")
             if not isinstance(batch, list) or not batch:
                 break
             metas.extend(item for item in batch if isinstance(item, dict))
