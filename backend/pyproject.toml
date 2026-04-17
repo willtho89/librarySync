@@ -40,4 +40,4 @@ librarysync = [
 ]
 
 [dependency-groups]
-dev = ["ruff>=0.15.3", "pytest>=8.0", "pytest-asyncio>=0.23.0"]
+dev = ["ruff>=0.15.3", "pytest>=9.0.3", "pytest-asyncio>=0.23.0"]
