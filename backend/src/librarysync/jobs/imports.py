@@ -222,17 +222,11 @@ async def _claim_import_all_runs(db: AsyncSession, limit: int) -> list[Integrati
     return runs
 
 
-async def _process_quick_import_run(
-    db: AsyncSession, run: Integration, now: datetime
-) -> int:
+async def _process_quick_import_run(db: AsyncSession, run: Integration, now: datetime) -> int:
     return await _process_import_run(db, run, now, QUICK_IMPORT_SPEC)
 
 
-
-
-async def _process_import_all_run(
-    db: AsyncSession, run: Integration, now: datetime
-) -> int:
+async def _process_import_all_run(db: AsyncSession, run: Integration, now: datetime) -> int:
     return await _process_import_run(db, run, now, IMPORT_ALL_SPEC)
 
 
@@ -242,12 +236,13 @@ async def _process_import_run(
     now: datetime,
     spec: ImportRunSpec,
 ) -> int:
-    state = spec.parse_state(run.config)
+    config = dict(run.config or {})
+    state = spec.parse_state(config)
     queue = list(state.queue)
     if not queue or state.index >= len(queue):
-        run.config = dict(run.config or {})
-        run.config[spec.error_key] = None
-        run.config[spec.index_key] = len(queue)
+        config[spec.error_key] = None
+        config[spec.index_key] = len(queue)
+        run.config = config
         await _finalize_merge(
             db,
             run,
@@ -280,10 +275,10 @@ async def _process_import_run(
             integration,
             state.requested_at,
         )
-        run.config = dict(run.config or {})
-        run.config[spec.error_key] = None
+        config[spec.error_key] = None
         next_index = state.index + 1
-        run.config[spec.index_key] = next_index
+        config[spec.index_key] = next_index
+        run.config = config
         if next_index >= len(queue):
             await _finalize_merge(
                 db,
@@ -298,8 +293,10 @@ async def _process_import_run(
         await db.commit()
         return 1
     except Exception as exc:
-        run.config = spec.mark_failed(run.config, now, str(exc)[:500])
-        run.config[spec.index_key] = next_index if next_index is not None else state.index
+        failed_config = spec.mark_failed(config, now, str(exc)[:500])
+        if failed_config is not None:
+            failed_config[spec.index_key] = next_index if next_index is not None else state.index
+        run.config = failed_config
         await _finalize_merge(
             db,
             run,
@@ -344,23 +341,21 @@ async def _finalize_merge(
     history_event_type: str | None = None,
     history_parser: callable | None = None,
 ) -> None:
-    run.config = mark_merge_required(run.config, now)
+    config = mark_merge_required(dict(run.config or {}), now)
+    run.config = config
     try:
         await enqueue_merge_history(db, now)
         if finalize_run is not None:
-            run.config = finalize_run(run.config, now)
+            config = finalize_run(config, now)
         if history_event_type and history_parser:
-            run.config = _append_import_history_entry(
-                run.config, history_event_type, history_parser
-            )
+            config = _append_import_history_entry(config, history_event_type, history_parser)
     except Exception as exc:
-        run.config = mark_merge_failed(run.config, now, str(exc)[:500])
-        if finalize_run is not None and run.config:
-            run.config = finalize_run(run.config, now)
+        config = mark_merge_failed(config, now, str(exc)[:500])
+        if finalize_run is not None and config:
+            config = finalize_run(config, now)
         if history_event_type and history_parser:
-            run.config = _append_import_history_entry(
-                run.config, history_event_type, history_parser
-            )
+            config = _append_import_history_entry(config, history_event_type, history_parser)
+    run.config = config
     db.add(run)
     await db.commit()
 

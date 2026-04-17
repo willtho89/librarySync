@@ -20,9 +20,10 @@ def mock_lifespan():
 
 
 def create_test_app():
-    from librarysync.main import create_app
-    from librarysync.api import deps
     from unittest.mock import MagicMock
+
+    from librarysync.api import deps
+    from librarysync.main import create_app
 
     app = create_app()
 
