@@ -7,7 +7,7 @@
     <div class="mt-3 space-y-2">
       <h1 class="text-2xl font-display text-ink md:text-3xl">Publish your watchlists.</h1>
       <p class="text-sm text-muted">
-        Turn librarySync lists into Stremio catalogs with per-catalog filters and custom picks.
+        Turn librarySync lists and external addon feeds into Stremio catalogs with per-catalog filters.
       </p>
     </div>
   </header>
@@ -70,6 +70,45 @@
       </div>
     </div>
     <div id="stremio-addon-catalogs" class="grid gap-4">Loading...</div>
+  </div>
+
+  <div class="card space-y-6">
+    <div class="card-header">
+      <div>
+        <h2 class="section-title">External catalogs</h2>
+        <p class="section-subtitle">Pull catalogs from other Stremio addons and filter out watched items.</p>
+      </div>
+    </div>
+    <form id="external-catalog-form" class="grid gap-4 md:grid-cols-4">
+      <label class="field md:col-span-2">
+        <span>Addon manifest URL</span>
+        <input
+          class="input"
+          type="url"
+          name="manifest_url"
+          placeholder="https://addon.example/manifest.json"
+          required
+        />
+      </label>
+      <label class="field">
+        <span>Catalog</span>
+        <select class="select" name="catalog_key" disabled>
+          <option value="">Discover catalogs first</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Name</span>
+        <input class="input" type="text" name="name" placeholder="Best Movies of All Time" required />
+      </label>
+      <div class="md:col-span-4 flex flex-wrap items-center gap-3">
+        <button id="external-catalog-discover" class="btn btn-secondary btn-sm" type="button">
+          Discover catalogs
+        </button>
+        <button class="btn btn-primary btn-sm" type="submit">Add external catalog</button>
+        <p id="external-catalog-message" class="form-message" role="status" hidden></p>
+      </div>
+    </form>
+    <div id="external-catalog-list" class="grid gap-4">Loading...</div>
   </div>
 
   <div class="card space-y-6">

@@ -465,6 +465,97 @@ class StremioCustomCatalogItem(Base):
     )
 
 
+class StremioExternalCatalog(Base):
+    __tablename__ = "stremio_external_catalogs"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "slug",
+            name="uq_stremio_external_catalogs_user_slug",
+        ),
+        Index("ix_stremio_external_catalogs_user_id", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(255))
+    slug: Mapped[str] = mapped_column(String(64))
+    addon_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    manifest_url: Mapped[str] = mapped_column(String(500))
+    source_catalog_id: Mapped[str] = mapped_column(String(255))
+    source_catalog_type: Mapped[str] = mapped_column(String(32))
+    media_type: Mapped[str] = mapped_column(String(32), default="movie")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    filters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    order_by: Mapped[str] = mapped_column(String(32), default="source")
+    order_dir: Mapped[str] = mapped_column(String(8), default="asc")
+    page_size: Mapped[int] = mapped_column(Integer, default=30)
+    show_in_home: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_refresh_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class StremioExternalCatalogItem(Base):
+    __tablename__ = "stremio_external_catalog_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "catalog_id",
+            "position",
+            name="uq_stremio_external_catalog_items_catalog_position",
+        ),
+        UniqueConstraint(
+            "catalog_id",
+            "stremio_id",
+            name="uq_stremio_external_catalog_items_catalog_stremio",
+        ),
+        Index(
+            "ix_stremio_external_catalog_items_catalog_position",
+            "catalog_id",
+            "position",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    catalog_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("stremio_external_catalogs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    media_item_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("media_items.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    stremio_id: Mapped[str] = mapped_column(String(255))
+    stremio_type: Mapped[str] = mapped_column(String(32))
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    poster_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class WatchlistItem(Base):
     __tablename__ = "watchlist_items"
     __table_args__ = (

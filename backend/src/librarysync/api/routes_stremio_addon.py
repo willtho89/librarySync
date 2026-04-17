@@ -6,6 +6,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Literal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -15,6 +16,18 @@ from sqlalchemy.orm.attributes import flag_modified
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.config import settings
 from librarysync.core.catalog_ordering import CatalogOrderBy
+from librarysync.core.external_catalog import (
+    discover_external_catalogs,
+    external_catalog_out,
+    mark_external_catalog_refresh_failed,
+    normalize_external_filters,
+    normalize_external_manifest_url,
+    normalize_external_order_by,
+    normalize_external_order_dir,
+    normalize_external_page_size,
+    normalize_external_show_in_home,
+    refresh_external_catalog,
+)
 from librarysync.core.stremio_addon import (
     ensure_addon_config,
     normalize_default_catalogs,
@@ -30,6 +43,7 @@ from librarysync.db.models import (
     StremioAddonConfig,
     StremioCustomCatalog,
     StremioCustomCatalogItem,
+    StremioExternalCatalog,
     User,
 )
 
@@ -42,6 +56,7 @@ CUSTOM_ORDER_BY = {
     *CatalogOrderBy.__args__,
 }
 CUSTOM_ORDER_DIR = {"asc", "desc"}
+EXTERNAL_CATALOG_TYPES = {"movie", "series"}
 
 
 class StremioCatalogFilters(BaseModel):
@@ -101,6 +116,35 @@ class StremioCustomCatalogReorder(BaseModel):
     media_item_ids: list[str]
 
 
+class StremioExternalCatalogDiscoverPayload(BaseModel):
+    manifest_url: str
+
+
+class StremioExternalCatalogCreate(BaseModel):
+    name: str
+    manifest_url: str
+    addon_name: str | None = None
+    source_catalog_id: str
+    source_catalog_type: Literal["movie", "series"]
+    media_type: Literal["movie", "tv", "anime"] | None = None
+    enabled: bool | None = None
+    filters: StremioCatalogFilters | None = None
+    order_by: str | None = None
+    order_dir: Literal["asc", "desc"] | None = None
+    page_size: int | None = None
+    show_in_home: bool | None = None
+
+
+class StremioExternalCatalogUpdate(BaseModel):
+    name: str | None = None
+    enabled: bool | None = None
+    filters: StremioCatalogFilters | None = None
+    order_by: str | None = None
+    order_dir: Literal["asc", "desc"] | None = None
+    page_size: int | None = None
+    show_in_home: bool | None = None
+
+
 def _resolve_base_url(request: Request) -> str:
     base = settings.base_url or str(request.base_url)
     return base.rstrip("/")
@@ -130,19 +174,33 @@ async def _build_unique_slug(
     user_id: str,
     value: str,
     *,
-    exclude_catalog_id: str | None = None,
+    exclude_custom_catalog_id: str | None = None,
+    exclude_external_catalog_id: str | None = None,
 ) -> str:
     base_slug = _truncate_slug(_slugify(value))
-    result = await db.execute(
+    custom_result = await db.execute(
         select(StremioCustomCatalog.id, StremioCustomCatalog.slug).where(
             StremioCustomCatalog.user_id == user_id
         )
     )
+    external_result = await db.execute(
+        select(StremioExternalCatalog.id, StremioExternalCatalog.slug).where(
+            StremioExternalCatalog.user_id == user_id
+        )
+    )
     existing = {
         slug
-        for catalog_id, slug in result.all()
-        if slug and (not exclude_catalog_id or catalog_id != exclude_catalog_id)
+        for catalog_id, slug in custom_result.all()
+        if slug and (not exclude_custom_catalog_id or catalog_id != exclude_custom_catalog_id)
     }
+    existing.update(
+        {
+            slug
+            for catalog_id, slug in external_result.all()
+            if slug
+            and (not exclude_external_catalog_id or catalog_id != exclude_external_catalog_id)
+        }
+    )
     if base_slug not in existing:
         return base_slug
     for index in range(2, 100):
@@ -280,6 +338,23 @@ async def _load_custom_catalog(
     return catalog
 
 
+async def _load_external_catalog(
+    db: AsyncSession,
+    user_id: str,
+    catalog_id: str,
+) -> StremioExternalCatalog:
+    result = await db.execute(
+        select(StremioExternalCatalog).where(
+            StremioExternalCatalog.user_id == user_id,
+            StremioExternalCatalog.id == catalog_id,
+        )
+    )
+    catalog = result.scalars().first()
+    if not catalog:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Catalog not found")
+    return catalog
+
+
 async def _resolve_custom_media_item(
     db: AsyncSession,
     payload: StremioCustomCatalogItemCreate,
@@ -378,6 +453,40 @@ async def _resolve_custom_media_item(
     return media_item
 
 
+def _normalize_external_media_type(
+    source_catalog_type: str,
+    requested_media_type: str | None,
+) -> str:
+    if source_catalog_type == "movie":
+        return "movie"
+    normalized = (requested_media_type or "tv").strip().lower()
+    return normalized if normalized in {"tv", "anime"} else "tv"
+
+
+async def _refresh_external_catalog_or_502(
+    db: AsyncSession,
+    catalog: StremioExternalCatalog,
+) -> int:
+    try:
+        count = await refresh_external_catalog(db, catalog)
+        await db.commit()
+        await db.refresh(catalog)
+        return count
+    except httpx.HTTPError as exc:
+        await db.rollback()
+        await mark_external_catalog_refresh_failed(db, catalog, exc)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"External catalog refresh failed: {exc}",
+        ) from exc
+    except Exception as exc:
+        await db.rollback()
+        await mark_external_catalog_refresh_failed(db, catalog, exc)
+        await db.commit()
+        raise
+
+
 @router.get(
     "/config",
     summary="Get Stremio addon config",
@@ -392,14 +501,25 @@ async def get_stremio_addon_config(
     catalogs = await _ensure_default_catalogs(db, config)
 
     custom_result = await db.execute(
-        select(StremioCustomCatalog).where(StremioCustomCatalog.user_id == current_user.id)
+        select(StremioCustomCatalog)
+        .where(StremioCustomCatalog.user_id == current_user.id)
+        .order_by(StremioCustomCatalog.created_at.asc())
     )
     custom_catalogs = [_custom_catalog_out(catalog) for catalog in custom_result.scalars().all()]
+    external_result = await db.execute(
+        select(StremioExternalCatalog)
+        .where(StremioExternalCatalog.user_id == current_user.id)
+        .order_by(StremioExternalCatalog.created_at.asc())
+    )
+    external_catalogs = [
+        external_catalog_out(catalog) for catalog in external_result.scalars().all()
+    ]
 
     return {
         "addon_id": config.id,
         "is_enabled": bool(config.is_enabled),
         "catalogs": catalogs,
+        "external_catalogs": external_catalogs,
         "custom_catalogs": custom_catalogs,
         **_build_manifest_links(_resolve_base_url(request), config.id),
     }
@@ -434,6 +554,203 @@ async def update_stremio_addon_config(
     return {
         "is_enabled": config.is_enabled,
         "catalogs": config.default_catalogs,
+    }
+
+
+@router.post(
+    "/external-catalogs/discover",
+    summary="Discover external catalogs",
+    description="Fetch an external Stremio manifest and list supported catalogs.",
+)
+async def discover_stremio_external_catalogs(
+    payload: StremioExternalCatalogDiscoverPayload,
+    _: User = Depends(get_current_user),
+) -> dict:
+    manifest_url = normalize_external_manifest_url(payload.manifest_url)
+    if not manifest_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Manifest URL is required",
+        )
+    try:
+        return await discover_external_catalogs(manifest_url)
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch addon manifest: {exc}",
+        ) from exc
+
+
+@router.get(
+    "/external-catalogs",
+    summary="List external catalogs",
+    description="List external Stremio catalogs configured for the current user.",
+)
+async def list_external_catalogs(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(StremioExternalCatalog)
+        .where(StremioExternalCatalog.user_id == current_user.id)
+        .order_by(StremioExternalCatalog.created_at.asc())
+    )
+    return {
+        "external_catalogs": [external_catalog_out(catalog) for catalog in result.scalars().all()]
+    }
+
+
+@router.post(
+    "/external-catalogs",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create external catalog",
+    description="Create a new external Stremio catalog backed by another addon.",
+)
+async def create_external_catalog(
+    payload: StremioExternalCatalogCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is required")
+    manifest_url = normalize_external_manifest_url(payload.manifest_url)
+    if not manifest_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Manifest URL is required",
+        )
+    source_catalog_id = payload.source_catalog_id.strip()
+    if not source_catalog_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Source catalog ID is required",
+        )
+    if payload.source_catalog_type not in EXTERNAL_CATALOG_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid source catalog type",
+        )
+
+    catalog = StremioExternalCatalog(
+        user_id=current_user.id,
+        name=name,
+        slug=await _build_unique_slug(db, current_user.id, name),
+        addon_name=(payload.addon_name or "").strip() or None,
+        manifest_url=manifest_url,
+        source_catalog_id=source_catalog_id,
+        source_catalog_type=payload.source_catalog_type,
+        media_type=_normalize_external_media_type(
+            payload.source_catalog_type,
+            payload.media_type,
+        ),
+        enabled=True if payload.enabled is None else bool(payload.enabled),
+        filters=normalize_external_filters(
+            payload.filters.model_dump(exclude_none=True) if payload.filters else None
+        ),
+        order_by=normalize_external_order_by(payload.order_by),
+        order_dir=normalize_external_order_dir(payload.order_dir),
+        page_size=normalize_external_page_size(payload.page_size),
+        show_in_home=normalize_external_show_in_home(payload.show_in_home),
+    )
+    db.add(catalog)
+    try:
+        await db.flush()
+        await refresh_external_catalog(db, catalog)
+        await db.commit()
+        await db.refresh(catalog)
+    except httpx.HTTPError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"External catalog refresh failed: {exc}",
+        ) from exc
+    except Exception:
+        await db.rollback()
+        raise
+    return external_catalog_out(catalog)
+
+
+@router.patch(
+    "/external-catalogs/{catalog_id}",
+    summary="Update external catalog",
+    description="Update an external Stremio catalog.",
+)
+async def update_external_catalog(
+    catalog_id: str,
+    payload: StremioExternalCatalogUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    catalog = await _load_external_catalog(db, current_user.id, catalog_id)
+    fields = payload.model_fields_set
+
+    if "name" in fields:
+        name = (payload.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is required")
+        if name != catalog.name:
+            catalog.slug = await _build_unique_slug(
+                db,
+                current_user.id,
+                name,
+                exclude_external_catalog_id=catalog.id,
+            )
+        catalog.name = name
+    if "enabled" in fields:
+        catalog.enabled = bool(payload.enabled)
+    if "filters" in fields:
+        catalog.filters = normalize_external_filters(
+            payload.filters.model_dump(exclude_none=True) if payload.filters else None
+        )
+    if "order_by" in fields:
+        catalog.order_by = normalize_external_order_by(payload.order_by)
+    if "order_dir" in fields:
+        catalog.order_dir = normalize_external_order_dir(payload.order_dir)
+    if "page_size" in fields:
+        catalog.page_size = normalize_external_page_size(payload.page_size)
+    if "show_in_home" in fields:
+        catalog.show_in_home = normalize_external_show_in_home(payload.show_in_home)
+
+    catalog.updated_at = datetime.now(timezone.utc)
+    db.add(catalog)
+    await db.commit()
+    await db.refresh(catalog)
+    return external_catalog_out(catalog)
+
+
+@router.delete(
+    "/external-catalogs/{catalog_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete external catalog",
+    description="Delete an external Stremio catalog and its cached items.",
+)
+async def delete_external_catalog(
+    catalog_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    catalog = await _load_external_catalog(db, current_user.id, catalog_id)
+    await db.delete(catalog)
+    await db.commit()
+
+
+@router.post(
+    "/external-catalogs/{catalog_id}/refresh",
+    summary="Refresh external catalog",
+    description="Fetch the latest items for an external Stremio catalog.",
+)
+async def refresh_stremio_external_catalog(
+    catalog_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    catalog = await _load_external_catalog(db, current_user.id, catalog_id)
+    item_count = await _refresh_external_catalog_or_502(db, catalog)
+    return {
+        "status": "ok",
+        "item_count": item_count,
+        "catalog": external_catalog_out(catalog),
     }
 
 
@@ -486,7 +803,7 @@ async def update_custom_catalog(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is required")
         if name != catalog.name:
             catalog.slug = await _build_unique_slug(
-                db, current_user.id, name, exclude_catalog_id=catalog.id
+                db, current_user.id, name, exclude_custom_catalog_id=catalog.id
             )
         catalog.name = name
 
@@ -495,6 +812,17 @@ async def update_custom_catalog(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid media type"
             )
+        if payload.media_type != catalog.media_type:
+            item_count_result = await db.execute(
+                select(func.count(StremioCustomCatalogItem.id)).where(
+                    StremioCustomCatalogItem.catalog_id == catalog.id
+                )
+            )
+            if int(item_count_result.scalar_one() or 0) > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot change media type while the catalog still has items",
+                )
         catalog.media_type = payload.media_type
 
     if "order_by" in fields:

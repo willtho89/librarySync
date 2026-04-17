@@ -30,20 +30,62 @@ class TestStremioAddonCatalogs(unittest.TestCase):
 
     def test_build_manifest_includes_custom_and_enabled_catalogs(self) -> None:
         catalogs = build_default_catalogs()
+        external_catalog = SimpleNamespace(
+            name="Best Movies",
+            slug="best-movies",
+            enabled=True,
+            source_catalog_type="movie",
+            page_size=30,
+            show_in_home=True,
+        )
         custom_catalog = SimpleNamespace(
             name="Curated Picks", slug="curated_picks", media_type="movie"
         )
 
-        manifest = routes_stremio_addon_public._build_manifest(catalogs, [custom_catalog])
+        manifest = routes_stremio_addon_public._build_manifest(
+            catalogs,
+            [external_catalog],
+            [custom_catalog],
+        )
 
-        catalog_ids = {catalog["id"] for catalog in manifest["catalogs"]}
+        catalog_ids = [catalog["id"] for catalog in manifest["catalogs"]]
         self.assertIn("watchlist_movies", catalog_ids)
         self.assertIn("watchlist_shows", catalog_ids)
         self.assertIn("in_progress_shows", catalog_ids)
+        self.assertIn("best-movies", catalog_ids)
         self.assertIn("curated_picks", catalog_ids)
         self.assertNotIn("watchlist_anime", catalog_ids)
+        self.assertLess(catalog_ids.index("best-movies"), catalog_ids.index("curated_picks"))
         for catalog in manifest["catalogs"]:
             self.assertIn("extraSupported", catalog)
+
+    def test_external_catalog_query_hides_watched_items_by_default(self) -> None:
+        catalog = SimpleNamespace(id="external-1", filters={"show_watched": False})
+        query = asyncio.run(
+            routes_stremio_addon_public._build_external_catalog_query(
+                "user-id",
+                catalog,
+                None,
+            )
+        )
+
+        compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
+        self.assertIn("stremio_external_catalog_items", compiled)
+        self.assertIn("exists (select watched_items.id", compiled)
+
+    def test_external_catalog_query_can_include_watched_items(self) -> None:
+        catalog = SimpleNamespace(id="external-1", filters={"show_watched": True})
+        query = asyncio.run(
+            routes_stremio_addon_public._build_external_catalog_query(
+                "user-id",
+                catalog,
+                None,
+            )
+        )
+
+        compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
+        self.assertIn("stremio_external_catalog_items", compiled)
+        self.assertNotIn("not (exists", compiled)
 
     def test_build_meta_prefers_stremio_id(self) -> None:
         media_item = MediaItem(
