@@ -322,6 +322,78 @@ async def refresh_external_catalog(
     catalog: StremioExternalCatalog,
     *,
     max_items: int | None = None,
+@dataclass(frozen=True)
+class _ExternalMediaItemLookup:
+    by_stremio_id: dict[tuple[str, str], str]
+    by_imdb_id: dict[tuple[str, str], str]
+
+
+async def _prefetch_external_media_item_ids(
+    db: AsyncSession,
+    metas: list[dict[str, Any]],
+    default_stremio_type: str | None,
+) -> _ExternalMediaItemLookup:
+    stremio_ids: set[str] = set()
+    imdb_ids: set[str] = set()
+
+    for meta in metas:
+        stremio_id = str(meta.get("id") or "").strip()
+        stremio_type = str(meta.get("type") or default_stremio_type or "").strip().lower()
+        if not stremio_id or stremio_type not in {"movie", "series"}:
+            continue
+        stremio_ids.add(stremio_id)
+        imdb_id = _extract_imdb_id(meta, stremio_id)
+        if imdb_id:
+            imdb_ids.add(imdb_id)
+
+    if not stremio_ids and not imdb_ids:
+        return _ExternalMediaItemLookup(by_stremio_id={}, by_imdb_id={})
+
+    filters = []
+    if stremio_ids:
+        filters.append(MediaItem.stremio_id.in_(stremio_ids))
+    if imdb_ids:
+        filters.append(MediaItem.imdb_id.in_(imdb_ids))
+
+    result = await db.execute(select(MediaItem).where(or_(*filters)))
+    media_items = result.scalars().all()
+
+    by_stremio_id: dict[tuple[str, str], str] = {}
+    by_imdb_id: dict[tuple[str, str], str] = {}
+    for media_item in media_items:
+        media_type = str(getattr(media_item, "media_type", "") or "").strip().lower()
+        if media_type not in {"movie", "series"}:
+            continue
+
+        media_item_id = str(media_item.id)
+        item_stremio_id = str(getattr(media_item, "stremio_id", "") or "").strip()
+        if item_stremio_id:
+            by_stremio_id.setdefault((media_type, item_stremio_id), media_item_id)
+
+        item_imdb_id = str(getattr(media_item, "imdb_id", "") or "").strip()
+        if item_imdb_id:
+            by_imdb_id.setdefault((media_type, item_imdb_id), media_item_id)
+
+    return _ExternalMediaItemLookup(
+        by_stremio_id=by_stremio_id,
+        by_imdb_id=by_imdb_id,
+    )
+
+
+def _lookup_prefetched_external_media_item_id(
+    lookup: _ExternalMediaItemLookup,
+    stremio_id: str,
+    imdb_id: str | None,
+    stremio_type: str,
+) -> str | None:
+    media_item_id = lookup.by_stremio_id.get((stremio_type, stremio_id))
+    if media_item_id is not None:
+        return media_item_id
+    if imdb_id:
+        return lookup.by_imdb_id.get((stremio_type, imdb_id))
+    return None
+
+
 ) -> int:
     if normalize_external_source_kind(getattr(catalog, "source_kind", None)) == "list":
         return await _refresh_external_list_catalog(db, catalog, max_items=max_items)
@@ -365,6 +437,11 @@ async def refresh_external_catalog(
     )
 
     metas = _dedupe_external_metas(metas)
+    media_item_lookup = await _prefetch_external_media_item_ids(
+        db,
+        metas,
+        str(catalog.source_catalog_type or "").strip().lower() or None,
+    )
     created = 0
     for position, meta in enumerate(metas):
         stremio_id = str(meta.get("id") or "").strip()
@@ -372,7 +449,12 @@ async def refresh_external_catalog(
         if not stremio_id or stremio_type not in {"movie", "series"}:
             continue
         imdb_id = _extract_imdb_id(meta, stremio_id)
-        media_item_id = await _resolve_external_media_item_id(db, stremio_id, imdb_id, stremio_type)
+        media_item_id = _lookup_prefetched_external_media_item_id(
+            media_item_lookup,
+            stremio_id,
+            imdb_id,
+            stremio_type,
+        )
         db.add(
             StremioExternalCatalogItem(
                 id=str(uuid.uuid4()),
