@@ -483,7 +483,7 @@
   }
 
   .history-meta {
-    @apply space-y-3;
+    @apply space-y-3 pr-0;
   }
 
   .history-header {
@@ -491,7 +491,7 @@
   }
 
   .history-actions {
-    @apply relative;
+    @apply relative flex items-center gap-2;
   }
 
   .menu-button {

@@ -1665,6 +1665,10 @@ h1,
   margin-bottom: calc(0.75rem * var(--tw-space-y-reverse));
 }
 
+.history-meta {
+  padding-right: 0px;
+}
+
 .history-header {
   display: flex;
   align-items: flex-start;
@@ -1674,6 +1678,9 @@ h1,
 
 .history-actions {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .menu-button {
