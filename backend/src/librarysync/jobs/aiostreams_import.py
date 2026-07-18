@@ -935,7 +935,7 @@ async def _get_or_create_movie_item(
         entry.year,
     )
     if item:
-        _apply_media_updates(item, entry)
+        await _apply_media_updates(db, item, entry)
         return item
     if not entry.imdb_id and not entry.tmdb_id and not entry.tvdb_id and not entry.title:
         return None
@@ -969,7 +969,7 @@ async def _get_or_create_show_item(
         entry.year,
     )
     if item:
-        _apply_media_updates(item, entry)
+        await _apply_media_updates(db, item, entry)
         return item
     if not entry.imdb_id and not entry.tmdb_id and not entry.tvdb_id and not entry.title:
         return None
@@ -1061,19 +1061,67 @@ async def _find_media_item(
     return item
 
 
-def _apply_media_updates(item: MediaItem, entry: ParsedEntry) -> None:
-    if entry.imdb_id and not item.imdb_id:
-        item.imdb_id = entry.imdb_id
-    if entry.tmdb_id and not item.tmdb_id:
-        item.tmdb_id = entry.tmdb_id
-    if entry.tvdb_id and not item.tvdb_id:
-        item.tvdb_id = entry.tvdb_id
+async def _apply_media_updates(
+    db: AsyncSession,
+    item: MediaItem,
+    entry: ParsedEntry,
+) -> None:
+    await _maybe_set_media_id(db, item, "imdb_id", entry.imdb_id)
+    await _maybe_set_media_id(db, item, "tmdb_id", entry.tmdb_id)
+    await _maybe_set_media_id(db, item, "tvdb_id", entry.tvdb_id)
     if entry.year is not None and item.year is None:
         item.year = entry.year
     if entry.title and (not item.title or item.title.startswith("AIOStreams ")):
         item.title = entry.title
     if item.raw is None:
         item.raw = _build_media_raw(item.media_type)
+
+
+async def _maybe_set_media_id(
+    db: AsyncSession,
+    item: MediaItem,
+    field: str,
+    value: str | None,
+) -> None:
+    if not value or getattr(item, field):
+        return
+    if await _can_assign_media_id(db, item, field, value):
+        setattr(item, field, value)
+    else:
+        logger.warning(
+            "Skipping %s=%s for media item %s due to conflict",
+            field,
+            value,
+            item.id,
+        )
+
+
+async def _can_assign_media_id(
+    db: AsyncSession,
+    item: MediaItem,
+    field: str,
+    value: str,
+) -> bool:
+    if field == "imdb_id":
+        result = await db.execute(select(MediaItem.id).where(MediaItem.imdb_id == value))
+    elif field == "tmdb_id":
+        result = await db.execute(
+            select(MediaItem.id).where(
+                MediaItem.tmdb_id == value,
+                MediaItem.media_type == item.media_type,
+            )
+        )
+    elif field == "tvdb_id":
+        result = await db.execute(
+            select(MediaItem.id).where(
+                MediaItem.tvdb_id == value,
+                MediaItem.media_type == item.media_type,
+            )
+        )
+    else:
+        return False
+    existing = result.scalars().first()
+    return existing is None or existing == item.id
 
 
 def _build_media_raw(media_type: str) -> dict[str, Any]:

@@ -1,10 +1,11 @@
 import asyncio
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from librarysync.core.import_all import DEFAULT_IMPORT_QUEUE_ORDER, normalize_import_queue_order
-from librarysync.db.models import Integration
+from librarysync.db.models import Integration, MediaItem
+from librarysync.jobs import publicmetadb_import
 from librarysync.jobs.import_base import ImportContext
 from librarysync.jobs.publicmetadb_import import PublicMetaDbImportStrategy
 
@@ -141,6 +142,35 @@ class TestPublicMetaDbImport(unittest.TestCase):
         self.assertTrue(result.attempted)
         self.assertEqual(result.imported, 0)
         mocked_process.assert_not_awaited()
+
+    def test_apply_media_updates_skips_conflicting_imdb_id(self) -> None:
+        db = AsyncMock()
+        conflict_result = MagicMock()
+        conflict_result.scalars.return_value.first.return_value = "other-media-id"
+        db.execute = AsyncMock(return_value=conflict_result)
+
+        item = MediaItem(
+            id="target-media-id",
+            media_type="movie",
+            title="Existing title",
+            imdb_id=None,
+        )
+
+        asyncio.run(
+            publicmetadb_import._apply_media_updates(
+                db,
+                item,
+                "Updated title",
+                2024,
+                None,
+                "tt31909098",
+                None,
+            )
+        )
+
+        self.assertIsNone(item.imdb_id)
+        self.assertEqual(item.title, "Existing title")
+        self.assertEqual(item.year, 2024)
 
 
 if __name__ == "__main__":
