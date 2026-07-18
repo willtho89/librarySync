@@ -318,7 +318,7 @@
   }
 
   [data-mobile-menu-backdrop] {
-    @apply fixed inset-0 z-50 bg-slate/60 backdrop-blur-sm transition-opacity duration-300 opacity-0 pointer-events-none;
+    @apply fixed inset-0 z-[60] bg-slate/60 backdrop-blur-sm transition-opacity duration-300 opacity-0 pointer-events-none;
   }
 
   [data-mobile-menu-backdrop].is-open {
@@ -326,7 +326,7 @@
   }
 
   [data-mobile-menu-panel] {
-    @apply fixed inset-y-0 right-0 z-50 flex w-full max-w-[300px] translate-x-full flex-col border-l border-line/60 bg-surface shadow-2xl transition-transform duration-300 ease-out;
+    @apply fixed inset-y-0 right-0 z-[60] flex w-full max-w-[300px] translate-x-full flex-col border-l border-line/60 bg-surface shadow-2xl transition-transform duration-300 ease-out;
   }
 
   [data-mobile-menu-panel].is-open {

@@ -279,6 +279,9 @@
   .z-50 {
     z-index: 50;
   }
+  .z-\[60\] {
+    z-index: 60;
+  }
   .col-span-2 {
     grid-column: span 2 / span 2;
   }
@@ -1731,7 +1734,7 @@
     pointer-events: none;
     position: fixed;
     inset: 0px;
-    z-index: 50;
+    z-index: 60;
     background-color: color-mix(in srgb, rgb(15 27 36) 60%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
       background-color: color-mix(in oklab, var(--color-slate) 60%, transparent);
@@ -1754,7 +1757,7 @@
     position: fixed;
     inset-block: 0px;
     right: 0px;
-    z-index: 50;
+    z-index: 60;
     display: flex;
     width: 100%;
     max-width: 300px;
