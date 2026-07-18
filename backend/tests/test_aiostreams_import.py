@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT / "src"))
 
 from librarysync.connectors.metadata.base import MediaCandidate  # noqa: E402
+from librarysync.db.models import MediaItem  # noqa: E402
 from librarysync.jobs import aiostreams_import  # noqa: E402
 
 
@@ -20,6 +21,9 @@ class TestAIOStreamsLookup(unittest.TestCase):
         media_type: str = "movie",
         season_number: int | None = None,
         episode_number: int | None = None,
+        imdb_id: str | None = None,
+        tmdb_id: str | None = None,
+        tvdb_id: str | None = None,
     ) -> aiostreams_import.ParsedEntry:
         now = datetime.now(timezone.utc)
         return aiostreams_import.ParsedEntry(
@@ -28,9 +32,9 @@ class TestAIOStreamsLookup(unittest.TestCase):
             last_seen=now,
             duration_seconds=3600,
             media_type=media_type,
-            imdb_id=None,
-            tmdb_id=None,
-            tvdb_id=None,
+            imdb_id=imdb_id,
+            tmdb_id=tmdb_id,
+            tvdb_id=tvdb_id,
             season_number=season_number,
             episode_number=episode_number,
             title=title,
@@ -174,6 +178,26 @@ class TestAIOStreamsLookup(unittest.TestCase):
         self.assertIsNotNone(selected)
         self.assertEqual(selected.imdb_id, "tt12345678")
         self.assertEqual(selected.year, 2024)
+
+    def test_apply_media_updates_skips_conflicting_imdb_id(self) -> None:
+        entry = self._build_entry("Example Movie", 2020, imdb_id="tt31909098")
+        item = MediaItem(
+            id="target-media-id",
+            media_type="movie",
+            title="Existing title",
+            imdb_id=None,
+        )
+
+        db = AsyncMock()
+        conflict_result = MagicMock()
+        conflict_result.scalars.return_value.first.return_value = "other-media-id"
+        db.execute = AsyncMock(return_value=conflict_result)
+
+        asyncio.run(aiostreams_import._apply_media_updates(db, item, entry))
+
+        self.assertIsNone(item.imdb_id)
+        self.assertEqual(item.title, "Existing title")
+        self.assertEqual(item.year, 2020)
 
 
 if __name__ == "__main__":
