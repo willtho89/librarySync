@@ -33,3 +33,6 @@ __pypackages__/
 Thumbs.db
 external-api-docs/*
 *test-output.xml
+
+# Git worktrees
+.worktrees/
