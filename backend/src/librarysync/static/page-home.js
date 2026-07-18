@@ -74,6 +74,118 @@ function renderHomeStatus(statusData) {
   }
 }
 
+async function loadUpNext() {
+  const section = document.getElementById("up-next-section");
+  const container = document.getElementById("up-next-list");
+  if (!section || !container) {
+    return;
+  }
+  try {
+    const data = await requestJSON("/api/dashboard/up-next?limit=12");
+    const items = data && data.items ? data.items : [];
+    renderUpNext(items);
+  } catch (error) {
+    console.error("Failed to load up next", error);
+  }
+}
+
+function renderUpNext(items) {
+  const section = document.getElementById("up-next-section");
+  const container = document.getElementById("up-next-list");
+  if (!section || !container) {
+    return;
+  }
+  if (!items.length) {
+    section.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  section.hidden = false;
+  container.innerHTML = "";
+  items.forEach((item) => {
+    const nextEpisode = item.next_episode || {};
+    const episodeLabel = formatSeasonEpisode(
+      nextEpisode.season_number,
+      nextEpisode.episode_number,
+    );
+
+    const card = document.createElement("div");
+    card.className = "up-next-card";
+
+    const poster = document.createElement("img");
+    poster.className = "candidate-poster";
+    if (item.poster_url) {
+      poster.src = item.poster_url;
+      poster.alt = `${item.title} poster`;
+      poster.loading = "lazy";
+    } else {
+      poster.alt = "";
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "candidate-meta";
+
+    const header = document.createElement("div");
+    header.className = "history-header";
+    const title = document.createElement("h3");
+    title.textContent = item.title;
+    header.appendChild(title);
+    if (item.is_new_release) {
+      const badge = document.createElement("span");
+      badge.className = "watchlist-pill";
+      badge.textContent = "New episode";
+      header.appendChild(badge);
+    }
+
+    const detail = document.createElement("p");
+    const detailParts = [];
+    if (item.year) {
+      detailParts.push(item.year);
+    }
+    if (episodeLabel) {
+      detailParts.push(
+        nextEpisode.title ? `${episodeLabel} · ${nextEpisode.title}` : episodeLabel,
+      );
+    }
+    if (nextEpisode.air_date) {
+      detailParts.push(`Aired ${formatReleaseDate(nextEpisode.air_date)}`);
+    }
+    detail.textContent = detailParts.join(" · ");
+
+    const actions = document.createElement("div");
+    actions.className = "mt-2";
+    const markButton = document.createElement("button");
+    markButton.type = "button";
+    markButton.className = "btn btn-primary btn-sm";
+    markButton.textContent = episodeLabel
+      ? `Mark ${episodeLabel} watched`
+      : "Mark watched";
+    markButton.addEventListener("click", async () => {
+      markButton.disabled = true;
+      try {
+        const data = await requestJSON(
+          `/api/history/shows/${item.media_item_id}/mark-next-episode`,
+          { method: "POST" },
+        );
+        const added = data && data.added_episode ? data.added_episode : episodeLabel;
+        showToast(`Marked ${added || "episode"} as watched.`);
+        await Promise.all([loadUpNext(), loadDashboardStats()]);
+      } catch (error) {
+        showToast(error.message, true);
+        markButton.disabled = false;
+      }
+    });
+    actions.appendChild(markButton);
+
+    meta.appendChild(header);
+    meta.appendChild(detail);
+    meta.appendChild(actions);
+    card.appendChild(poster);
+    card.appendChild(meta);
+    container.appendChild(card);
+  });
+}
+
 async function loadHomeStatus() {
   const statusCard = document.getElementById("home-status");
   if (!statusCard) {
@@ -458,5 +570,5 @@ window.librarysyncPageInit = async ({ user }) => {
   if (!user) {
     return;
   }
-  await Promise.all([loadHomeStatus(), loadDashboardStats()]);
+  await Promise.all([loadHomeStatus(), loadDashboardStats(), loadUpNext()]);
 };

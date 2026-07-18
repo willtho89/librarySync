@@ -496,6 +496,14 @@
     @apply grid grid-cols-[auto,64px,1fr] items-start gap-4 rounded-xl border border-line/70 bg-surface/70 p-4;
   }
 
+  .up-next-list {
+    @apply grid gap-4 p-4 sm:grid-cols-2;
+  }
+
+  .up-next-card {
+    @apply grid grid-cols-[64px,1fr] items-center gap-4 rounded-xl border border-line/70 bg-surface/70 p-4;
+  }
+
   .history-card.is-watched {
     @apply border-line/50 bg-elevated/60;
     position: relative;

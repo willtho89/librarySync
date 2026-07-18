@@ -732,6 +732,10 @@ async function loadHistory() {
     deleteButton.setAttribute("role", "menuitem");
 
     menuPanel.appendChild(editButton);
+    const markNextButton = buildMarkNextEpisodeButton(item);
+    if (markNextButton) {
+      menuPanel.appendChild(markNextButton);
+    }
     if (item.media_type === "tv" || item.media_type === "anime") {
       menuPanel.appendChild(addToWatchlistButton);
     }
@@ -879,6 +883,38 @@ async function loadHistory() {
     card.appendChild(meta);
     container.appendChild(card);
   });
+}
+
+function buildMarkNextEpisodeButton(item) {
+  if (!item.next_episode || !item.metadata || !item.metadata.media_item_id) {
+    return null;
+  }
+  const episodeLabel = formatSeasonEpisode(
+    item.next_episode.season_number,
+    item.next_episode.episode_number,
+  );
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = episodeLabel
+    ? `Mark ${episodeLabel} watched`
+    : "Mark next episode watched";
+  button.setAttribute("role", "menuitem");
+  button.addEventListener("click", async () => {
+    closeHistoryMenus();
+    try {
+      setMessage("history-message", "Marking episode as watched...");
+      const data = await requestJSON(
+        `/api/history/shows/${item.metadata.media_item_id}/mark-next-episode`,
+        { method: "POST" },
+      );
+      const added = data && data.added_episode ? data.added_episode : episodeLabel;
+      setMessage("history-message", `Marked ${added || "episode"} as watched.`);
+      await loadHistory();
+    } catch (error) {
+      setMessage("history-message", error.message, true);
+    }
+  });
+  return button;
 }
 
 function buildRatingSelect(currentValue) {

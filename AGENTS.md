@@ -9,14 +9,14 @@
 ## 2) Feature Set
 
 - **Authentication**: Multi-user JWT cookies with optional registration toggle
-- **History Management**: Manual add, update, delete, bulk delete; optional deletion in integrations
+- **History Management**: Manual add, update, delete, bulk delete; optional deletion in integrations; mark next released episode of a show as watched
 - **Ratings**: 0.5–5.0 star ratings synced to supported providers
 - **Metadata Providers**: TMDB, TVDB, IMDb, TVMaze, Kitsu, MyAnimeList (per-user configuration)
 - **Metadata Pipeline**: Async lookup and enrichment (posters/IDs) with local cache reuse
 - **Import Sources**: Trakt, SIMKL, Letterboxd, Stremio (quick import and full import)
 - **Import Queue**: Priority-ordered per-user queue with post-import deduplication
 - **Sync Engine**: Outbox-based delivery with retries, per-user rate limiting, and configurable batch sizes
-- **UI**: Minimal static HTML/JS interface (login, integrations, settings, activity, history)
+- **UI**: Minimal static HTML/JS interface (login, integrations, settings, activity, history, dashboard with up-next shows)
 
 ---
 
@@ -75,6 +75,7 @@ librarySync/
         metadata_lookup_engine.py
         metadata_enrichment.py
         metadata_providers.py
+        next_episode.py
         rate_limiter.py
         ratings.py
         security.py
@@ -256,6 +257,13 @@ DELETE /api/history/items
 DELETE /api/history/items/{watched_id}
 POST   /api/history/items/bulk-delete
 POST   /api/history/items/sync
+POST   /api/history/shows/{media_item_id}/mark-next-episode
+```
+
+### Dashboard
+```
+GET    /api/dashboard/stats
+GET    /api/dashboard/up-next
 ```
 
 ### Activity / Status

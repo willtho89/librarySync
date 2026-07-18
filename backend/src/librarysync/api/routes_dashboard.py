@@ -1,18 +1,98 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.config import settings
-from librarysync.db.models import User
+from librarysync.core.next_episode import episode_to_payload, find_next_episodes_bulk
+from librarysync.db.models import EpisodeItem, MediaItem, User, WatchedItem
 
 router = APIRouter(
     prefix="/api/dashboard",
     tags=["dashboard"],
     dependencies=[Depends(get_current_user)],
 )
+
+UP_NEXT_CANDIDATE_LIMIT = 60
+
+
+def order_up_next_items(items: list[dict]) -> list[dict]:
+    """Order items: continue watching first, then newly released episodes.
+
+    Each group is ordered by most recently watched, so a show the user is
+    binging stays on top, and a new episode for a recently watched show ranks
+    above one for a show not watched in a long time.
+    """
+    items.sort(key=lambda item: item["last_watched_at"], reverse=True)
+    items.sort(key=lambda item: item["is_new_release"])
+    return items
+
+
+@router.get(
+    "/up-next",
+    summary="Get up-next shows",
+    description="Shows with a released, unwatched next episode, ordered for binge continuation.",
+)
+async def get_up_next(
+    limit: int = Query(12, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    now_date = datetime.now(timezone.utc).date()
+    last_watched_subq = (
+        select(
+            EpisodeItem.show_media_item_id.label("media_item_id"),
+            func.max(WatchedItem.watched_at).label("last_watched_at"),
+        )
+        .select_from(WatchedItem)
+        .join(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
+        .where(
+            WatchedItem.user_id == current_user.id,
+            EpisodeItem.season_number > 0,
+        )
+        .group_by(EpisodeItem.show_media_item_id)
+        .order_by(func.max(WatchedItem.watched_at).desc())
+        .limit(UP_NEXT_CANDIDATE_LIMIT)
+        .subquery()
+    )
+    result = await db.execute(
+        select(last_watched_subq.c.media_item_id, last_watched_subq.c.last_watched_at)
+    )
+    rows = result.all()
+    if not rows:
+        return {"items": []}
+    show_ids = [row.media_item_id for row in rows]
+    next_episodes = await find_next_episodes_bulk(db, current_user.id, show_ids, now_date)
+    if not next_episodes:
+        return {"items": []}
+    media_result = await db.execute(
+        select(MediaItem).where(MediaItem.id.in_(list(next_episodes.keys())))
+    )
+    media_by_id = {media.id: media for media in media_result.scalars().all()}
+    items = []
+    for row in rows:
+        episode = next_episodes.get(row.media_item_id)
+        media = media_by_id.get(row.media_item_id)
+        if not episode or not media:
+            continue
+        is_new_release = bool(
+            episode.air_date and episode.air_date > row.last_watched_at.date()
+        )
+        items.append(
+            {
+                "media_item_id": media.id,
+                "title": media.title,
+                "year": media.year,
+                "media_type": media.media_type,
+                "poster_url": media.poster_url,
+                "last_watched_at": row.last_watched_at,
+                "is_new_release": is_new_release,
+                "next_episode": episode_to_payload(episode),
+            }
+        )
+    return {"items": order_up_next_items(items)[:limit]}
 
 
 @router.get(
