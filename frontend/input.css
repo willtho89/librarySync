@@ -546,6 +546,18 @@
     white-space: nowrap;
   }
 
+  .up-next-footer {
+    @apply flex items-center justify-between border-t border-line/40 px-5 py-2.5;
+  }
+
+  .up-next-count {
+    @apply text-xs text-muted;
+  }
+
+  .up-next-toggle {
+    @apply text-xs font-medium text-primary transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded;
+  }
+
   /* Keep old up-next-card for fallback, replaced by up-next-row */
   .up-next-card {
     @apply flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-elevated/40 rounded-xl;
