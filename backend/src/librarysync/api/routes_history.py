@@ -17,6 +17,7 @@ from librarysync.core.catalog_ordering import (
 from librarysync.core.next_episode import (
     SHOW_MEDIA_TYPES,
     episode_to_payload,
+    find_next_episode,
     find_next_episodes_bulk,
     mark_next_episode_watched,
 )
@@ -654,13 +655,15 @@ async def mark_show_next_episode_watched(
         watched, episode = await mark_next_episode_watched(db, current_user.id, media_item)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    next_episode = await find_next_episode(db, current_user.id, media_item.id)
     await db.commit()
     return {
         "watched_id": watched.id,
         "media_item_id": media_item.id,
         "episode_item_id": episode.id,
         "added_episode": f"S{episode.season_number:02d}E{episode.episode_number:02d}",
-        "next_episode": episode_to_payload(episode),
+        "marked_episode": episode_to_payload(episode),
+        "next_episode": episode_to_payload(next_episode) if next_episode else None,
     }
 
 

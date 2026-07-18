@@ -25,9 +25,13 @@ def order_up_next_items(items: list[dict]) -> list[dict]:
     binging stays on top, and a new episode for a recently watched show ranks
     above one for a show not watched in a long time.
     """
-    items.sort(key=lambda item: item["last_watched_at"], reverse=True)
-    items.sort(key=lambda item: item["is_new_release"])
-    return items
+    return sorted(
+        items,
+        key=lambda item: (
+            item["is_new_release"],
+            -item["last_watched_at"].timestamp(),
+        ),
+    )
 
 
 @router.get(

@@ -16,7 +16,7 @@ from librarysync.core.catalog_ordering import (
     CatalogOrderDirection,
     apply_catalog_ordering,
 )
-from librarysync.core.next_episode import find_next_episode, has_released_episodes
+from librarysync.core.next_episode import SHOW_MEDIA_TYPES, find_next_episode, has_released_episodes
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
@@ -898,7 +898,7 @@ async def mark_watchlist_item_watched(
     target_media = media_item
     target_episode: EpisodeItem | None = None
 
-    if media_item.media_type == "tv":
+    if media_item.media_type in SHOW_MEDIA_TYPES:
         # Find the first released, unwatched episode
         target_episode = await find_next_episode(db, current_user.id, media_item.id)
         if not target_episode:

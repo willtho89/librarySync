@@ -109,57 +109,101 @@ function renderUpNext(items) {
       nextEpisode.episode_number,
     );
 
-    const card = document.createElement("div");
-    card.className = "up-next-card";
+    // Row container
+    const row = document.createElement("div");
+    row.className = "up-next-row";
 
-    const poster = document.createElement("img");
-    poster.className = "candidate-poster";
+    // Thumbnail
+    const thumb = document.createElement("img");
+    thumb.className = "up-next-thumb";
     if (item.poster_url) {
-      poster.src = item.poster_url;
-      poster.alt = `${item.title} poster`;
-      poster.loading = "lazy";
+      thumb.src = item.poster_url;
+      thumb.alt = `${item.title} poster`;
+      thumb.loading = "lazy";
     } else {
-      poster.alt = "";
+      thumb.alt = "";
     }
 
-    const meta = document.createElement("div");
-    meta.className = "candidate-meta";
+    // Body
+    const body = document.createElement("div");
+    body.className = "up-next-body";
 
-    const header = document.createElement("div");
-    header.className = "history-header";
-    const title = document.createElement("h3");
-    title.textContent = item.title;
-    header.appendChild(title);
+    // Title row: show name + episode code + new badge
+    const titleRow = document.createElement("div");
+    titleRow.className = "up-next-title-row";
+
+    const titleEl = document.createElement("span");
+    titleEl.className = "up-next-title";
+    titleEl.textContent = item.title;
+    titleRow.appendChild(titleEl);
+
+    if (episodeLabel) {
+      const epEl = document.createElement("span");
+      epEl.className = "up-next-episode";
+      epEl.textContent = episodeLabel;
+      titleRow.appendChild(epEl);
+    }
+
     if (item.is_new_release) {
       const badge = document.createElement("span");
-      badge.className = "watchlist-pill";
-      badge.textContent = "New episode";
-      header.appendChild(badge);
+      badge.className = "up-next-new-badge";
+      badge.textContent = "New";
+      titleRow.appendChild(badge);
     }
 
-    const detail = document.createElement("p");
-    const detailParts = [];
-    if (item.year) {
-      detailParts.push(item.year);
-    }
-    if (episodeLabel) {
-      detailParts.push(
-        nextEpisode.title ? `${episodeLabel} · ${nextEpisode.title}` : episodeLabel,
-      );
+    // Meta line: episode title · aired date
+    const metaParts = [];
+    if (nextEpisode.title) {
+      metaParts.push(nextEpisode.title);
     }
     if (nextEpisode.air_date) {
-      detailParts.push(`Aired ${formatReleaseDate(nextEpisode.air_date)}`);
+      metaParts.push(`Aired ${formatReleaseDate(nextEpisode.air_date)}`);
+    } else if (item.year && !episodeLabel) {
+      metaParts.push(String(item.year));
     }
-    detail.textContent = detailParts.join(" · ");
 
-    const actions = document.createElement("div");
-    actions.className = "mt-2";
+    const metaEl = document.createElement("p");
+    metaEl.className = "up-next-meta";
+    metaEl.textContent = metaParts.join(" · ");
+
+    body.appendChild(titleRow);
+    body.appendChild(metaEl);
+
+    // Action button — compact, icon+text on desktop, icon-only hint on mobile
+    const action = document.createElement("div");
+    action.className = "up-next-action";
+
     const markButton = document.createElement("button");
     markButton.type = "button";
-    markButton.className = "btn btn-primary btn-sm";
-    markButton.textContent = episodeLabel
-      ? `Mark ${episodeLabel} watched`
-      : "Mark watched";
+    markButton.className = "btn btn-primary btn-xs";
+    markButton.setAttribute(
+      "aria-label",
+      episodeLabel ? `Mark ${item.title} ${episodeLabel} as watched` : `Mark ${item.title} as watched`,
+    );
+    markButton.setAttribute("title", episodeLabel ? `Mark ${episodeLabel} watched` : "Mark watched");
+
+    // SVG check icon
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("width", "12");
+    svg.setAttribute("height", "12");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2.5");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    const polyline = document.createElementNS(svgNS, "polyline");
+    polyline.setAttribute("points", "20 6 9 17 4 12");
+    svg.appendChild(polyline);
+
+    const btnLabel = document.createElement("span");
+    btnLabel.textContent = "Watched";
+
+    markButton.appendChild(svg);
+    markButton.appendChild(btnLabel);
+
     markButton.addEventListener("click", async () => {
       markButton.disabled = true;
       try {
@@ -175,14 +219,12 @@ function renderUpNext(items) {
         markButton.disabled = false;
       }
     });
-    actions.appendChild(markButton);
+    action.appendChild(markButton);
 
-    meta.appendChild(header);
-    meta.appendChild(detail);
-    meta.appendChild(actions);
-    card.appendChild(poster);
-    card.appendChild(meta);
-    container.appendChild(card);
+    row.appendChild(thumb);
+    row.appendChild(body);
+    row.appendChild(action);
+    container.appendChild(row);
   });
 }
 

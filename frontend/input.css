@@ -497,11 +497,58 @@
   }
 
   .up-next-list {
-    @apply grid gap-4 p-4 sm:grid-cols-2;
+    @apply divide-y divide-line/40 px-2 py-1;
   }
 
+  .up-next-row {
+    @apply flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-elevated/40 rounded-xl;
+  }
+
+  .up-next-thumb {
+    @apply h-[52px] w-[36px] flex-none rounded-md bg-elevated object-cover shadow-sm;
+  }
+
+  .up-next-body {
+    @apply min-w-0 flex-1;
+  }
+
+  .up-next-title-row {
+    @apply flex items-center gap-2 min-w-0;
+  }
+
+  .up-next-title {
+    @apply truncate text-sm font-semibold text-ink leading-5;
+  }
+
+  .up-next-episode {
+    @apply flex-none text-xs font-medium text-primary;
+  }
+
+  .up-next-meta {
+    @apply truncate text-xs text-muted leading-4 mt-0.5;
+  }
+
+  .up-next-action {
+    @apply flex-none;
+  }
+
+  .up-next-new-badge {
+    flex-shrink: 0;
+    border-radius: 999px;
+    background-color: color-mix(in srgb, var(--color-primary) 15%, transparent);
+    color: var(--color-primary);
+    border: 1px solid color-mix(in srgb, var(--color-primary) 25%, transparent);
+    padding: 0.1rem 0.45rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  /* Keep old up-next-card for fallback, replaced by up-next-row */
   .up-next-card {
-    @apply grid grid-cols-[64px,1fr] items-center gap-4 rounded-xl border border-line/70 bg-surface/70 p-4;
+    @apply flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-elevated/40 rounded-xl;
   }
 
   .history-card.is-watched {
