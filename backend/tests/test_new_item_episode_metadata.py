@@ -86,6 +86,7 @@ class TestProcessNewItemJobEpisodeMetadata(unittest.TestCase):
             patch(
                 "librarysync.core.watch_pipeline.ensure_show_watchlist_item",
                 new_callable=AsyncMock,
+                return_value=(None, False),
             ) as mock_ensure_show,
             patch(
                 "librarysync.core.watch_pipeline.check_and_update_watchlist",
@@ -142,6 +143,7 @@ class TestProcessNewItemJobEpisodeMetadata(unittest.TestCase):
             patch(
                 "librarysync.core.watch_pipeline.ensure_show_watchlist_item",
                 new_callable=AsyncMock,
+                return_value=(None, False),
             ),
             patch(
                 "librarysync.core.watch_pipeline.check_and_update_watchlist",
@@ -191,6 +193,7 @@ class TestProcessNewItemJobEpisodeMetadata(unittest.TestCase):
             patch(
                 "librarysync.core.watch_pipeline.ensure_show_watchlist_item",
                 new_callable=AsyncMock,
+                return_value=(None, False),
             ),
             patch(
                 "librarysync.core.watch_pipeline.check_and_update_watchlist",
@@ -243,6 +246,7 @@ class TestProcessNewItemJobEpisodeMetadata(unittest.TestCase):
             patch(
                 "librarysync.core.watch_pipeline.ensure_show_watchlist_item",
                 new_callable=AsyncMock,
+                return_value=(None, False),
             ),
             patch(
                 "librarysync.core.watch_pipeline.check_and_update_watchlist",
