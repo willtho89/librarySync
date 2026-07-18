@@ -5,7 +5,7 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
-COPY frontend/tailwind.config.js frontend/input.css ./
+COPY frontend/input.css ./
 COPY backend/src/librarysync/templates /app/backend/src/librarysync/templates
 COPY backend/src/librarysync/static/*.js /app/backend/src/librarysync/static/
 

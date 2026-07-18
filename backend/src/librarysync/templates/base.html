@@ -2,7 +2,7 @@
 <html lang="en" class="h-full">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>{{ page_title }} - librarySync</title>
     <meta name="description" content="librarySync keeps your watch history and ratings aligned across providers." />
     <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
@@ -78,7 +78,7 @@
             </a>
           </div>
 
-          <!-- Center: Desktop Nav -->
+          <!-- Center: Desktop Nav (primary pages) -->
           <nav class="hidden items-center gap-1 md:flex" data-auth-only>
             <a
               href="/watchlist"
@@ -100,42 +100,42 @@
             </a>
           </nav>
 
-          <!-- Right: Actions & Mobile Toggle -->
-          <div class="flex items-center gap-3">
-            <button
-              type="button"
-              class="hidden items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-elevated hover:text-ink md:inline-flex"
-              data-mobile-menu-toggle
-              data-auth-only
-              aria-controls="mobile-menu-panel"
-              aria-expanded="false"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                class="h-4 w-4"
-                aria-hidden="true"
+          <!-- Right: Secondary actions (desktop) + guest login -->
+          <div class="flex items-center gap-1">
+            <!-- Authenticated: Settings, Stremio Addon, Logout -->
+            <div class="hidden items-center gap-1 md:flex" data-auth-only>
+              <a
+                href="/settings"
+                title="Settings"
+                class="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-ink {% if active_page == 'settings' %}bg-elevated text-ink{% endif %}"
+                aria-label="Settings"
               >
-                <line x1="4" y1="12" x2="20" y2="12"></line>
-                <line x1="4" y1="6" x2="20" y2="6"></line>
-                <line x1="4" y1="18" x2="20" y2="18"></line>
-              </svg>
-              Menu
-            </button>
-            
-            <div class="hidden items-center gap-3 md:flex" data-guest-only>
-               <a href="/login" class="btn btn-primary btn-sm rounded-lg">Log in</a>
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </a>
+              <a
+                href="/stremio-addon"
+                title="Stremio Addon"
+                class="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-ink {% if active_page == 'stremio-addon' %}bg-elevated text-ink{% endif %}"
+                aria-label="Stremio Addon"
+              >
+                <span class="icon-stremio" aria-hidden="true"></span>
+              </a>
+              <div class="mx-1 h-5 w-px bg-line/60"></div>
+              <button
+                type="button"
+                title="Log out"
+                class="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-red-500/10 hover:text-red-500"
+                data-logout
+                aria-label="Log out"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+              </button>
             </div>
 
-            <!-- Mobile: Burger Button (Hidden, replaced by Bottom Nav) -->
-            <!-- <button ... > -->
+            <!-- Guest: Log in -->
+            <div class="hidden items-center gap-3 md:flex" data-guest-only>
+              <a href="/login" class="btn btn-primary btn-sm rounded-lg">Log in</a>
+            </div>
           </div>
         </div>
        </header>

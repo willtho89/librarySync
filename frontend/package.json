@@ -5,11 +5,13 @@
     "chart.js": "^4.4.1"
   },
   "devDependencies": {
-    "tailwindcss": "^3.4.19"
+    "@tailwindcss/cli": "^4.3.3",
+    "tailwindcss": "^4.3.3"
   },
   "scripts": {
     "build": "npm run build:css && npm run build:chart",
-    "build:css": "tailwind -i ./input.css -o ../backend/src/librarysync/static/styles.css",
+    "build:css": "tailwindcss -i ./input.css -o ../backend/src/librarysync/static/styles.css",
+    "watch:css": "tailwindcss -i ./input.css -o ../backend/src/librarysync/static/styles.css --watch",
     "build:chart": "cp node_modules/chart.js/dist/chart.umd.min.js ../backend/src/librarysync/static/chart.min.js && cp node_modules/chart.js/dist/chart.umd.min.js.map ../backend/src/librarysync/static/chart.umd.min.js.map"
   }
 }

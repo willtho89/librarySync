@@ -1,7 +1,41 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
+/* ─── Content sources (replaces tailwind.config.js `content` array) ─── */
+@source "../backend/src/librarysync/templates/**/*.html";
+@source "../backend/src/librarysync/static/core.js";
+@source "../backend/src/librarysync/static/*-utils.js";
+@source "../backend/src/librarysync/static/page-*.js";
+@source "../backend/src/librarysync/static/service-worker.js";
+
+/* ─── Theme ─────────────────────────────────────────────────────────── */
+@theme {
+  /* Colors — defined as rgb() so color-mix() alpha modifiers work correctly */
+  --color-base: rgb(246 248 250);
+  --color-surface: rgb(255 255 255);
+  --color-elevated: rgb(241 245 248);
+  --color-line: rgb(214 223 230);
+  --color-ink: rgb(24 32 45);
+  --color-muted: rgb(100 116 139);
+  --color-primary: rgb(13 120 211);
+  --color-accent: rgb(20 144 228);
+  --color-teal: rgb(11 138 155);
+  --color-steel: rgb(139 152 161);
+  --color-slate: rgb(15 27 36);
+
+  /* Font families */
+  --font-display: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+
+  /* Shadows */
+  --shadow-card: 0 18px 40px -24px rgba(15, 27, 36, 0.45);
+  --shadow-glow: 0 0 0 1px rgba(13, 120, 211, 0.12), 0 12px 30px -24px rgba(13, 120, 211, 0.6);
+
+  /* Border radius extensions */
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+}
+
+/* ─── Font faces ─────────────────────────────────────────────────────── */
 @font-face {
   font-family: "Space Grotesk";
   font-style: normal;
@@ -34,76 +68,70 @@
   src: url("/static/fonts/IBMPlexSans-Medium.woff2") format("woff2");
 }
 
+/* ─── Base layer ─────────────────────────────────────────────────────── */
 @layer base {
   :root {
     color-scheme: light;
-    --color-base: 246 248 250;
-    --color-surface: 255 255 255;
-    --color-elevated: 241 245 248;
-    --color-line: 214 223 230;
-    --color-ink: 24 32 45;
-    --color-muted: 100 116 139;
-    --color-primary: 13 120 211;
-    --color-accent: 20 144 228;
-    --color-teal: 11 138 155;
-    --color-steel: 139 152 161;
-    --color-slate: 15 27 36;
   }
 
+  /* Dark mode — update theme color variables */
   @media (prefers-color-scheme: dark) {
     :root {
       color-scheme: dark;
-      --color-base: 15 27 36;
-      --color-surface: 20 34 46;
-      --color-elevated: 26 40 54;
-      --color-line: 46 63 79;
-      --color-ink: 231 238 245;
-      --color-muted: 169 182 195;
-      --color-primary: 20 144 228;
-      --color-accent: 13 120 211;
-      --color-teal: 26 170 183;
-      --color-steel: 139 152 161;
-      --color-slate: 6 12 18;
+      --color-base: rgb(15 27 36);
+      --color-surface: rgb(20 34 46);
+      --color-elevated: rgb(26 40 54);
+      --color-line: rgb(46 63 79);
+      --color-ink: rgb(231 238 245);
+      --color-muted: rgb(169 182 195);
+      --color-primary: rgb(20 144 228);
+      --color-accent: rgb(13 120 211);
+      --color-teal: rgb(26 170 183);
+      --color-steel: rgb(139 152 161);
+      --color-slate: rgb(6 12 18);
     }
   }
 
   :root[data-theme="light"] {
     color-scheme: light;
-    --color-base: 246 248 250;
-    --color-surface: 255 255 255;
-    --color-elevated: 241 245 248;
-    --color-line: 214 223 230;
-    --color-ink: 24 32 45;
-    --color-muted: 100 116 139;
-    --color-primary: 13 120 211;
-    --color-accent: 20 144 228;
-    --color-teal: 11 138 155;
-    --color-steel: 139 152 161;
-    --color-slate: 15 27 36;
+    --color-base: rgb(246 248 250);
+    --color-surface: rgb(255 255 255);
+    --color-elevated: rgb(241 245 248);
+    --color-line: rgb(214 223 230);
+    --color-ink: rgb(24 32 45);
+    --color-muted: rgb(100 116 139);
+    --color-primary: rgb(13 120 211);
+    --color-accent: rgb(20 144 228);
+    --color-teal: rgb(11 138 155);
+    --color-steel: rgb(139 152 161);
+    --color-slate: rgb(15 27 36);
   }
 
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --color-base: 15 27 36;
-    --color-surface: 20 34 46;
-    --color-elevated: 26 40 54;
-    --color-line: 46 63 79;
-    --color-ink: 231 238 245;
-    --color-muted: 169 182 195;
-    --color-primary: 20 144 228;
-    --color-accent: 13 120 211;
-    --color-teal: 26 170 183;
-    --color-steel: 139 152 161;
-    --color-slate: 6 12 18;
+    --color-base: rgb(15 27 36);
+    --color-surface: rgb(20 34 46);
+    --color-elevated: rgb(26 40 54);
+    --color-line: rgb(46 63 79);
+    --color-ink: rgb(231 238 245);
+    --color-muted: rgb(169 182 195);
+    --color-primary: rgb(20 144 228);
+    --color-accent: rgb(13 120 211);
+    --color-teal: rgb(26 170 183);
+    --color-steel: rgb(139 152 161);
+    --color-slate: rgb(6 12 18);
   }
 
   body {
-    @apply font-body bg-base text-ink;
+    font-family: var(--font-body);
+    background-color: var(--color-base);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
     background-image:
       linear-gradient(
         180deg,
-        rgb(var(--color-base) / 0.92),
-        rgb(var(--color-base) / 0.65)
+        color-mix(in srgb, var(--color-base) 92%, transparent),
+        color-mix(in srgb, var(--color-base) 65%, transparent)
       ),
       radial-gradient(1000px 560px at 12% -12%, rgba(13, 120, 211, 0.2), transparent 62%),
       radial-gradient(900px 640px at 92% -6%, rgba(11, 138, 155, 0.18), transparent 58%),
@@ -120,7 +148,7 @@
   h1,
   h2,
   h3 {
-    @apply font-display;
+    font-family: var(--font-display);
   }
 
   ::selection {
@@ -128,6 +156,7 @@
   }
 }
 
+/* ─── Components ─────────────────────────────────────────────────────── */
 @layer components {
   .card {
     @apply rounded-2xl border border-line/60 bg-surface p-6 shadow-card;
@@ -202,11 +231,11 @@
   }
 
   .secondary-button {
-    @apply btn btn-secondary;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition border border-line/70 bg-elevated text-ink hover:border-primary/40 hover:bg-surface;
   }
 
   .danger-button {
-    @apply btn btn-danger;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition bg-red-600 text-white hover:bg-red-500;
   }
 
   .btn-sm {
@@ -225,16 +254,31 @@
     @apply border border-line/70 bg-elevated text-ink;
   }
 
+  /* ── Settings tabs: side-rail on md+, horizontal scroll on mobile ── */
   .tab-shell {
     @apply grid items-start gap-6;
   }
 
+  @media (min-width: 768px) {
+    .tab-shell {
+      grid-template-columns: 200px 1fr;
+    }
+  }
+
   .tab-list {
-    @apply flex gap-2 overflow-x-auto pb-2;
+    @apply flex gap-2 overflow-x-auto pb-2 md:flex-col md:overflow-x-visible md:pb-0;
   }
 
   .tab-button {
-    @apply flex-none min-w-[170px] rounded-2xl border border-line/60 bg-surface/75 px-4 py-3 text-left text-sm text-muted transition;
+    @apply flex-none rounded-xl border border-line/60 bg-surface/75 px-4 py-3 text-left text-sm text-muted transition;
+    min-width: 150px;
+  }
+
+  @media (min-width: 768px) {
+    .tab-button {
+      min-width: 0;
+      width: 100%;
+    }
   }
 
   .tab-button:hover {
@@ -336,7 +380,7 @@
   }
 
   .inline-control input {
-    accent-color: rgb(var(--color-primary));
+    accent-color: var(--color-primary);
   }
 
   .helper-text {
@@ -372,7 +416,7 @@
   }
 
   .candidate-option input {
-    accent-color: rgb(var(--color-primary));
+    accent-color: var(--color-primary);
   }
 
   .candidate-poster {
@@ -464,14 +508,14 @@
 
   .watchlist-pill {
     border-radius: 999px;
-    border: 1px solid rgb(var(--color-line) / 0.7);
-    background-color: rgb(var(--color-surface) / 0.8);
+    border: 1px solid color-mix(in srgb, var(--color-line) 70%, transparent);
+    background-color: color-mix(in srgb, var(--color-surface) 80%, transparent);
     padding: 0.15rem 0.55rem;
     font-size: 0.65rem;
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: rgb(var(--color-muted));
+    color: var(--color-muted);
   }
 
   .history-select {
@@ -479,7 +523,7 @@
   }
 
   .history-select input {
-    accent-color: rgb(var(--color-primary));
+    accent-color: var(--color-primary);
   }
 
   .history-meta {
@@ -548,6 +592,11 @@
     @apply opacity-100;
     pointer-events: auto;
     transform: translateY(0);
+  }
+
+  /* Sticky pagination footer */
+  .sticky-footer {
+    @apply fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-0 right-0 z-40 border-t border-line/60 bg-surface/90 px-4 py-3 backdrop-blur md:bottom-0;
   }
 
   @media (max-width: 640px) {
@@ -769,11 +818,11 @@
   }
 
   .activity-row.activity-import {
-    border-color: rgb(var(--color-teal) / 0.45);
+    border-color: color-mix(in srgb, var(--color-teal) 45%, transparent);
     border-left-width: 4px;
-    border-left-color: rgb(var(--color-teal) / 0.8);
-    background-color: rgb(var(--color-teal) / 0.08);
-    box-shadow: inset 0 0 0 1px rgb(var(--color-teal) / 0.12);
+    border-left-color: color-mix(in srgb, var(--color-teal) 80%, transparent);
+    background-color: color-mix(in srgb, var(--color-teal) 8%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-teal) 12%, transparent);
   }
 
   .activity-row summary {
@@ -883,7 +932,7 @@
     inset: 0;
     font-size: var(--star-size);
     line-height: 1;
-    color: rgb(var(--color-muted));
+    color: var(--color-muted);
     transition: color 150ms ease;
   }
 
@@ -922,7 +971,7 @@
   .rating-stars input:checked ~ label::before,
   .rating-stars label:hover::before,
   .rating-stars label:hover ~ label::before {
-    color: rgb(var(--color-primary));
+    color: var(--color-primary);
   }
 
   .chart-container {
