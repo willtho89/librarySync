@@ -73,7 +73,7 @@ async def run_watchlist_refresh(db: AsyncSession, job: ScheduledJob) -> None:
         for item, media in rows:
             if media.media_type == "movie":
                 await _refresh_movie_status(db, user_id, item, media)
-            elif media.media_type == "tv":
+            elif media.media_type in {"tv", "anime"}:
                 await evaluate_show_watchlist_status(db, user_id, item, media)
         await extend_scheduled_job(db, job, WATCHLIST_REFRESH_LEASE)
 
@@ -136,7 +136,7 @@ async def _load_watchlist_rows_for_refresh(
         .where(
             WatchlistItem.user_id == user_id,
             WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
-            MediaItem.media_type == "tv",
+            MediaItem.media_type.in_(["tv", "anime"]),
             EpisodeItem.updated_at.is_not(None),
             EpisodeItem.updated_at > last_run_at,
         )
@@ -151,7 +151,7 @@ async def _load_watchlist_rows_for_refresh(
         .where(
             WatchlistItem.user_id == user_id,
             WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
-            MediaItem.media_type == "tv",
+            MediaItem.media_type.in_(["tv", "anime"]),
             EpisodeItem.air_date.is_not(None),
             EpisodeItem.air_date >= last_run_date,
             EpisodeItem.air_date <= now_date,
@@ -197,7 +197,7 @@ async def _load_watchlist_rows_for_refresh(
         .where(
             WatchlistItem.user_id == user_id,
             WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
-            MediaItem.media_type == "tv",
+            MediaItem.media_type.in_(["tv", "anime"]),
             ~exists(
                 select(EpisodeItem.id).where(
                     EpisodeItem.show_media_item_id == MediaItem.id
@@ -220,7 +220,7 @@ async def _backfill_missing_show_episodes(
     rows: list[tuple[WatchlistItem, MediaItem]],
 ) -> None:
     media_by_id = {
-        media.id: media for item, media in rows if media.media_type == "tv"
+        media.id: media for item, media in rows if media.media_type in {"tv", "anime"}
     }
     if not media_by_id:
         return

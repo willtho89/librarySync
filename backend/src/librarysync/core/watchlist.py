@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import EpisodeMetadataProvider
@@ -439,6 +440,42 @@ async def _acquire_rate_limit(
     return True
 
 
+WATCHLIST_ITEM_UNIQUE_CONSTRAINT = "uq_watchlist_items_user_media"
+
+
+def _is_watchlist_item_unique_violation(exc: IntegrityError) -> bool:
+    diag = getattr(exc.orig, "diag", None)
+    constraint_name = getattr(diag, "constraint_name", None)
+    if constraint_name:
+        return constraint_name == WATCHLIST_ITEM_UNIQUE_CONSTRAINT
+    return WATCHLIST_ITEM_UNIQUE_CONSTRAINT in str(exc)
+
+
+async def _get_watchlist_item(
+    db: AsyncSession,
+    user_id: str,
+    media_item_id: str,
+) -> WatchlistItem | None:
+    result = await db.execute(
+        select(WatchlistItem).where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.media_item_id == media_item_id,
+        )
+    )
+    return result.scalars().first()
+
+
+async def _enqueue_watchlist_sync(
+    db: AsyncSession,
+    watchlist_item: WatchlistItem,
+    media_item: MediaItem | None,
+) -> None:
+    # Deferred import: watchlist_sync depends on watch_pipeline, which imports this module.
+    from librarysync.core.watchlist_sync import enqueue_personal_watchlist_sync
+
+    await enqueue_personal_watchlist_sync(db, watchlist_item, media_item)
+
+
 async def check_and_update_watchlist(
     db: AsyncSession,
     user_id: str,
@@ -480,8 +517,98 @@ async def check_and_update_watchlist(
             reason="watched",
         )
 
-    elif media_item.media_type == "tv":
+    elif media_item.media_type in {"tv", "anime"}:
         await evaluate_show_watchlist_status(db, user_id, item, media_item)
+
+
+async def ensure_show_watchlist_item(
+    db: AsyncSession,
+    user_id: str,
+    media_item: MediaItem | None,
+    *,
+    watched_at: datetime,
+) -> tuple[WatchlistItem | None, bool]:
+    """
+    Ensure a watchlist item exists for a show.
+
+    Returns the item (or None) and a flag telling the caller whether the item
+    was newly created (or restored) and its show status was already evaluated
+    by this call, so the caller can skip a redundant evaluation.
+    """
+    if not media_item or media_item.media_type not in {"tv", "anime"}:
+        return None, False
+
+    existing_item = await _get_watchlist_item(db, user_id, media_item.id)
+    if existing_item:
+        return existing_item, False
+
+    media_ids = normalize_media_ids(
+        {
+            "imdb_id": media_item.imdb_id,
+            "tmdb_id": media_item.tmdb_id,
+            "tvdb_id": media_item.tvdb_id,
+            "tvmaze_id": media_item.tvmaze_id,
+            "kitsu_id": media_item.kitsu_id,
+            "myanimelist_id": media_item.myanimelist_id,
+            "anilist_id": media_item.anilist_id,
+        }
+    )
+    if media_ids:
+        watchlist_item, upsert_status = await upsert_watchlist_item(
+            db,
+            user_id,
+            media_item.media_type,
+            media_ids,
+            media_item.title,
+            media_item.year,
+            media_item.poster_url,
+            "auto_from_history",
+            now=watched_at,
+            event_raw={},
+            enqueue_sync=True,
+        )
+        evaluated = upsert_status in {"created", "restored"}
+        return watchlist_item, evaluated
+
+    initial_status = "added"
+    if _is_future_date(media_item.first_air_date, watched_at.date()):
+        initial_status = "not_released"
+
+    watchlist_item = WatchlistItem(
+        user_id=user_id,
+        media_item_id=media_item.id,
+        type=media_item.media_type,
+        status=initial_status,
+        source="auto_from_history",
+    )
+    try:
+        async with db.begin_nested():
+            db.add(watchlist_item)
+            await log_watchlist_event(
+                db,
+                user_id,
+                media_item.id,
+                "watchlist_added",
+                {"source": "auto_from_history"},
+            )
+            await db.flush()
+    except IntegrityError as exc:
+        if not _is_watchlist_item_unique_violation(exc):
+            raise
+        # Lost an insert race with a concurrent job: reuse the row it inserted.
+        existing_item = await _get_watchlist_item(db, user_id, media_item.id)
+        if existing_item is None:
+            raise
+        logger.info(
+            "Watchlist item insert race for user %s media %s; using existing row",
+            user_id,
+            media_item.id,
+        )
+        return existing_item, False
+
+    await evaluate_show_watchlist_status(db, user_id, watchlist_item, media_item)
+    await _enqueue_watchlist_sync(db, watchlist_item, media_item)
+    return watchlist_item, True
 
 
 async def refresh_watchlist_from_history(
@@ -527,7 +654,7 @@ async def refresh_watchlist_from_history(
             new_status,
             reason="history_update",
         )
-    elif media_item.media_type == "tv":
+    elif media_item.media_type in {"tv", "anime"}:
         await evaluate_show_watchlist_status(db, user_id, item, media_item)
 
 
@@ -772,6 +899,58 @@ def apply_media_id_update(item: MediaItem, field: str, value: str | None) -> Non
         setattr(item, field, value)
 
 
+async def _resolve_existing_watchlist_item(
+    db: AsyncSession,
+    existing: WatchlistItem,
+    *,
+    user_id: str,
+    media_item: MediaItem,
+    media_type: str,
+    source: str,
+    now: datetime,
+    event_raw: dict[str, Any] | None,
+    enqueue_sync: bool = False,
+) -> tuple[WatchlistItem, str]:
+    if existing.status == "removed":
+        initial_status = "added"
+        now_date = now.date()
+        if media_type == "movie":
+            w_result = await db.execute(
+                select(WatchedItem)
+                .where(
+                    WatchedItem.user_id == user_id,
+                    WatchedItem.media_item_id == media_item.id,
+                )
+                .limit(1)
+            )
+            has_watched = bool(w_result.scalars().first())
+            initial_status = determine_movie_watchlist_status(
+                media_item,
+                has_watched=has_watched,
+                now_date=now_date,
+            )
+        elif media_type in {"tv", "anime"}:
+            if _is_future_date(media_item.first_air_date, now_date):
+                initial_status = "not_released"
+        existing.status = initial_status
+        existing.updated_at = now
+        if existing.source != source and existing.source != "manual":
+            existing.source = source
+        await log_watchlist_event(
+            db,
+            user_id,
+            media_item.id,
+            "watchlist_added",
+            {"restored": True, "source": source, **(event_raw or {})},
+        )
+        if media_type in {"tv", "anime"}:
+            await evaluate_show_watchlist_status(db, user_id, existing, media_item)
+        if enqueue_sync:
+            await _enqueue_watchlist_sync(db, existing, media_item)
+        return existing, "restored"
+    return existing, "already_exists"
+
+
 async def upsert_watchlist_item(
     db: AsyncSession,
     user_id: str,
@@ -784,7 +963,16 @@ async def upsert_watchlist_item(
     *,
     now: datetime | None = None,
     event_raw: dict[str, Any] | None = None,
+    enqueue_sync: bool = False,
 ) -> tuple[WatchlistItem | None, str]:
+    """
+    Create, restore, or return a watchlist item.
+
+    When enqueue_sync is True, a newly created or restored item is also pushed
+    to connected providers via the watchlist outbox. Callers that enqueue the
+    push themselves (manual API add) or that must not echo items back out
+    (watchlist imports) leave this False.
+    """
     normalized_ids = normalize_media_ids(ids)
     if not normalized_ids:
         return None, "skipped"
@@ -834,50 +1022,19 @@ async def upsert_watchlist_item(
                 existing_raw["letterboxd_film_id"] = normalized_ids["letterboxd_film_id"]
                 media_item.raw = existing_raw
 
-    result = await db.execute(
-        select(WatchlistItem).where(
-            WatchlistItem.user_id == user_id,
-            WatchlistItem.media_item_id == media_item.id,
-        )
-    )
-    existing = result.scalars().first()
+    existing = await _get_watchlist_item(db, user_id, media_item.id)
     if existing:
-        if existing.status == "removed":
-            initial_status = "added"
-            now_date = now.date()
-            if media_type == "movie":
-                w_result = await db.execute(
-                    select(WatchedItem)
-                    .where(
-                        WatchedItem.user_id == user_id,
-                        WatchedItem.media_item_id == media_item.id,
-                    )
-                    .limit(1)
-                )
-                has_watched = bool(w_result.scalars().first())
-                initial_status = determine_movie_watchlist_status(
-                    media_item,
-                    has_watched=has_watched,
-                    now_date=now_date,
-                )
-            elif media_type == "tv":
-                if _is_future_date(media_item.first_air_date, now_date):
-                    initial_status = "not_released"
-            existing.status = initial_status
-            existing.updated_at = now
-            if existing.source != source and existing.source != "manual":
-                existing.source = source
-            await log_watchlist_event(
-                db,
-                user_id,
-                media_item.id,
-                "watchlist_added",
-                {"restored": True, "source": source, **(event_raw or {})},
-            )
-            if media_type == "tv":
-                await evaluate_show_watchlist_status(db, user_id, existing, media_item)
-            return existing, "restored"
-        return existing, "already_exists"
+        return await _resolve_existing_watchlist_item(
+            db,
+            existing,
+            user_id=user_id,
+            media_item=media_item,
+            media_type=media_type,
+            source=source,
+            now=now,
+            event_raw=event_raw,
+            enqueue_sync=enqueue_sync,
+        )
 
     initial_status = "added"
     if media_type == "movie":
@@ -895,7 +1052,7 @@ async def upsert_watchlist_item(
             has_watched=has_watched,
             now_date=now.date(),
         )
-    elif media_type == "tv":
+    elif media_type in {"tv", "anime"}:
         if _is_future_date(media_item.first_air_date, now.date()):
             initial_status = "not_released"
 
@@ -906,17 +1063,45 @@ async def upsert_watchlist_item(
         status=initial_status,
         source=source,
     )
-    db.add(watchlist_item)
-    await log_watchlist_event(
-        db,
-        user_id,
-        media_item.id,
-        "watchlist_added",
-        {"source": source, **(event_raw or {})},
-    )
-    await db.flush()
-    if media_type == "tv":
+    try:
+        async with db.begin_nested():
+            db.add(watchlist_item)
+            await log_watchlist_event(
+                db,
+                user_id,
+                media_item.id,
+                "watchlist_added",
+                {"source": source, **(event_raw or {})},
+            )
+            await db.flush()
+    except IntegrityError as exc:
+        if not _is_watchlist_item_unique_violation(exc):
+            raise
+        # Lost an insert race with a concurrent writer: reuse the row it inserted.
+        existing = await _get_watchlist_item(db, user_id, media_item.id)
+        if existing is None:
+            raise
+        logger.info(
+            "Watchlist item insert race for user %s media %s; using existing row",
+            user_id,
+            media_item.id,
+        )
+        # The concurrent writer owns the sync push for the row it inserted.
+        return await _resolve_existing_watchlist_item(
+            db,
+            existing,
+            user_id=user_id,
+            media_item=media_item,
+            media_type=media_type,
+            source=source,
+            now=now,
+            event_raw=event_raw,
+            enqueue_sync=False,
+        )
+    if media_type in {"tv", "anime"}:
         await evaluate_show_watchlist_status(db, user_id, watchlist_item, media_item)
+    if enqueue_sync:
+        await _enqueue_watchlist_sync(db, watchlist_item, media_item)
     return watchlist_item, "created"
 
 
