@@ -133,9 +133,9 @@ def _build_simkl_payload(
         return None
     payload = _base_watchlist_payload(watchlist_item, media_item)
     payload["simkl_id"] = simkl_id
-    if watchlist_item.type in {"movie", "anime"}:
+    if watchlist_item.type == "movie":
         payload["movie_ids"] = ids
-    elif watchlist_item.type == "tv":
+    elif watchlist_item.type in {"tv", "anime"}:
         payload["show_ids"] = ids
     else:
         return None

@@ -122,6 +122,42 @@ def test_simkl_drop_show_calls_add_to_list_endpoint() -> None:
     )
 
 
+def test_simkl_watchlist_payload_uses_anime_container_for_anime() -> None:
+    payload = process_outbox._build_simkl_watchlist_payload(
+        {
+            "media_type": "anime",
+            "show_ids": {"tmdb": "1234", "simkl": "99"},
+        }
+    )
+
+    assert payload == {
+        "anime": [{"ids": {"tmdb": 1234, "simkl": 99}}],
+    }
+
+
+def test_watchlist_sync_simkl_payload_uses_show_ids_for_anime() -> None:
+    payload = watchlist_sync._build_simkl_payload(
+        SimpleNamespace(id="wl-1", type="anime"),
+        SimpleNamespace(
+            id="media-1",
+            imdb_id="tt1234567",
+            tmdb_id="1234",
+            tvdb_id="5678",
+            raw={"simkl_id": "99"},
+        ),
+    )
+
+    assert payload is not None
+    assert "show_ids" in payload
+    assert "movie_ids" not in payload
+    assert payload["show_ids"] == {
+        "imdb": "tt1234567",
+        "tmdb": "1234",
+        "tvdb": "5678",
+        "simkl": "99",
+    }
+
+
 def test_simkl_watchlist_remove_delivery_drops_show() -> None:
     job = SimpleNamespace(
         user_id="user-1",
@@ -151,6 +187,39 @@ def test_simkl_watchlist_remove_delivery_drops_show() -> None:
     assert external_id is None
     client.add_to_list.assert_awaited_once_with(
         {"to": "dropped", "shows": [{"ids": {"tmdb": 1399}}]},
+        "token",
+    )
+
+
+def test_simkl_watchlist_remove_delivery_removes_movie() -> None:
+    job = SimpleNamespace(
+        user_id="user-1",
+        payload={"media_type": "movie", "movie_ids": {"tmdb": "550"}},
+    )
+    integration = SimpleNamespace(id="integration-1")
+    client = SimpleNamespace(remove_from_watchlist=AsyncMock(return_value=({}, 200)))
+    settings = SimpleNamespace(simkl_client_id="simkl-client", simkl_client_secret="secret")
+
+    with (
+        patch(
+            "librarysync.jobs.process_outbox.load_integration_with_secrets",
+            new=AsyncMock(return_value=(integration, {"access_token": "token"})),
+        ),
+        patch("librarysync.jobs.process_outbox.settings", settings),
+        patch("librarysync.jobs.process_outbox.SimklClient", return_value=client),
+        patch(
+            "librarysync.jobs.process_outbox._ensure_simkl_access_token",
+            new=AsyncMock(return_value="token"),
+        ),
+    ):
+        response_code, external_id = asyncio.run(
+            process_outbox._deliver_simkl_watchlist_remove(None, job)
+        )
+
+    assert response_code == 200
+    assert external_id is None
+    client.remove_from_watchlist.assert_awaited_once_with(
+        {"movies": [{"ids": {"tmdb": 550}}]},
         "token",
     )
 

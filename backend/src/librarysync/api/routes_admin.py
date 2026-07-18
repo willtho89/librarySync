@@ -74,6 +74,7 @@ MEDIA_EXTERNAL_ID_FIELDS_WITH_TYPE = {
 }
 WATCHLIST_STATUS_RANK = {
     "removed": 0,
+    "dropped": 1,
     "hidden": 1,
     "added": 2,
     "not_released": 2,
@@ -528,7 +529,7 @@ async def _enqueue_personal_watchlist_resync(
     result = await db.execute(
         select(WatchlistItem).where(
             WatchlistItem.media_item_id == media_item.id,
-            WatchlistItem.status != "removed",
+            WatchlistItem.status.notin_(["removed", "dropped"]),
         )
     )
     for watchlist_item in result.scalars().all():

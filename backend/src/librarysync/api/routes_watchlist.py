@@ -20,6 +20,7 @@ from librarysync.core.next_episode import SHOW_MEDIA_TYPES, find_next_episode, h
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
+    WATCHLIST_TERMINAL_STATUSES,
     apply_combined_status_filter,
     apply_watchlist_status_change,
     clear_watchlist_rewatch_request,
@@ -540,6 +541,8 @@ async def list_watchlist_items(
         .join(MediaItem, WatchlistItem.media_item_id == MediaItem.id)
         .where(WatchlistItem.user_id == current_user.id)
     )
+    if not status or status == "all":
+        query = query.where(WatchlistItem.status != "dropped")
 
     if status and status != "all" and status_filter_values:
         filter_now_date = datetime.now(timezone.utc).date()
@@ -666,7 +669,7 @@ async def list_watchlist_items(
                 now_date=now_date,
             )
 
-        if item.status != "removed" and item.status != desired_status:
+        if item.status not in WATCHLIST_TERMINAL_STATUSES and item.status != desired_status:
             if await apply_watchlist_status_change(
                 db,
                 item,
@@ -755,6 +758,100 @@ async def remove_watchlist_item(
 
 
 @router.post(
+    "/items/{watchlist_id}/drop",
+    summary="Drop watchlist item",
+    description="Mark a watchlist item as dropped and sync removal to providers.",
+)
+async def drop_watchlist_item(
+    watchlist_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(WatchlistItem, MediaItem)
+        .join(MediaItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.id == watchlist_id,
+            WatchlistItem.user_id == current_user.id,
+        )
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
+        )
+
+    item, media_item = row
+    if item.status == "dropped":
+        return {"id": item.id, "status": "unchanged"}
+
+    previous_status = item.status
+    effective_now = datetime.now(timezone.utc)
+    await clear_watchlist_rewatch_request(
+        db,
+        item,
+        current_user.id,
+        item.media_item_id,
+        reason="dropped",
+        now=effective_now,
+    )
+    item.status = "dropped"
+    item.updated_at = effective_now
+    await log_watchlist_event(
+        db,
+        current_user.id,
+        item.media_item_id,
+        "watchlist_status_changed",
+        {"status": "dropped", "previous_status": previous_status, "reason": "manual"},
+    )
+    await enqueue_personal_watchlist_removal(db, item, media_item)
+    await db.commit()
+    return {"id": item.id, "status": "updated"}
+
+
+@router.delete(
+    "/items/{watchlist_id}/drop",
+    summary="Restore dropped watchlist item",
+    description="Restore a dropped watchlist item to added and sync it to providers.",
+)
+async def restore_watchlist_item(
+    watchlist_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        select(WatchlistItem, MediaItem)
+        .join(MediaItem, WatchlistItem.media_item_id == MediaItem.id)
+        .where(
+            WatchlistItem.id == watchlist_id,
+            WatchlistItem.user_id == current_user.id,
+        )
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
+        )
+
+    item, media_item = row
+    if item.status != "dropped":
+        return {"id": item.id, "status": "unchanged"}
+
+    item.status = "added"
+    item.updated_at = datetime.now(timezone.utc)
+    await log_watchlist_event(
+        db,
+        current_user.id,
+        item.media_item_id,
+        "watchlist_status_changed",
+        {"status": "added", "previous_status": "dropped", "reason": "manual"},
+    )
+    await enqueue_personal_watchlist_sync(db, item, media_item)
+    await db.commit()
+    return {"id": item.id, "status": "updated"}
+
+
+@router.post(
     "/items/{watchlist_id}/rewatch",
     summary="Enable watchlist rewatch",
     description="Force a watched item to stay in the watchlist until it is watched again.",
@@ -778,10 +875,10 @@ async def enable_watchlist_rewatch(
             status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
         )
     item, media_item = row
-    if item.status == "removed":
+    if item.status in WATCHLIST_TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Removed watchlist items cannot be queued for rewatch",
+            detail="Removed or dropped watchlist items cannot be queued for rewatch",
         )
 
     if media_item.media_type == "movie":
@@ -1101,7 +1198,7 @@ async def _refresh_watchlist_statuses_for_filter(
     progress_map = await _get_show_progress_bulk(db, user_id, tv_media_ids)
     status_changed = False
     for item, media in rows:
-        if item.status == "removed":
+        if item.status in WATCHLIST_TERMINAL_STATUSES:
             continue
         desired_status = item.status
         if media.media_type == "tv":

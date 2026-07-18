@@ -55,10 +55,10 @@ def _make_watched() -> SimpleNamespace:
     )
 
 
-def _make_show_without_ids() -> SimpleNamespace:
+def _make_show_without_ids(media_type: str = "tv") -> SimpleNamespace:
     return SimpleNamespace(
         id="media-1",
-        media_type="tv",
+        media_type=media_type,
         imdb_id=None,
         tmdb_id=None,
         tvdb_id=None,
@@ -209,3 +209,76 @@ def test_pipeline_runs_check_and_update_when_item_already_existed() -> None:
         asyncio.run(process_new_item_job(db, _make_job()))
 
     check.assert_awaited_once_with(db, "user-1", "media-1", watched_at=NOW)
+
+
+def test_dropped_show_watch_restores_and_pushes_watchlist_sync() -> None:
+    watched = _make_watched()
+    media_item = _make_show_without_ids("tv")
+    existing_item = SimpleNamespace(
+        id="wl-existing",
+        user_id="user-1",
+        media_item_id="media-1",
+        status="dropped",
+        rewatch_requested=False,
+    )
+    db = _make_db(
+        watched,
+        media_item,
+        execute_side_effects=[
+            _FakeResult(scalar=existing_item),  # ensure: item already exists
+            _FakeResult(scalar=existing_item),  # check_and_update: fetch item
+            _FakeResult(scalar=media_item),  # check_and_update: fetch media item
+        ],
+    )
+
+    with (
+        patch("librarysync.core.watch_pipeline.enrich_watched_metadata", new_callable=AsyncMock),
+        patch("librarysync.core.watch_pipeline.backfill_show_episodes", new_callable=AsyncMock),
+        patch("librarysync.core.watch_pipeline._sync_to_integrations", new_callable=AsyncMock),
+        patch(
+            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
+        ) as evaluate,
+        patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
+    ):
+        asyncio.run(process_new_item_job(db, _make_job()))
+
+    assert existing_item.status == "added"
+    evaluate.assert_awaited_once_with(db, "user-1", existing_item, media_item)
+    sync.assert_awaited_once_with(db, existing_item, media_item)
+
+
+def test_dropped_anime_watch_restores_and_pushes_watchlist_sync() -> None:
+    watched = _make_watched()
+    media_item = _make_show_without_ids("anime")
+    existing_item = SimpleNamespace(
+        id="wl-existing",
+        user_id="user-1",
+        media_item_id="media-1",
+        status="dropped",
+        type="anime",
+        rewatch_requested=False,
+    )
+    db = _make_db(
+        watched,
+        media_item,
+        execute_side_effects=[
+            _FakeResult(scalar=existing_item),  # ensure: item already exists
+            _FakeResult(scalar=existing_item),  # check_and_update: fetch item
+            _FakeResult(scalar=media_item),  # check_and_update: fetch media item
+        ],
+    )
+
+    with (
+        patch("librarysync.core.watch_pipeline.enrich_watched_metadata", new_callable=AsyncMock),
+        patch("librarysync.core.watch_pipeline.backfill_show_episodes", new_callable=AsyncMock),
+        patch("librarysync.core.watch_pipeline._sync_to_integrations", new_callable=AsyncMock),
+        patch(
+            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
+        ) as evaluate,
+        patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
+    ):
+        asyncio.run(process_new_item_job(db, _make_job()))
+
+    assert existing_item.status == "added"
+    evaluate.assert_awaited_once_with(db, "user-1", existing_item, media_item)
+    sync.assert_awaited_once_with(db, existing_item, media_item)

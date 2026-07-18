@@ -27,6 +27,7 @@ LEGACY_WATCHLIST_STATUS_MAP = {
     "waiting": "watched",
 }
 SHOW_STATUS_VALUES = {"added", "in_progress", "watched", "not_released"}
+WATCHLIST_TERMINAL_STATUSES = {"removed", "dropped"}
 
 
 def _is_future_date(value: date | None, now_date: date) -> bool:
@@ -507,6 +508,19 @@ async def check_and_update_watchlist(
         watched_at=watched_at,
     )
 
+    restored_from_dropped = False
+    if media_item.media_type in {"tv", "anime"} and item.status == "dropped":
+        item.status = "added"
+        item.updated_at = watched_at or datetime.now(timezone.utc)
+        await log_watchlist_event(
+            db,
+            user_id,
+            media_item_id,
+            "watchlist_status_changed",
+            {"status": "added", "previous_status": "dropped", "reason": "watched"},
+        )
+        restored_from_dropped = True
+
     if media_item.media_type == "movie":
         await apply_watchlist_status_change(
             db,
@@ -519,6 +533,8 @@ async def check_and_update_watchlist(
 
     elif media_item.media_type in {"tv", "anime"}:
         await evaluate_show_watchlist_status(db, user_id, item, media_item)
+        if restored_from_dropped:
+            await _enqueue_watchlist_sync(db, item, media_item)
 
 
 async def ensure_show_watchlist_item(
@@ -670,7 +686,7 @@ async def evaluate_show_watchlist_status(
     # 3. If there is at least one released episode that is NOT watched -> Active
     # 4. If all released episodes are watched -> Waiting (if returning) or Watched (if ended)
 
-    if watchlist_item.status == "removed":
+    if watchlist_item.status in WATCHLIST_TERMINAL_STATUSES:
         return
 
     # Find released episodes
@@ -736,7 +752,7 @@ async def apply_watchlist_status_change(
     reason: str,
     now: datetime | None = None,
 ) -> bool:
-    if watchlist_item.status == "removed":
+    if watchlist_item.status in WATCHLIST_TERMINAL_STATUSES:
         return False
     if watchlist_item.status == new_status:
         return False
@@ -771,7 +787,7 @@ async def set_watchlist_rewatch_request(
     reason: str,
     now: datetime | None = None,
 ) -> bool:
-    if watchlist_item.status == "removed":
+    if watchlist_item.status in WATCHLIST_TERMINAL_STATUSES:
         return False
     if watchlist_item.rewatch_requested == enabled:
         return False
@@ -911,27 +927,29 @@ async def _resolve_existing_watchlist_item(
     event_raw: dict[str, Any] | None,
     enqueue_sync: bool = False,
 ) -> tuple[WatchlistItem, str]:
-    if existing.status == "removed":
+    if existing.status in WATCHLIST_TERMINAL_STATUSES:
+        was_dropped = existing.status == "dropped"
         initial_status = "added"
-        now_date = now.date()
-        if media_type == "movie":
-            w_result = await db.execute(
-                select(WatchedItem)
-                .where(
-                    WatchedItem.user_id == user_id,
-                    WatchedItem.media_item_id == media_item.id,
+        if existing.status == "removed":
+            now_date = now.date()
+            if media_type == "movie":
+                w_result = await db.execute(
+                    select(WatchedItem)
+                    .where(
+                        WatchedItem.user_id == user_id,
+                        WatchedItem.media_item_id == media_item.id,
+                    )
+                    .limit(1)
                 )
-                .limit(1)
-            )
-            has_watched = bool(w_result.scalars().first())
-            initial_status = determine_movie_watchlist_status(
-                media_item,
-                has_watched=has_watched,
-                now_date=now_date,
-            )
-        elif media_type in {"tv", "anime"}:
-            if _is_future_date(media_item.first_air_date, now_date):
-                initial_status = "not_released"
+                has_watched = bool(w_result.scalars().first())
+                initial_status = determine_movie_watchlist_status(
+                    media_item,
+                    has_watched=has_watched,
+                    now_date=now_date,
+                )
+            elif media_type in {"tv", "anime"}:
+                if _is_future_date(media_item.first_air_date, now_date):
+                    initial_status = "not_released"
         existing.status = initial_status
         existing.updated_at = now
         if existing.source != source and existing.source != "manual":
@@ -943,7 +961,7 @@ async def _resolve_existing_watchlist_item(
             "watchlist_added",
             {"restored": True, "source": source, **(event_raw or {})},
         )
-        if media_type in {"tv", "anime"}:
+        if media_type in {"tv", "anime"} and not was_dropped:
             await evaluate_show_watchlist_status(db, user_id, existing, media_item)
         if enqueue_sync:
             await _enqueue_watchlist_sync(db, existing, media_item)

@@ -971,7 +971,7 @@ async def lookup_local(
         .where(
             WatchlistItem.user_id == current_user.id,
             WatchlistItem.media_item_id.is_not(None),
-            WatchlistItem.status != "removed",
+            WatchlistItem.status.notin_(["removed", "dropped"]),
         )
         .group_by(WatchlistItem.media_item_id)
         .subquery()

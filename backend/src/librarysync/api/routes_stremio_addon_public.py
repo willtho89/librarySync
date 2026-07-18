@@ -296,7 +296,7 @@ async def _build_watchlist_query(
         .join(WatchlistItem, WatchlistItem.media_item_id == MediaItem.id)
         .where(
             WatchlistItem.user_id == user_id,
-            WatchlistItem.status != "removed",
+            WatchlistItem.status.notin_(["removed", "dropped"]),
         )
     )
     media_type = catalog.get("media_type")
@@ -346,7 +346,7 @@ async def _build_in_progress_query(
         .outerjoin(progress_subq, progress_subq.c.media_item_id == MediaItem.id)
         .where(
             WatchlistItem.user_id == user_id,
-            WatchlistItem.status != "removed",
+            WatchlistItem.status.notin_(["removed", "dropped"]),
             WatchlistItem.type.in_(["tv", "anime"]),
             MediaItem.media_type.in_(["tv", "anime"]),
         )

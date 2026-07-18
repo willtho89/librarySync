@@ -578,7 +578,7 @@ class WatchlistItem(Base):
     )
     # type: movie, show
     type: Mapped[str] = mapped_column(String(32))
-    # status: added, in_progress, watched, not_released, removed
+    # status: added, in_progress, watched, not_released, hidden, dropped, removed
     status: Mapped[str] = mapped_column(String(32), default="added", index=True)
     source: Mapped[str] = mapped_column(String(32), default="manual")
     rewatch_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

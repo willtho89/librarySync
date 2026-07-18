@@ -2521,7 +2521,7 @@ def _build_trakt_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]
 
 def _build_simkl_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]:
     media_type = _coerce_str(payload.get("media_type")) or "movie"
-    if media_type in {"movie", "anime"}:
+    if media_type == "movie":
         movie_ids = _normalize_simkl_ids(payload.get("movie_ids"))
         if not movie_ids:
             movie_ids = _normalize_simkl_ids(
@@ -2548,7 +2548,8 @@ def _build_simkl_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]
         )
     if not show_ids:
         raise ValueError("SIMKL watchlist sync requires show ids")
-    return {"shows": [{"ids": show_ids}]}
+    container_key = "anime" if media_type == "anime" else "shows"
+    return {container_key: [{"ids": show_ids}]}
 
 
 def _build_simkl_drop_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]:

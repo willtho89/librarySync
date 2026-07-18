@@ -31,6 +31,7 @@ const WATCHLIST_STATUS_LABELS = {
   in_progress: "In progress",
   watched: "Watched",
   not_released: "Not released yet",
+  dropped: "Dropped",
   active: "Added",
   waiting: "Watched",
 };
@@ -54,6 +55,8 @@ function formatWatchlistSources(sources) {
 
 function isWatchlistRewatchEligible(item) {
   if (!item) return false;
+  // Dropped items are not rewatch-eligible
+  if (item.status === "dropped") return false;
   if (item.media_type === "movie") {
     return item.status === "watched" || item.status === "waiting";
   }
@@ -87,7 +90,7 @@ function buildWatchlistQueryParams() {
   
   // Logic for Status + Watched Display
   if (watchlistState.filters.status === "all") {
-      // All means Added + In Progress + Not Released + (Watched depending on display)
+      // "All" excludes dropped — those are opt-in via the Dropped filter.
       // Include legacy statuses to backfill existing items.
       const statuses = ["added", "in_progress", "not_released", "active", "waiting"];
       if (watchlistState.filters.watchedDisplay !== "hide") {
@@ -95,7 +98,7 @@ function buildWatchlistQueryParams() {
       }
       params.set("status", statuses.join(","));
   } else {
-      // Specific status selected
+      // Specific status selected (includes "dropped" when chosen explicitly)
       params.set("status", watchlistState.filters.status);
   }
 
@@ -296,6 +299,10 @@ async function loadWatchlist() {
     if (item.status === "added") badgeClass = "badge-success";
     if (item.status === "in_progress") badgeClass = "badge-warning";
     if (item.status === "not_released") badgeClass = "badge-neutral";
+    if (item.status === "dropped") {
+        badgeClass = "badge-neutral";
+        card.classList.add("is-watched"); // Reuse watched overlay styling for dropped items
+    }
     if (item.status === "watched" || item.status === "waiting") {
         badgeClass = "badge-neutral";
         if (watchlistState.filters.watchedDisplay === "overlay") {
@@ -343,7 +350,11 @@ async function loadWatchlist() {
 
     const pill = document.createElement("span");
     pill.className = "watchlist-pill";
-    pill.textContent = item.media_type === "tv" ? "Caught up" : "Watched";
+    if (item.status === "dropped") {
+      pill.textContent = "Dropped";
+    } else {
+      pill.textContent = item.media_type === "tv" ? "Caught up" : "Watched";
+    }
 
     const rewatchBadge = document.createElement("span");
     rewatchBadge.className = "watchlist-pill";
@@ -372,11 +383,13 @@ async function loadWatchlist() {
     menuPanel.setAttribute("role", "menu");
     menuPanel.setAttribute("data-menu-panel", "true");
 
-    // Add "Mark watched" button
+    // Add "Mark watched" button — not shown for dropped items
     let showMarkWatched = true;
     let markWatchedLabel = "Mark watched";
-    
-    if (item.media_type === "tv") {
+
+    if (item.status === "dropped") {
+        showMarkWatched = false;
+    } else if (item.media_type === "tv") {
         if (item.status === "watched" || item.status === "waiting") {
             showMarkWatched = false; // Already fully watched
         } else if (item.progress && item.progress.watched >= item.progress.total && item.progress.total > 0) {
@@ -494,32 +507,70 @@ async function loadWatchlist() {
         menuPanel.appendChild(rewatchButton);
     }
 
-    const deleteButton = document.createElement("button");
-    deleteButton.type = "button";
-    deleteButton.className = "danger-button";
-    const removeActionLabel = item.media_type === "tv" || item.media_type === "anime" ? "Drop" : "Remove";
-    deleteButton.textContent = removeActionLabel;
-    deleteButton.setAttribute("role", "menuitem");
-    deleteButton.addEventListener("click", async () => {
-        closeWatchlistMenus();
-        if (!confirm(`${removeActionLabel} "${item.title}" from watchlist?`)) return;
-        try {
-            await requestJSON(`/api/watchlist/items/${item.id}`, { method: "DELETE" });
-            await loadWatchlist();
-        } catch(e) {
-            alert(e.message);
-        }
-    });
-
     menuPanel.appendChild(metadataButton);
     menuPanel.appendChild(refreshMetadataButton);
     externalLinks.forEach((link) => menuPanel.appendChild(link));
-    menuPanel.appendChild(deleteButton);
+
+    if (item.status === "dropped") {
+        // Restore action: remove the dropped flag and return to normal status
+        const restoreButton = document.createElement("button");
+        restoreButton.type = "button";
+        restoreButton.textContent = "Restore to watchlist";
+        restoreButton.setAttribute("role", "menuitem");
+        restoreButton.addEventListener("click", async () => {
+            closeWatchlistMenus();
+            try {
+                await requestJSON(`/api/watchlist/items/${item.id}/drop`, { method: "DELETE" });
+                await loadWatchlist();
+            } catch (e) {
+                alert(e.message);
+            }
+        });
+        menuPanel.appendChild(restoreButton);
+    } else if (item.media_type === "tv" || item.media_type === "anime") {
+        // TV / Anime: Drop sends POST (marks as dropped, keeps the item)
+        const dropButton = document.createElement("button");
+        dropButton.type = "button";
+        dropButton.className = "danger-button";
+        dropButton.textContent = "Drop";
+        dropButton.setAttribute("role", "menuitem");
+        dropButton.addEventListener("click", async () => {
+            closeWatchlistMenus();
+            if (!confirm(`Drop "${item.title}"? It will stay in your watchlist as dropped.`)) return;
+            try {
+                await requestJSON(`/api/watchlist/items/${item.id}/drop`, { method: "POST" });
+                await loadWatchlist();
+            } catch (e) {
+                alert(e.message);
+            }
+        });
+        menuPanel.appendChild(dropButton);
+    } else {
+        // Movies: Remove deletes the item entirely
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "danger-button";
+        removeButton.textContent = "Remove";
+        removeButton.setAttribute("role", "menuitem");
+        removeButton.addEventListener("click", async () => {
+            closeWatchlistMenus();
+            if (!confirm(`Remove "${item.title}" from watchlist?`)) return;
+            try {
+                await requestJSON(`/api/watchlist/items/${item.id}`, { method: "DELETE" });
+                await loadWatchlist();
+            } catch (e) {
+                alert(e.message);
+            }
+        });
+        menuPanel.appendChild(removeButton);
+    }
     
     if (item.rewatch_requested) {
       badgeGroup.appendChild(rewatchBadge);
     }
-    if (card.classList.contains("is-watched")) {
+    if (item.status === "dropped") {
+      badgeGroup.appendChild(pill);
+    } else if (card.classList.contains("is-watched")) {
       badgeGroup.appendChild(pill);
     }
     if (badgeGroup.childElementCount > 0) {
