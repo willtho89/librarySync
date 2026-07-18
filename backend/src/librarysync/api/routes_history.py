@@ -14,6 +14,13 @@ from librarysync.core.catalog_ordering import (
     CatalogOrderDirection,
     apply_catalog_ordering,
 )
+from librarysync.core.next_episode import (
+    SHOW_MEDIA_TYPES,
+    episode_to_payload,
+    find_next_episode,
+    find_next_episodes_bulk,
+    mark_next_episode_watched,
+)
 from librarysync.core.ratings import normalize_star_rating
 from librarysync.core.watch_pipeline import (
     SYNC_COORDINATOR,
@@ -614,11 +621,49 @@ async def list_watched_items(
                 metadata=metadata,
             ).model_dump()
         )
+    merged_items = _merge_history_items(items)
+    await _attach_next_episodes(db, current_user.id, merged_items)
     return {
-        "items": _merge_history_items(items),
+        "items": merged_items,
         "limit": limit,
         "offset": offset,
         "total": total,
+    }
+
+
+@router.post(
+    "/shows/{media_item_id}/mark-next-episode",
+    status_code=status.HTTP_201_CREATED,
+    summary="Mark next episode as watched",
+    description="Record a watched entry for the next released, unwatched episode of a show.",
+)
+async def mark_show_next_episode_watched(
+    media_item_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(select(MediaItem).where(MediaItem.id == media_item_id))
+    media_item = result.scalars().first()
+    if not media_item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found")
+    if media_item.media_type not in SHOW_MEDIA_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Next episode tracking is only available for shows",
+        )
+    try:
+        watched, episode = await mark_next_episode_watched(db, current_user.id, media_item)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    next_episode = await find_next_episode(db, current_user.id, media_item.id)
+    await db.commit()
+    return {
+        "watched_id": watched.id,
+        "media_item_id": media_item.id,
+        "episode_item_id": episode.id,
+        "added_episode": f"S{episode.season_number:02d}E{episode.episode_number:02d}",
+        "marked_episode": episode_to_payload(episode),
+        "next_episode": episode_to_payload(next_episode) if next_episode else None,
     }
 
 
@@ -1200,6 +1245,26 @@ async def _is_rewatch(
         )
         return result.scalars().first() is not None
     return False
+
+
+async def _attach_next_episodes(
+    db: AsyncSession, user_id: str, items: list[dict]
+) -> None:
+    """Attach the next released, unwatched episode to show items, in place."""
+    show_ids: list[str] = []
+    for item in items:
+        if item.get("media_type") not in SHOW_MEDIA_TYPES:
+            continue
+        metadata = item.get("metadata") or {}
+        show_id = metadata.get("media_item_id")
+        if show_id:
+            show_ids.append(show_id)
+    next_episodes = await find_next_episodes_bulk(db, user_id, show_ids) if show_ids else {}
+    for item in items:
+        metadata = item.get("metadata") or {}
+        show_id = metadata.get("media_item_id")
+        episode = next_episodes.get(show_id) if show_id else None
+        item["next_episode"] = episode_to_payload(episode) if episode else None
 
 
 def _merge_history_items(items: list[dict]) -> list[dict]:

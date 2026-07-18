@@ -124,6 +124,19 @@
     </div>
   </section>
 
+  <!-- Up Next -->
+  <section id="up-next-section" class="card !p-0 overflow-hidden" hidden>
+    <div class="flex items-center justify-between px-5 py-3 border-b border-line/40">
+      <h3 class="font-display text-sm font-semibold text-ink">Up Next</h3>
+      <a href="/history" class="text-xs font-medium text-primary hover:text-accent">View History</a>
+    </div>
+    <div id="up-next-list" class="up-next-list"></div>
+    <div id="up-next-footer" class="up-next-footer" hidden>
+      <span class="up-next-count"></span>
+      <button type="button" class="up-next-toggle" aria-expanded="false">Show more</button>
+    </div>
+  </section>
+
   <!-- Charts Row -->
   <section class="grid grid-cols-1 gap-6 lg:grid-cols-3" data-dashboard-section>
     <!-- Activity Timeline -->
@@ -253,5 +266,6 @@
 {% block scripts %}
   <script src="{{ static_url('/static/chart.min.js') }}" defer></script>
   <script src="{{ static_url('/static/status-utils.js') }}" defer></script>
+  <script src="{{ static_url('/static/watch-utils.js') }}" defer></script>
   <script src="{{ static_url('/static/page-home.js') }}" defer></script>
 {% endblock %}

@@ -16,6 +16,7 @@ from librarysync.core.catalog_ordering import (
     CatalogOrderDirection,
     apply_catalog_ordering,
 )
+from librarysync.core.next_episode import SHOW_MEDIA_TYPES, find_next_episode, has_released_episodes
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.watch_pipeline import enqueue_new_item_job
 from librarysync.core.watchlist import (
@@ -897,50 +898,15 @@ async def mark_watchlist_item_watched(
     target_media = media_item
     target_episode: EpisodeItem | None = None
 
-    if media_item.media_type == "tv":
-        # Logic to find next episode:
-        # a) Get all released episodes
-        now_date = datetime.now(timezone.utc).date()
-        episodes_result = await db.execute(
-            select(EpisodeItem)
-            .where(
-                EpisodeItem.show_media_item_id == media_item.id,
-                EpisodeItem.air_date is not None,
-                EpisodeItem.air_date <= now_date,
-                EpisodeItem.season_number > 0,  # Exclude specials (season 0)
-            )
-            .order_by(EpisodeItem.season_number, EpisodeItem.episode_number)
-        )
-        released_episodes = episodes_result.scalars().all()
-        if not released_episodes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No released episodes found for this show",
-            )
-
-        # b) Get watched episodes
-        # Use a JOIN to properly filter watched episodes for this show
-        watched_result = await db.execute(
-            select(WatchedItem.episode_item_id)
-            .join(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
-            .where(
-                WatchedItem.user_id == current_user.id,
-                WatchedItem.media_item_id.is_(None),
-                EpisodeItem.show_media_item_id == media_item.id,
-                EpisodeItem.air_date.is_not(None),
-                EpisodeItem.air_date <= now_date,
-                EpisodeItem.season_number > 0,
-            )
-        )
-        watched_episode_ids = set(watched_result.scalars().all())
-
-        # c) Find first unwatched
-        for ep in released_episodes:
-            if ep.id not in watched_episode_ids:
-                target_episode = ep
-                break
-
+    if media_item.media_type in SHOW_MEDIA_TYPES:
+        # Find the first released, unwatched episode
+        target_episode = await find_next_episode(db, current_user.id, media_item.id)
         if not target_episode:
+            if not await has_released_episodes(db, media_item.id):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No released episodes found for this show",
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="All released episodes are already watched",
