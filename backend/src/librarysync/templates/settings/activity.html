@@ -24,10 +24,55 @@
           Refresh
         </button>
       </div>
+      <form id="quick-import-form" class="mt-4 flex flex-wrap items-end gap-3">
+        <label class="field w-full sm:max-w-64">
+          <span>Quick import interval</span>
+          <select class="select" name="quick_import_interval">
+            <option value="">Manual only</option>
+            <option value="1800">Every 30 minutes</option>
+            <option value="3600">Every hour</option>
+            <option value="21600">Every 6 hours</option>
+            <option value="43200">Every 12 hours</option>
+            <option value="86400">Every day</option>
+            <option value="259200">Every 3 days</option>
+            <option value="604800">Every 7 days</option>
+          </select>
+        </label>
+        <button class="btn btn-primary btn-sm" type="submit">Save schedule</button>
+        <p id="quick-import-last" class="helper-text basis-full"></p>
+        <p id="quick-import-message" class="form-message" role="status" hidden></p>
+      </form>
       <p id="maintenance-message" class="form-message" hidden></p>
       <div id="maintenance-summary" class="activity-summary">Loading...</div>
       <div id="maintenance-schedule" class="schedule-list">Loading...</div>
       <p id="maintenance-import-message" class="form-message" role="status" hidden></p>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h2 class="section-title">Import queue order</h2>
+          <p class="section-subtitle">
+            Drag providers to set the import order for quick and full imports.
+          </p>
+        </div>
+      </div>
+      <div class="space-y-3">
+        <p class="helper-text">
+          Only connected integrations appear here. New integrations are appended to the end
+          of the queue.
+        </p>
+        <p id="import-queue-empty" class="empty-state" hidden>
+          Connect an integration to create an import queue.
+        </p>
+        <ul id="import-queue-list" class="import-queue-list" role="list"></ul>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" id="import-queue-restore" class="btn btn-ghost">
+            Restore default order
+          </button>
+        </div>
+        <p id="import-queue-message" class="form-message" role="status" hidden></p>
+      </div>
     </div>
 
     <div class="card">

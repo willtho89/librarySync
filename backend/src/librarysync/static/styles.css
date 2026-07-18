@@ -468,6 +468,9 @@
   .shrink {
     flex-shrink: 1;
   }
+  .basis-full {
+    flex-basis: 100%;
+  }
   .-translate-x-1\/2 {
     --tw-translate-x: calc(calc(1 / 2 * 100%) * -1);
     translate: var(--tw-translate-x) var(--tw-translate-y);
@@ -490,6 +493,9 @@
   }
   .items-center {
     align-items: center;
+  }
+  .items-end {
+    align-items: flex-end;
   }
   .items-start {
     align-items: flex-start;
@@ -1050,6 +1056,9 @@
     }
     .sm\:flex {
       display: flex;
+    }
+    .sm\:max-w-64 {
+      max-width: calc(var(--spacing) * 64);
     }
     .sm\:flex-none {
       flex: none;
