@@ -122,7 +122,6 @@ librarySync/
           blacklist.html
           activity.html
           history.html
-          imports.html
           preferences.html
           modals.html
         base.html
