@@ -305,7 +305,7 @@ def test_restore_watchlist_item_updates_status_and_enqueues_sync(monkeypatch) ->
 
     assert response == {"id": "wl-1", "status": "updated"}
     assert item.status == "added"
-    sync_mock.assert_awaited_once_with(db, item, media_item)
+    sync_mock.assert_awaited_once_with(db, item, media_item, unhide_dropped=True)
     db.commit.assert_awaited_once()
 
 
@@ -330,7 +330,7 @@ def test_restore_watchlist_item_evaluates_show_before_enqueuing_sync(monkeypatch
 
     evaluate_mock = AsyncMock(side_effect=_set_evaluated_status)
 
-    async def _assert_sync_after_eval(_db, target_item, _media_item):
+    async def _assert_sync_after_eval(_db, target_item, _media_item, **_kwargs):
         assert target_item.status == "in_progress"
 
     sync_mock = AsyncMock(side_effect=_assert_sync_after_eval)
@@ -342,7 +342,7 @@ def test_restore_watchlist_item_evaluates_show_before_enqueuing_sync(monkeypatch
 
     assert response == {"id": "wl-1", "status": "updated"}
     evaluate_mock.assert_awaited_once_with(db, "user-1", item, media_item)
-    sync_mock.assert_awaited_once_with(db, item, media_item)
+    sync_mock.assert_awaited_once_with(db, item, media_item, unhide_dropped=True)
     db.commit.assert_awaited_once()
 
 
@@ -424,3 +424,142 @@ def test_list_watchlist_items_includes_dropped_when_explicitly_filtered() -> Non
     assert len(db.queries) >= 2
     query_sql = str(db.queries[1])
     assert "watchlist_items.status !=" not in query_sql
+
+
+def test_list_watchlist_items_excludes_dropped_for_expanded_all_statuses() -> None:
+    """The UI's default "All" view sends an expanded status list, not the
+    literal "all"; dropped items must stay hidden there as well."""
+
+    class _QueryCaptureDB:
+        def __init__(self):
+            self.queries = []
+
+        async def execute(self, query):
+            self.queries.append(query)
+            if len(self.queries) == 1:
+                return _FakeResult(scalar=0)
+            return _FakeResult(rows=[])
+
+        async def commit(self):
+            return None
+
+    db = _QueryCaptureDB()
+    current_user = SimpleNamespace(id="user-1")
+
+    response = asyncio.run(
+        routes_watchlist.list_watchlist_items(
+            limit=100,
+            offset=0,
+            # Exactly what page-watchlist.js sends for the default "All" filter.
+            status="added,in_progress,not_released,active,waiting,watched",
+            media_type=None,
+            search=None,
+            source=None,
+            rewatch="all",
+            order_by="date_added",
+            order_dir="desc",
+            current_user=current_user,
+            db=db,
+        )
+    )
+
+    assert response["items"] == []
+    assert len(db.queries) >= 2
+    compiled = db.queries[1].compile()
+    assert "watchlist_items.status !=" in str(compiled)
+    assert "dropped" in compiled.params.values()
+
+
+@pytest.mark.asyncio
+async def test_list_watchlist_items_hides_dropped_show_with_watch_progress() -> None:
+    """End-to-end: a dropped show must not leak into the default watchlist
+    view through the computed progress status filter."""
+    from datetime import date
+
+    from librarysync.db.models import Base, EpisodeItem, MediaItem, User, WatchedItem, WatchlistItem
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_factory() as db:
+        db.add(User(id="user-1", username="user1", password_hash="x"))
+        db.add(
+            MediaItem(
+                id="show-1",
+                media_type="tv",
+                title="Dropped Show",
+                first_air_date=date(2024, 1, 1),
+            )
+        )
+        for ep_id, num in (("ep-1", 1), ("ep-2", 2)):
+            db.add(
+                EpisodeItem(
+                    id=ep_id,
+                    show_media_item_id="show-1",
+                    season_number=1,
+                    episode_number=num,
+                    air_date=date(2024, 1, num),
+                )
+            )
+        # One of two released episodes watched -> computed status "in_progress",
+        # which is part of the default "All" status filter.
+        db.add(
+            WatchedItem(
+                id="w-1",
+                user_id="user-1",
+                episode_item_id="ep-1",
+                watched_at=datetime(2024, 2, 1, tzinfo=timezone.utc),
+            )
+        )
+        db.add(
+            WatchlistItem(
+                id="wl-1",
+                user_id="user-1",
+                media_item_id="show-1",
+                type="tv",
+                status="dropped",
+                source="manual",
+            )
+        )
+        await db.commit()
+
+    current_user = SimpleNamespace(id="user-1")
+
+    async with session_factory() as db:
+        response = await routes_watchlist.list_watchlist_items(
+            limit=100,
+            offset=0,
+            status="added,in_progress,not_released,active,waiting,watched",
+            media_type=None,
+            search=None,
+            source=None,
+            rewatch="all",
+            order_by="date_added",
+            order_dir="desc",
+            current_user=current_user,
+            db=db,
+        )
+        assert [item["title"] for item in response["items"]] == []
+        assert response["total"] == 0
+
+    async with session_factory() as db:
+        response = await routes_watchlist.list_watchlist_items(
+            limit=100,
+            offset=0,
+            status="dropped",
+            media_type=None,
+            search=None,
+            source=None,
+            rewatch="all",
+            order_by="date_added",
+            order_dir="desc",
+            current_user=current_user,
+            db=db,
+        )
+        assert [item["title"] for item in response["items"]] == ["Dropped Show"]
+        assert response["total"] == 1
+
+    await engine.dispose()

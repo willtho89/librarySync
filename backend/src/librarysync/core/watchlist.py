@@ -470,11 +470,15 @@ async def _enqueue_watchlist_sync(
     db: AsyncSession,
     watchlist_item: WatchlistItem,
     media_item: MediaItem | None,
+    *,
+    unhide_dropped: bool = False,
 ) -> None:
     # Deferred import: watchlist_sync depends on watch_pipeline, which imports this module.
     from librarysync.core.watchlist_sync import enqueue_personal_watchlist_sync
 
-    await enqueue_personal_watchlist_sync(db, watchlist_item, media_item)
+    await enqueue_personal_watchlist_sync(
+        db, watchlist_item, media_item, unhide_dropped=unhide_dropped
+    )
 
 
 async def check_and_update_watchlist(
@@ -534,7 +538,7 @@ async def check_and_update_watchlist(
     elif media_item.media_type in {"tv", "anime"}:
         await evaluate_show_watchlist_status(db, user_id, item, media_item)
         if restored_from_dropped:
-            await _enqueue_watchlist_sync(db, item, media_item)
+            await _enqueue_watchlist_sync(db, item, media_item, unhide_dropped=True)
 
 
 async def ensure_show_watchlist_item(
@@ -964,7 +968,7 @@ async def _resolve_existing_watchlist_item(
         if media_type in {"tv", "anime"} and not was_dropped:
             await evaluate_show_watchlist_status(db, user_id, existing, media_item)
         if enqueue_sync:
-            await _enqueue_watchlist_sync(db, existing, media_item)
+            await _enqueue_watchlist_sync(db, existing, media_item, unhide_dropped=was_dropped)
         return existing, "restored"
     return existing, "already_exists"
 

@@ -58,19 +58,67 @@ def test_publicmetadb_watchlist_payload_requires_tmdb() -> None:
     assert payload is None
 
 
-def test_trakt_watchlist_removal_uses_delete_sync_watchlist() -> None:
+def test_trakt_watchlist_removal_uses_post_sync_watchlist_remove() -> None:
     client = TraktClient(client_id="trakt-client", client_secret="secret")
-    response = httpx.Response(204, request=httpx.Request("DELETE", "https://api.trakt.tv/sync/watchlist"))
+    response = httpx.Response(
+        200,
+        json={"deleted": {"shows": 1}},
+        request=httpx.Request("POST", "https://api.trakt.tv/sync/watchlist/remove"),
+    )
     client._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
 
     payload = {"shows": [{"ids": {"tmdb": 1399}}]}
     parsed, status_code = asyncio.run(client.remove_from_watchlist(payload, "token"))
 
-    assert parsed == {}
-    assert status_code == 204
+    assert parsed == {"deleted": {"shows": 1}}
+    assert status_code == 200
     client._request.assert_awaited_once_with(  # type: ignore[attr-defined]
-        "DELETE",
-        "/sync/watchlist",
+        "POST",
+        "/sync/watchlist/remove",
+        access_token="token",
+        json_body=payload,
+    )
+
+
+def test_trakt_add_hidden_items_posts_to_hidden_section() -> None:
+    client = TraktClient(client_id="trakt-client", client_secret="secret")
+    response = httpx.Response(
+        200,
+        json={"added": {"shows": 1}},
+        request=httpx.Request("POST", "https://api.trakt.tv/users/hidden/dropped"),
+    )
+    client._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
+
+    payload = {"shows": [{"ids": {"tmdb": 1399}}]}
+    parsed, status_code = asyncio.run(client.add_hidden_items("dropped", payload, "token"))
+
+    assert parsed == {"added": {"shows": 1}}
+    assert status_code == 200
+    client._request.assert_awaited_once_with(  # type: ignore[attr-defined]
+        "POST",
+        "/users/hidden/dropped",
+        access_token="token",
+        json_body=payload,
+    )
+
+
+def test_trakt_remove_hidden_items_posts_to_hidden_section_remove() -> None:
+    client = TraktClient(client_id="trakt-client", client_secret="secret")
+    response = httpx.Response(
+        200,
+        json={"deleted": {"shows": 1}},
+        request=httpx.Request("POST", "https://api.trakt.tv/users/hidden/dropped/remove"),
+    )
+    client._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
+
+    payload = {"shows": [{"ids": {"tmdb": 1399}}]}
+    parsed, status_code = asyncio.run(client.remove_hidden_items("dropped", payload, "token"))
+
+    assert parsed == {"deleted": {"shows": 1}}
+    assert status_code == 200
+    client._request.assert_awaited_once_with(  # type: ignore[attr-defined]
+        "POST",
+        "/users/hidden/dropped/remove",
         access_token="token",
         json_body=payload,
     )
@@ -98,9 +146,10 @@ def test_simkl_drop_show_payload_moves_anime_to_dropped_list() -> None:
         }
     )
 
+    # SIMKL treats anime as shows in POST payloads (no "anime" container).
     assert payload == {
         "to": "dropped",
-        "anime": [{"ids": {"tmdb": 1234, "simkl": 99}}],
+        "shows": [{"ids": {"tmdb": 1234, "simkl": 99}}],
     }
 
 
@@ -122,7 +171,7 @@ def test_simkl_drop_show_calls_add_to_list_endpoint() -> None:
     )
 
 
-def test_simkl_watchlist_payload_uses_anime_container_for_anime() -> None:
+def test_simkl_watchlist_payload_uses_shows_container_for_anime() -> None:
     payload = process_outbox._build_simkl_watchlist_payload(
         {
             "media_type": "anime",
@@ -130,8 +179,9 @@ def test_simkl_watchlist_payload_uses_anime_container_for_anime() -> None:
         }
     )
 
+    # SIMKL treats anime as shows in POST payloads (no "anime" container).
     assert payload == {
-        "anime": [{"ids": {"tmdb": 1234, "simkl": 99}}],
+        "shows": [{"ids": {"tmdb": 1234, "simkl": 99}}],
     }
 
 
@@ -222,6 +272,173 @@ def test_simkl_watchlist_remove_delivery_removes_movie() -> None:
         {"movies": [{"ids": {"tmdb": 550}}]},
         "token",
     )
+
+
+def _make_trakt_delivery_mocks() -> tuple[SimpleNamespace, SimpleNamespace]:
+    integration = SimpleNamespace(id="integration-1")
+    client = SimpleNamespace(
+        add_to_watchlist=AsyncMock(return_value=({}, 200)),
+        remove_from_watchlist=AsyncMock(return_value=({}, 200)),
+        add_hidden_items=AsyncMock(return_value=({}, 200)),
+        remove_hidden_items=AsyncMock(return_value=({}, 200)),
+    )
+    return integration, client
+
+
+def _run_trakt_delivery(deliver, client, integration, job):
+    settings = SimpleNamespace(trakt_client_id="trakt-client", trakt_client_secret="secret")
+    with (
+        patch(
+            "librarysync.jobs.process_outbox.load_integration_with_secrets",
+            new=AsyncMock(
+                return_value=(integration, {"access_token": "token", "refresh_token": "refresh"})
+            ),
+        ),
+        patch("librarysync.jobs.process_outbox.settings", settings),
+        patch("librarysync.jobs.process_outbox.TraktClient", return_value=client),
+        patch(
+            "librarysync.jobs.process_outbox._ensure_trakt_access_token",
+            new=AsyncMock(return_value="token"),
+        ),
+    ):
+        return asyncio.run(deliver(None, job))
+
+
+def test_trakt_watchlist_remove_delivery_hides_dropped_show() -> None:
+    integration, client = _make_trakt_delivery_mocks()
+    job = SimpleNamespace(
+        user_id="user-1",
+        payload={"media_type": "tv", "show_ids": {"tmdb": "1399"}, "dropped": True},
+    )
+
+    response_code, external_id = _run_trakt_delivery(
+        process_outbox._deliver_trakt_watchlist_remove, client, integration, job
+    )
+
+    assert response_code == 200
+    assert external_id is None
+    client.remove_from_watchlist.assert_awaited_once_with(
+        {"shows": [{"ids": {"tmdb": "1399"}}]},
+        "token",
+    )
+    client.add_hidden_items.assert_awaited_once_with(
+        "dropped",
+        {"shows": [{"ids": {"tmdb": "1399"}}]},
+        "token",
+    )
+
+
+def test_trakt_watchlist_remove_delivery_dropped_anime_uses_show_ids() -> None:
+    integration, client = _make_trakt_delivery_mocks()
+    job = SimpleNamespace(
+        user_id="user-1",
+        # Anime ids are stored under movie_ids (Trakt add/remove mapping), but
+        # the hidden dropped section only accepts show objects.
+        payload={"media_type": "anime", "movie_ids": {"tmdb": "1234"}, "dropped": True},
+    )
+
+    response_code, _ = _run_trakt_delivery(
+        process_outbox._deliver_trakt_watchlist_remove, client, integration, job
+    )
+
+    assert response_code == 200
+    client.add_hidden_items.assert_awaited_once_with(
+        "dropped",
+        {"shows": [{"ids": {"tmdb": "1234"}}]},
+        "token",
+    )
+
+
+def test_trakt_watchlist_remove_delivery_without_drop_skips_hidden() -> None:
+    integration, client = _make_trakt_delivery_mocks()
+    job = SimpleNamespace(
+        user_id="user-1",
+        payload={"media_type": "tv", "show_ids": {"tmdb": "1399"}},
+    )
+
+    response_code, _ = _run_trakt_delivery(
+        process_outbox._deliver_trakt_watchlist_remove, client, integration, job
+    )
+
+    assert response_code == 200
+    client.remove_from_watchlist.assert_awaited_once()
+    client.add_hidden_items.assert_not_awaited()
+
+
+def test_trakt_watchlist_add_delivery_unhides_show_from_dropped() -> None:
+    integration, client = _make_trakt_delivery_mocks()
+    job = SimpleNamespace(
+        user_id="user-1",
+        payload={"media_type": "tv", "show_ids": {"tmdb": "1399"}, "unhide_dropped": True},
+    )
+
+    response_code, _ = _run_trakt_delivery(
+        process_outbox._deliver_trakt_watchlist, client, integration, job
+    )
+
+    assert response_code == 200
+    client.add_to_watchlist.assert_awaited_once_with(
+        {"shows": [{"ids": {"tmdb": "1399"}}]},
+        "token",
+    )
+    client.remove_hidden_items.assert_awaited_once_with(
+        "dropped",
+        {"shows": [{"ids": {"tmdb": "1399"}}]},
+        "token",
+    )
+
+
+def test_trakt_watchlist_add_delivery_skips_unhide_without_flag() -> None:
+    integration, client = _make_trakt_delivery_mocks()
+    job = SimpleNamespace(
+        user_id="user-1",
+        payload={"media_type": "tv", "show_ids": {"tmdb": "1399"}},
+    )
+
+    response_code, _ = _run_trakt_delivery(
+        process_outbox._deliver_trakt_watchlist, client, integration, job
+    )
+
+    assert response_code == 200
+    client.add_to_watchlist.assert_awaited_once()
+    client.remove_hidden_items.assert_not_awaited()
+
+
+def test_trakt_watchlist_add_delivery_skips_unhide_for_movies() -> None:
+    integration, client = _make_trakt_delivery_mocks()
+    job = SimpleNamespace(
+        user_id="user-1",
+        payload={"media_type": "movie", "movie_ids": {"tmdb": "550"}, "unhide_dropped": True},
+    )
+
+    response_code, _ = _run_trakt_delivery(
+        process_outbox._deliver_trakt_watchlist, client, integration, job
+    )
+
+    assert response_code == 200
+    client.add_to_watchlist.assert_awaited_once()
+    client.remove_hidden_items.assert_not_awaited()
+
+
+def test_trakt_removal_payload_marks_dropped_items() -> None:
+    payload = watchlist_sync._build_trakt_removal_payload(
+        SimpleNamespace(id="wl-1", type="tv", status="dropped"),
+        SimpleNamespace(id="media-1", imdb_id=None, tmdb_id="1399", tvdb_id=None),
+    )
+
+    assert payload is not None
+    assert payload["dropped"] is True
+    assert payload["show_ids"] == {"tmdb": "1399"}
+
+
+def test_trakt_removal_payload_leaves_regular_items_unmarked() -> None:
+    payload = watchlist_sync._build_trakt_removal_payload(
+        SimpleNamespace(id="wl-1", type="tv", status="added"),
+        SimpleNamespace(id="media-1", imdb_id=None, tmdb_id="1399", tvdb_id=None),
+    )
+
+    assert payload is not None
+    assert "dropped" not in payload
 
 
 class TestPublicMetaDbWatchlistOutbox(unittest.TestCase):

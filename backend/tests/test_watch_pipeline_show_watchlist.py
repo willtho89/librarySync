@@ -244,7 +244,7 @@ def test_dropped_show_watch_restores_and_pushes_watchlist_sync() -> None:
 
     assert existing_item.status == "added"
     evaluate.assert_awaited_once_with(db, "user-1", existing_item, media_item)
-    sync.assert_awaited_once_with(db, existing_item, media_item)
+    sync.assert_awaited_once_with(db, existing_item, media_item, unhide_dropped=True)
 
 
 def test_dropped_anime_watch_restores_and_pushes_watchlist_sync() -> None:
@@ -281,4 +281,4 @@ def test_dropped_anime_watch_restores_and_pushes_watchlist_sync() -> None:
 
     assert existing_item.status == "added"
     evaluate.assert_awaited_once_with(db, "user-1", existing_item, media_item)
-    sync.assert_awaited_once_with(db, existing_item, media_item)
+    sync.assert_awaited_once_with(db, existing_item, media_item, unhide_dropped=True)

@@ -542,7 +542,11 @@ async def list_watchlist_items(
         .join(MediaItem, WatchlistItem.media_item_id == MediaItem.id)
         .where(WatchlistItem.user_id == current_user.id)
     )
-    if not status or status == "all":
+    # Dropped items stay hidden unless explicitly requested via the status
+    # filter. The UI's "all" view sends an expanded status list, so this must
+    # not rely on the literal "all" value; the computed show-status filter
+    # would otherwise match dropped rows via their watch progress.
+    if "dropped" not in status_filter_values:
         query = query.where(WatchlistItem.status != "dropped")
 
     if status and status != "all" and status_filter_values:
@@ -854,7 +858,7 @@ async def restore_watchlist_item(
     )
     if media_item.media_type in {"tv", "anime"}:
         await evaluate_show_watchlist_status(db, current_user.id, item, media_item)
-    await enqueue_personal_watchlist_sync(db, item, media_item)
+    await enqueue_personal_watchlist_sync(db, item, media_item, unhide_dropped=True)
     await db.commit()
     return {"id": item.id, "status": "updated"}
 

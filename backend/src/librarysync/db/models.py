@@ -413,7 +413,6 @@ class StremioCustomCatalog(Base):
             "slug",
             name="uq_stremio_custom_catalogs_user_slug",
         ),
-        Index("ix_stremio_custom_catalogs_user_id", "user_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -473,7 +472,6 @@ class StremioExternalCatalog(Base):
             "slug",
             name="uq_stremio_external_catalogs_user_slug",
         ),
-        Index("ix_stremio_external_catalogs_user_id", "user_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

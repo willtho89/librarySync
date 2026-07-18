@@ -374,8 +374,32 @@ class TraktClient:
         self, payload: dict[str, Any], access_token: str
     ) -> tuple[dict[str, Any], int]:
         response = await self._request(
-            "DELETE",
-            "/sync/watchlist",
+            "POST",
+            "/sync/watchlist/remove",
+            access_token=access_token,
+            json_body=payload,
+        )
+        parsed = self._parse_json(response)
+        return parsed if isinstance(parsed, dict) else {}, response.status_code
+
+    async def add_hidden_items(
+        self, section: str, payload: dict[str, Any], access_token: str
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "POST",
+            f"/users/hidden/{section}",
+            access_token=access_token,
+            json_body=payload,
+        )
+        parsed = self._parse_json(response)
+        return parsed if isinstance(parsed, dict) else {}, response.status_code
+
+    async def remove_hidden_items(
+        self, section: str, payload: dict[str, Any], access_token: str
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "POST",
+            f"/users/hidden/{section}/remove",
             access_token=access_token,
             json_body=payload,
         )

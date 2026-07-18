@@ -19,10 +19,12 @@ async def enqueue_personal_watchlist_sync(
     db: AsyncSession,
     watchlist_item: WatchlistItem,
     media_item: MediaItem | None,
+    *,
+    unhide_dropped: bool = False,
 ) -> None:
     if not media_item:
         return
-    await _enqueue_trakt_watchlist(db, watchlist_item, media_item)
+    await _enqueue_trakt_watchlist(db, watchlist_item, media_item, unhide_dropped=unhide_dropped)
     await _enqueue_simkl_watchlist(db, watchlist_item, media_item)
     await _enqueue_publicmetadb_watchlist(db, watchlist_item, media_item)
     await _enqueue_letterboxd_watchlist(db, watchlist_item, media_item)
@@ -120,6 +122,19 @@ def _build_trakt_payload(
     return payload
 
 
+def _build_trakt_removal_payload(
+    watchlist_item: WatchlistItem,
+    media_item: MediaItem,
+) -> dict[str, Any] | None:
+    payload = _build_trakt_payload(watchlist_item, media_item)
+    if payload is not None and watchlist_item.status == "dropped":
+        # Tells the delivery step to also hide the show in Trakt's dropped
+        # section (POST /users/hidden/dropped), not just remove the watchlist
+        # entry.
+        payload["dropped"] = True
+    return payload
+
+
 def _build_simkl_payload(
     watchlist_item: WatchlistItem,
     media_item: MediaItem,
@@ -178,7 +193,17 @@ async def _enqueue_trakt_watchlist(
     db: AsyncSession,
     watchlist_item: WatchlistItem,
     media_item: MediaItem,
+    *,
+    unhide_dropped: bool = False,
 ) -> None:
+    def build_payload(item: WatchlistItem, media: MediaItem) -> dict[str, Any] | None:
+        payload = _build_trakt_payload(item, media)
+        if payload is not None and unhide_dropped:
+            # Tells the delivery step to unhide the show from Trakt's dropped
+            # section (POST /users/hidden/dropped/remove) after re-adding it.
+            payload["unhide_dropped"] = True
+        return payload
+
     await _enqueue_watchlist_job(
         db,
         watchlist_item,
@@ -187,7 +212,7 @@ async def _enqueue_trakt_watchlist(
         source_name="Trakt watchlist",
         job_type="push_watchlist",
         required_fields=has_required_trakt_fields,
-        build_payload=_build_trakt_payload,
+        build_payload=build_payload,
     )
 
 
@@ -204,7 +229,7 @@ async def _enqueue_trakt_watchlist_removal(
         source_name="Trakt watchlist",
         job_type="remove_watchlist",
         required_fields=has_required_trakt_fields,
-        build_payload=_build_trakt_payload,
+        build_payload=_build_trakt_removal_payload,
     )
 
 
