@@ -26,6 +26,7 @@ from librarysync.core.watchlist import (
     clear_watchlist_rewatch_request,
     determine_movie_watchlist_status,
     determine_show_watchlist_status,
+    evaluate_show_watchlist_status,
     log_watchlist_event,
     normalize_media_ids,
     normalize_watchlist_statuses,
@@ -782,6 +783,11 @@ async def drop_watchlist_item(
         )
 
     item, media_item = row
+    if media_item.media_type not in {"tv", "anime"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Drop is only supported for TV/anime watchlist items",
+        )
     if item.status == "dropped":
         return {"id": item.id, "status": "unchanged"}
 
@@ -846,6 +852,8 @@ async def restore_watchlist_item(
         "watchlist_status_changed",
         {"status": "added", "previous_status": "dropped", "reason": "manual"},
     )
+    if media_item.media_type in {"tv", "anime"}:
+        await evaluate_show_watchlist_status(db, current_user.id, item, media_item)
     await enqueue_personal_watchlist_sync(db, item, media_item)
     await db.commit()
     return {"id": item.id, "status": "updated"}

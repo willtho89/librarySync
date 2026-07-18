@@ -226,7 +226,7 @@ def test_drop_watchlist_item_updates_status_and_enqueues_removal(monkeypatch) ->
         status="added",
         rewatch_requested=False,
     )
-    media_item = SimpleNamespace(id="media-1", media_type="movie")
+    media_item = SimpleNamespace(id="media-1", media_type="tv")
     db = SimpleNamespace(
         execute=AsyncMock(return_value=_FakeResult(row=(item, media_item))),
         commit=AsyncMock(),
@@ -247,6 +247,39 @@ def test_drop_watchlist_item_updates_status_and_enqueues_removal(monkeypatch) ->
     clear_mock.assert_awaited_once()
     removal_mock.assert_awaited_once_with(db, item, media_item)
     db.commit.assert_awaited_once()
+
+
+def test_drop_watchlist_item_rejects_movie(monkeypatch) -> None:
+    item = SimpleNamespace(
+        id="wl-1",
+        user_id="user-1",
+        media_item_id="media-1",
+        status="added",
+        rewatch_requested=False,
+    )
+    media_item = SimpleNamespace(id="media-1", media_type="movie")
+    db = SimpleNamespace(
+        execute=AsyncMock(return_value=_FakeResult(row=(item, media_item))),
+        commit=AsyncMock(),
+    )
+    current_user = SimpleNamespace(id="user-1")
+
+    clear_mock = AsyncMock(return_value=False)
+    log_mock = AsyncMock()
+    removal_mock = AsyncMock()
+    monkeypatch.setattr(routes_watchlist, "clear_watchlist_rewatch_request", clear_mock)
+    monkeypatch.setattr(routes_watchlist, "log_watchlist_event", log_mock)
+    monkeypatch.setattr(routes_watchlist, "enqueue_personal_watchlist_removal", removal_mock)
+
+    with pytest.raises(HTTPException, match="Drop is only supported for TV/anime watchlist items") as exc:
+        asyncio.run(routes_watchlist.drop_watchlist_item("wl-1", current_user, db))
+
+    assert exc.value.status_code == 400
+    assert item.status == "added"
+    clear_mock.assert_not_awaited()
+    log_mock.assert_not_awaited()
+    removal_mock.assert_not_awaited()
+    db.commit.assert_not_awaited()
 
 
 def test_restore_watchlist_item_updates_status_and_enqueues_sync(monkeypatch) -> None:
@@ -272,6 +305,43 @@ def test_restore_watchlist_item_updates_status_and_enqueues_sync(monkeypatch) ->
 
     assert response == {"id": "wl-1", "status": "updated"}
     assert item.status == "added"
+    sync_mock.assert_awaited_once_with(db, item, media_item)
+    db.commit.assert_awaited_once()
+
+
+def test_restore_watchlist_item_evaluates_show_before_enqueuing_sync(monkeypatch) -> None:
+    item = SimpleNamespace(
+        id="wl-1",
+        user_id="user-1",
+        media_item_id="media-1",
+        status="dropped",
+    )
+    media_item = SimpleNamespace(id="media-1", media_type="anime", first_air_date=None)
+    db = SimpleNamespace(
+        execute=AsyncMock(return_value=_FakeResult(row=(item, media_item))),
+        commit=AsyncMock(),
+    )
+    current_user = SimpleNamespace(id="user-1")
+
+    log_mock = AsyncMock()
+
+    async def _set_evaluated_status(_db, _user_id, target_item, _media_item):
+        target_item.status = "in_progress"
+
+    evaluate_mock = AsyncMock(side_effect=_set_evaluated_status)
+
+    async def _assert_sync_after_eval(_db, target_item, _media_item):
+        assert target_item.status == "in_progress"
+
+    sync_mock = AsyncMock(side_effect=_assert_sync_after_eval)
+    monkeypatch.setattr(routes_watchlist, "log_watchlist_event", log_mock)
+    monkeypatch.setattr(routes_watchlist, "evaluate_show_watchlist_status", evaluate_mock)
+    monkeypatch.setattr(routes_watchlist, "enqueue_personal_watchlist_sync", sync_mock)
+
+    response = asyncio.run(routes_watchlist.restore_watchlist_item("wl-1", current_user, db))
+
+    assert response == {"id": "wl-1", "status": "updated"}
+    evaluate_mock.assert_awaited_once_with(db, "user-1", item, media_item)
     sync_mock.assert_awaited_once_with(db, item, media_item)
     db.commit.assert_awaited_once()
 
@@ -311,8 +381,10 @@ def test_list_watchlist_items_excludes_dropped_for_status_all() -> None:
 
     assert response["items"] == []
     assert len(db.queries) >= 2
-    query_sql = str(db.queries[1])
+    compiled = db.queries[1].compile()
+    query_sql = str(compiled)
     assert "watchlist_items.status !=" in query_sql
+    assert "dropped" in compiled.params.values()
 
 
 def test_list_watchlist_items_includes_dropped_when_explicitly_filtered() -> None:
