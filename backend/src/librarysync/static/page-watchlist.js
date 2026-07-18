@@ -497,11 +497,12 @@ async function loadWatchlist() {
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "danger-button";
-    deleteButton.textContent = "Remove";
+    const removeActionLabel = item.media_type === "tv" || item.media_type === "anime" ? "Drop" : "Remove";
+    deleteButton.textContent = removeActionLabel;
     deleteButton.setAttribute("role", "menuitem");
     deleteButton.addEventListener("click", async () => {
         closeWatchlistMenus();
-        if (!confirm(`Remove "${item.title}" from watchlist?`)) return;
+        if (!confirm(`${removeActionLabel} "${item.title}" from watchlist?`)) return;
         try {
             await requestJSON(`/api/watchlist/items/${item.id}`, { method: "DELETE" });
             await loadWatchlist();

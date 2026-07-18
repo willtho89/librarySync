@@ -1439,8 +1439,13 @@ async def _deliver_simkl_watchlist_remove(
         client_secret=settings.simkl_client_secret,
     )
     access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
-    watchlist_payload = _build_simkl_watchlist_payload(payload)
-    _, response_code = await client.remove_from_watchlist(watchlist_payload, access_token)
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    if media_type in {"tv", "anime"}:
+        watchlist_payload = _build_simkl_drop_watchlist_payload(payload)
+        _, response_code = await client.add_to_list(watchlist_payload, access_token)
+    else:
+        watchlist_payload = _build_simkl_watchlist_payload(payload)
+        _, response_code = await client.remove_from_watchlist(watchlist_payload, access_token)
     return response_code, None
 
 
@@ -2546,6 +2551,26 @@ def _build_simkl_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]
     return {"shows": [{"ids": show_ids}]}
 
 
+def _build_simkl_drop_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    if media_type not in {"tv", "anime"}:
+        raise ValueError("SIMKL drop watchlist requires tv or anime media type")
+    show_ids = _normalize_simkl_ids(payload.get("show_ids"))
+    if not show_ids:
+        show_ids = _normalize_simkl_ids(
+            {
+                "imdb": payload.get("imdb_id"),
+                "tmdb": payload.get("tmdb_id"),
+                "tvdb": payload.get("tvdb_id"),
+                "simkl": payload.get("simkl_id"),
+            }
+        )
+    if not show_ids:
+        raise ValueError("SIMKL drop watchlist requires show ids")
+    container_key = "anime" if media_type == "anime" else "shows"
+    return {"to": "dropped", container_key: [{"ids": show_ids}]}
+
+
 def _build_trakt_remove_payload(payload: dict[str, object]) -> dict[str, Any]:
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     if media_type == "movie":
@@ -2762,7 +2787,8 @@ def _normalize_simkl_ids(value: object) -> dict[str, object]:
         if key == "imdb":
             ids[key] = str(entry).lower()
         else:
-            ids[key] = entry
+            parsed_int = _coerce_int(entry)
+            ids[key] = parsed_int if parsed_int is not None else entry
     return ids
 
 
