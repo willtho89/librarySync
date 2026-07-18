@@ -480,8 +480,78 @@ async def check_and_update_watchlist(
             reason="watched",
         )
 
-    elif media_item.media_type == "tv":
+    elif media_item.media_type in {"tv", "anime"}:
         await evaluate_show_watchlist_status(db, user_id, item, media_item)
+
+
+async def ensure_show_watchlist_item(
+    db: AsyncSession,
+    user_id: str,
+    media_item: MediaItem | None,
+    *,
+    watched_at: datetime,
+) -> WatchlistItem | None:
+    if not media_item or media_item.media_type not in {"tv", "anime"}:
+        return None
+
+    existing_result = await db.execute(
+        select(WatchlistItem).where(
+            WatchlistItem.user_id == user_id,
+            WatchlistItem.media_item_id == media_item.id,
+        )
+    )
+    existing_item = existing_result.scalars().first()
+    if existing_item:
+        return existing_item
+
+    media_ids = normalize_media_ids(
+        {
+            "imdb_id": media_item.imdb_id,
+            "tmdb_id": media_item.tmdb_id,
+            "tvdb_id": media_item.tvdb_id,
+            "tvmaze_id": media_item.tvmaze_id,
+            "kitsu_id": media_item.kitsu_id,
+            "myanimelist_id": media_item.myanimelist_id,
+            "anilist_id": media_item.anilist_id,
+        }
+    )
+    if media_ids:
+        watchlist_item, _ = await upsert_watchlist_item(
+            db,
+            user_id,
+            media_item.media_type,
+            media_ids,
+            media_item.title,
+            media_item.year,
+            media_item.poster_url,
+            "auto_from_history",
+            now=watched_at,
+            event_raw={},
+        )
+        return watchlist_item
+
+    initial_status = "added"
+    if _is_future_date(media_item.first_air_date, watched_at.date()):
+        initial_status = "not_released"
+
+    watchlist_item = WatchlistItem(
+        user_id=user_id,
+        media_item_id=media_item.id,
+        type=media_item.media_type,
+        status=initial_status,
+        source="auto_from_history",
+    )
+    db.add(watchlist_item)
+    await log_watchlist_event(
+        db,
+        user_id,
+        media_item.id,
+        "watchlist_added",
+        {"source": "auto_from_history"},
+    )
+    await db.flush()
+    await evaluate_show_watchlist_status(db, user_id, watchlist_item, media_item)
+    return watchlist_item
 
 
 async def refresh_watchlist_from_history(
@@ -527,7 +597,7 @@ async def refresh_watchlist_from_history(
             new_status,
             reason="history_update",
         )
-    elif media_item.media_type == "tv":
+    elif media_item.media_type in {"tv", "anime"}:
         await evaluate_show_watchlist_status(db, user_id, item, media_item)
 
 
@@ -860,7 +930,7 @@ async def upsert_watchlist_item(
                     has_watched=has_watched,
                     now_date=now_date,
                 )
-            elif media_type == "tv":
+            elif media_type in {"tv", "anime"}:
                 if _is_future_date(media_item.first_air_date, now_date):
                     initial_status = "not_released"
             existing.status = initial_status
@@ -874,7 +944,7 @@ async def upsert_watchlist_item(
                 "watchlist_added",
                 {"restored": True, "source": source, **(event_raw or {})},
             )
-            if media_type == "tv":
+            if media_type in {"tv", "anime"}:
                 await evaluate_show_watchlist_status(db, user_id, existing, media_item)
             return existing, "restored"
         return existing, "already_exists"
@@ -895,7 +965,7 @@ async def upsert_watchlist_item(
             has_watched=has_watched,
             now_date=now.date(),
         )
-    elif media_type == "tv":
+    elif media_type in {"tv", "anime"}:
         if _is_future_date(media_item.first_air_date, now.date()):
             initial_status = "not_released"
 
@@ -915,7 +985,7 @@ async def upsert_watchlist_item(
         {"source": source, **(event_raw or {})},
     )
     await db.flush()
-    if media_type == "tv":
+    if media_type in {"tv", "anime"}:
         await evaluate_show_watchlist_status(db, user_id, watchlist_item, media_item)
     return watchlist_item, "created"
 

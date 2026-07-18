@@ -50,6 +50,61 @@ def _make_job(watched_id: str = "watched-1", is_rewatch: bool = False):
 
 
 class TestProcessNewItemJobEpisodeMetadata(unittest.TestCase):
+    def test_episode_watch_ensures_parent_show_in_watchlist(self) -> None:
+        db = AsyncMock()
+        media_item = _make_media_item(media_type="tv", tmdb_id="12345")
+        episode_item = _make_episode_item(title=None)
+        watched = _make_watched(episode_item_id="episode-1")
+
+        async def fake_db_get(model, pk):
+            if model.__name__ == "WatchedItem":
+                return watched
+            if model.__name__ == "EpisodeItem":
+                return episode_item
+            if model.__name__ == "MediaItem":
+                return media_item
+            return None
+
+        db.get.side_effect = fake_db_get
+        job = _make_job()
+
+        with (
+            patch(
+                "librarysync.core.watch_pipeline.enrich_watched_metadata",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "librarysync.core.watch_pipeline.refresh_episode_metadata",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "librarysync.core.watch_pipeline.backfill_show_episodes",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "librarysync.core.watch_pipeline.ensure_show_watchlist_item",
+                new_callable=AsyncMock,
+            ) as mock_ensure_show,
+            patch(
+                "librarysync.core.watch_pipeline.check_and_update_watchlist",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "librarysync.core.watch_pipeline._sync_to_integrations",
+                new_callable=AsyncMock,
+            ),
+        ):
+            asyncio.run(process_new_item_job(db, job))
+
+        mock_ensure_show.assert_awaited_once_with(
+            db,
+            watched.user_id,
+            media_item,
+            watched_at=watched.watched_at,
+        )
+
     def test_refresh_episode_metadata_called_for_episode_watch(self) -> None:
         """refresh_episode_metadata must be called directly when the watched item is an episode."""
         db = AsyncMock()
@@ -83,6 +138,10 @@ class TestProcessNewItemJobEpisodeMetadata(unittest.TestCase):
                 "librarysync.core.watch_pipeline.backfill_show_episodes",
                 new_callable=AsyncMock,
                 return_value=False,
+            ),
+            patch(
+                "librarysync.core.watch_pipeline.ensure_show_watchlist_item",
+                new_callable=AsyncMock,
             ),
             patch(
                 "librarysync.core.watch_pipeline.check_and_update_watchlist",
@@ -128,6 +187,10 @@ class TestProcessNewItemJobEpisodeMetadata(unittest.TestCase):
                 "librarysync.core.watch_pipeline.backfill_show_episodes",
                 new_callable=AsyncMock,
                 return_value=False,
+            ),
+            patch(
+                "librarysync.core.watch_pipeline.ensure_show_watchlist_item",
+                new_callable=AsyncMock,
             ),
             patch(
                 "librarysync.core.watch_pipeline.check_and_update_watchlist",
@@ -176,6 +239,10 @@ class TestProcessNewItemJobEpisodeMetadata(unittest.TestCase):
                 "librarysync.core.watch_pipeline.backfill_show_episodes",
                 new_callable=AsyncMock,
                 return_value=False,
+            ),
+            patch(
+                "librarysync.core.watch_pipeline.ensure_show_watchlist_item",
+                new_callable=AsyncMock,
             ),
             patch(
                 "librarysync.core.watch_pipeline.check_and_update_watchlist",

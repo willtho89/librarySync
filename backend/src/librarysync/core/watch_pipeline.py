@@ -22,6 +22,7 @@ from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.watchlist import (
     backfill_show_episodes,
     check_and_update_watchlist,
+    ensure_show_watchlist_item,
     refresh_watchlist_from_history,
 )
 from librarysync.db.models import (
@@ -311,6 +312,12 @@ async def process_new_item_job(db: AsyncSession, job: OutboxJob) -> None:
         await refresh_episode_metadata(db, watched.user_id, media_item, episode_item)
     if media_item and media_item.media_type in {"tv", "anime"}:
         await backfill_show_episodes(db, watched.user_id, media_item)
+        await ensure_show_watchlist_item(
+            db,
+            watched.user_id,
+            media_item,
+            watched_at=watched.watched_at,
+        )
     if media_item:
         await check_and_update_watchlist(
             db,
