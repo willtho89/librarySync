@@ -194,7 +194,7 @@ Handles job types: `push_watched`, `push_rating`, `update_history`, `remove_hist
 - **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history and episode lists that are missing posters or identifiers
 
 #### Import Jobs
-- **`quick_import`**: Runs 7-day import window
+- **`quick_import`**: Runs 7-day import window on the user's configured schedule (30 min to 7 days). Per-user runs are single-flight via a lease stored in the integration config (10-minute expiry, refreshed at each claim); an expired lease lets any worker resume a stuck run from its saved queue index
 - **`import_all`**: Sequences providers per user for full import
 - **`merge_history`**: Post-import deduplication (same-day movie entries) and repoints sync/outbox rows
 - **`merge_all_history`**: Periodic deduplication of all user history in database (API merges on-the-fly until DB is clean)

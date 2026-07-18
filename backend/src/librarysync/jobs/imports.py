@@ -35,8 +35,10 @@ from librarysync.core.import_control import (
     mark_merge_required,
     mark_quick_import_completed,
     mark_quick_import_failed,
+    mark_quick_import_lease,
     mark_quick_import_started,
     parse_quick_import_state,
+    quick_import_lease_blocked,
     should_run_quick_import,
 )
 from librarysync.core.import_history import (
@@ -45,6 +47,7 @@ from librarysync.core.import_history import (
     build_import_history_entry,
 )
 from librarysync.core.import_schedule import parse_datetime
+from librarysync.core.worker_identity import worker_instance_id
 from librarysync.db.models import Integration
 from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.aiostreams_import import AIOStreamsImportStrategy
@@ -150,6 +153,7 @@ async def process_import_all_once(limit: int = 1) -> int:
 
 async def _claim_quick_import_runs(db: AsyncSession, limit: int) -> list[Integration]:
     now = datetime.now(timezone.utc)
+    owner = worker_instance_id()
     candidate_limit = max(limit * 5, limit)
     async with db.begin():
         result = await db.execute(
@@ -167,6 +171,10 @@ async def _claim_quick_import_runs(db: AsyncSession, limit: int) -> list[Integra
                 continue
             if not should_run_quick_import(run.config, now):
                 continue
+            # Single-flight: another live worker owns this run. An expired or
+            # missing lease means the run is free (or stuck) and can be claimed.
+            if quick_import_lease_blocked(run.config, now, owner):
+                continue
             state = parse_quick_import_state(run.config)
             if state.status not in {
                 QUICK_IMPORT_STATUS_PENDING,
@@ -181,10 +189,10 @@ async def _claim_quick_import_runs(db: AsyncSession, limit: int) -> list[Integra
                 state = parse_quick_import_state(run.config)
             if state.status == QUICK_IMPORT_STATUS_PENDING:
                 run.config = mark_quick_import_started(run.config, now)
-                run.updated_at = now
             elif not _has_merge_required(run.config):
                 run.config = mark_merge_required(run.config, now)
-                run.updated_at = now
+            run.config = mark_quick_import_lease(run.config, owner, now)
+            run.updated_at = now
             runs.append(run)
     return runs
 
