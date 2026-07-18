@@ -28,6 +28,12 @@ QUICK_IMPORT_COMPLETED_KEY = "quick_import_completed_at"
 QUICK_IMPORT_ERROR_KEY = "quick_import_error"
 QUICK_IMPORT_INTERVAL_KEY = "quick_import_interval_seconds"
 QUICK_IMPORT_LAST_RUN_KEY = "quick_import_last_run_at"
+QUICK_IMPORT_LEASE_OWNER_KEY = "quick_import_lease_owner"
+QUICK_IMPORT_LEASE_UNTIL_KEY = "quick_import_lease_until"
+
+# How long a worker holds a quick import run without refreshing the lease.
+# An expired lease lets another worker resume a stuck run (self-heal).
+QUICK_IMPORT_LEASE_SECONDS = 600
 
 QUICK_IMPORT_ACTIVE_STATUSES = {
     QUICK_IMPORT_STATUS_PENDING,
@@ -128,8 +134,32 @@ def mark_quick_import_started(config: dict | None, started_at: datetime) -> dict
     return updated
 
 
-def mark_quick_import_completed(config: dict | None, completed_at: datetime) -> dict:
+def quick_import_lease_blocked(config: dict | None, now: datetime, owner: str) -> bool:
+    """Return True when another worker holds a live lease on the run."""
+    config = config or {}
+    lease_until = parse_datetime(config.get(QUICK_IMPORT_LEASE_UNTIL_KEY))
+    if not lease_until or lease_until <= now:
+        return False
+    lease_owner = coerce_str(config.get(QUICK_IMPORT_LEASE_OWNER_KEY))
+    return lease_owner != owner
+
+
+def mark_quick_import_lease(config: dict | None, owner: str, now: datetime) -> dict:
     updated = dict(config or {})
+    updated[QUICK_IMPORT_LEASE_OWNER_KEY] = owner
+    updated[QUICK_IMPORT_LEASE_UNTIL_KEY] = (now + timedelta(seconds=QUICK_IMPORT_LEASE_SECONDS)).isoformat()
+    return updated
+
+
+def clear_quick_import_lease(config: dict | None) -> dict:
+    updated = dict(config or {})
+    updated.pop(QUICK_IMPORT_LEASE_OWNER_KEY, None)
+    updated.pop(QUICK_IMPORT_LEASE_UNTIL_KEY, None)
+    return updated
+
+
+def mark_quick_import_completed(config: dict | None, completed_at: datetime) -> dict:
+    updated = clear_quick_import_lease(config)
     updated[QUICK_IMPORT_STATUS_KEY] = QUICK_IMPORT_STATUS_COMPLETED
     updated[QUICK_IMPORT_COMPLETED_KEY] = completed_at.isoformat()
     updated[QUICK_IMPORT_LAST_RUN_KEY] = completed_at.isoformat()
@@ -139,7 +169,7 @@ def mark_quick_import_completed(config: dict | None, completed_at: datetime) -> 
 
 
 def mark_quick_import_failed(config: dict | None, failed_at: datetime, error: str) -> dict:
-    updated = dict(config or {})
+    updated = clear_quick_import_lease(config)
     updated[QUICK_IMPORT_STATUS_KEY] = QUICK_IMPORT_STATUS_FAILED
     updated[QUICK_IMPORT_COMPLETED_KEY] = failed_at.isoformat()
     updated[QUICK_IMPORT_ERROR_KEY] = error
