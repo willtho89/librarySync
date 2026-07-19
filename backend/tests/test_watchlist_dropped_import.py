@@ -15,7 +15,8 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from librarysync.connectors.services.trakt import TraktClient
+from librarysync.connectors.services.simkl import SimklError
+from librarysync.connectors.services.trakt import TraktClient, TraktError
 from librarysync.db.models import (
     Base,
     MediaItem,
@@ -84,7 +85,7 @@ def test_trakt_dropped_pass_builds_candidates_from_hidden_items() -> None:
     ) as process:
         imported = asyncio.run(
             trakt_import._import_dropped_for_source(
-                None, integration, client, access_token="token", source=source, now=NOW, max_pages=1
+                None, integration, client, access_token="token", source=source, now=NOW
             )
         )
 
@@ -104,8 +105,6 @@ def test_trakt_dropped_pass_builds_candidates_from_hidden_items() -> None:
 
 
 def test_trakt_dropped_pass_tolerates_fetch_failure() -> None:
-    from librarysync.connectors.services.trakt import TraktError
-
     integration = SimpleNamespace(user_id="user-1")
     source = SimpleNamespace(id="src-dropped", external_id="dropped")
     client = SimpleNamespace(
@@ -118,7 +117,7 @@ def test_trakt_dropped_pass_tolerates_fetch_failure() -> None:
     ) as process:
         imported = asyncio.run(
             trakt_import._import_dropped_for_source(
-                None, integration, client, access_token="token", source=source, now=NOW, max_pages=1
+                None, integration, client, access_token="token", source=source, now=NOW
             )
         )
 
@@ -198,6 +197,28 @@ def test_simkl_dropped_pass_ignores_other_lists() -> None:
     # reconcile can un-drop items that left the provider dropped list.
     process.assert_awaited_once()
     assert process.await_args.args[4] == []
+
+
+def test_simkl_dropped_pass_tolerates_fetch_failure() -> None:
+    integration = SimpleNamespace(user_id="user-1")
+    source = SimpleNamespace(id="src-dropped", external_id="dropped")
+    client = SimpleNamespace(
+        fetch_all_items=AsyncMock(side_effect=SimklError("boom", status_code=500)),
+    )
+
+    with patch(
+        "librarysync.jobs.simkl_import.process_dropped_candidates",
+        new=AsyncMock(return_value=0),
+    ) as process:
+        imported = asyncio.run(
+            simkl_import._import_dropped_for_source(
+                None, integration, client, access_token="token", source=source, now=NOW
+            )
+        )
+
+    assert imported == 0
+    # A failed fetch must never reconcile with an empty seen set (mass un-drop).
+    process.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -399,4 +420,69 @@ async def test_watchlist_import_does_not_resurrect_dropped_item() -> None:
             await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))
         ).scalars().one()
         assert item.status == "dropped"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_process_dropped_candidates_clears_rewatch_request() -> None:
+    engine, session_factory = await _make_session()
+    async with session_factory() as db:
+        await _seed_user_and_show(db, status="added")
+        item = (
+            await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))
+        ).scalars().one()
+        item.rewatch_requested = True
+        item.rewatch_requested_at = NOW
+        await db.commit()
+        source = (
+            await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))
+        ).scalars().one()
+
+        marked = await process_dropped_candidates(
+            db, "user-1", "trakt", source, [_dropped_candidate()], now=NOW
+        )
+
+        assert marked == 1
+        assert item.status == "dropped"
+        assert item.rewatch_requested is False
+        assert item.rewatch_requested_at is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dropped_import_never_enqueues_provider_sync() -> None:
+    """Dropped import upserts must never echo items back out to providers."""
+    engine, session_factory = await _make_session()
+    async with session_factory() as db:
+        db.add(User(id="user-1", username="user1", password_hash="x"))
+        db.add(
+            WatchlistSource(
+                id="src-dropped",
+                user_id="user-1",
+                provider="trakt",
+                source_type="personal",
+                external_id="dropped",
+                name="Trakt dropped",
+            )
+        )
+        await db.commit()
+        source = (
+            await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))
+        ).scalars().one()
+
+        with patch(
+            "librarysync.core.watchlist._enqueue_watchlist_sync",
+            new=AsyncMock(),
+        ) as enqueue:
+            # A brand-new show exercises the watchlist-item creation path.
+            marked = await process_dropped_candidates(
+                db, "user-1", "trakt", source, [_dropped_candidate()], now=NOW
+            )
+
+        assert marked == 1
+        item = (
+            await db.execute(select(WatchlistItem).where(WatchlistItem.user_id == "user-1"))
+        ).scalars().one()
+        assert item.status == "dropped"
+        enqueue.assert_not_awaited()
     await engine.dispose()

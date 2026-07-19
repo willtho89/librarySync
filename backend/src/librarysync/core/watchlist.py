@@ -27,7 +27,8 @@ LEGACY_WATCHLIST_STATUS_MAP = {
     "waiting": "watched",
 }
 SHOW_STATUS_VALUES = {"added", "in_progress", "watched", "not_released"}
-WATCHLIST_TERMINAL_STATUSES = {"removed", "dropped"}
+# Ordered tuple (not a set) so compiled-SQL bind order is deterministic for tests.
+WATCHLIST_TERMINAL_STATUSES = ("removed", "dropped")
 
 
 def _is_future_date(value: date | None, now_date: date) -> bool:
@@ -781,6 +782,36 @@ async def apply_watchlist_status_change(
     return True
 
 
+async def mark_watchlist_item_dropped(
+    db: AsyncSession,
+    watchlist_item: WatchlistItem,
+    user_id: str,
+    media_item_id: str,
+    *,
+    reason: str,
+    now: datetime | None = None,
+) -> None:
+    previous_status = watchlist_item.status
+    effective_now = now or datetime.now(timezone.utc)
+    await clear_watchlist_rewatch_request(
+        db,
+        watchlist_item,
+        user_id,
+        media_item_id,
+        reason="dropped",
+        now=effective_now,
+    )
+    watchlist_item.status = "dropped"
+    watchlist_item.updated_at = effective_now
+    await log_watchlist_event(
+        db,
+        user_id,
+        media_item_id,
+        "watchlist_status_changed",
+        {"status": "dropped", "previous_status": previous_status, "reason": reason},
+    )
+
+
 async def set_watchlist_rewatch_request(
     db: AsyncSession,
     watchlist_item: WatchlistItem,
@@ -1133,6 +1164,7 @@ async def upsert_watchlist_item(
             now=now,
             event_raw=event_raw,
             enqueue_sync=False,
+            restore_dropped=restore_dropped,
         )
     if media_type in {"tv", "anime"}:
         await evaluate_show_watchlist_status(db, user_id, watchlist_item, media_item)

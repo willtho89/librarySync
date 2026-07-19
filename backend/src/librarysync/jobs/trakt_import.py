@@ -23,12 +23,14 @@ from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
 from librarysync.core.watchlist_links import TraktListRef, parse_trakt_list_urls
 from librarysync.core.watchlist_sources import (
+    DROPPED_SOURCE_EXTERNAL_ID,
     LEGACY_LIST_SOURCE_TYPE,
     PERSONAL_SOURCE_TYPE,
     URL_SOURCE_TYPE,
+    ensure_dropped_watchlist_source,
     ensure_personal_watchlist_source,
-    ensure_watchlist_source,
     list_watchlist_sources,
+    order_dropped_source_first,
     reconcile_watchlist_source,
 )
 from librarysync.db.models import (
@@ -232,32 +234,22 @@ async def _import_watchlist_for_integration(
         provider="trakt",
         name="Trakt watchlist",
     )
-    await ensure_watchlist_source(
+    await ensure_dropped_watchlist_source(
         db,
-        user_id=integration.user_id,
-        provider="trakt",
-        source_type=PERSONAL_SOURCE_TYPE,
-        external_id="dropped",
+        integration.user_id,
+        "trakt",
         name="Trakt dropped",
     )
     if sources is None:
         sources = await list_watchlist_sources(db, integration.user_id, provider="trakt")
     if not sources:
         return 0
-    # Dropped pass first: reconcile of the personal watchlist source may only
-    # run after dropped items were linked to their own source, otherwise a
-    # show dropped on Trakt would be deleted and re-created on every import.
-    ordered_sources = [
-        source
-        for source in sources
-        if source.source_type == PERSONAL_SOURCE_TYPE and source.external_id == "dropped"
-    ]
-    ordered_sources.extend(source for source in sources if source not in ordered_sources)
+    ordered_sources = order_dropped_source_first(sources)
     candidates: list[WatchlistCandidate] = []
     imported = 0
     max_pages = None if lookback_days < 0 else WATCHLIST_MAX_PAGES
     for source in ordered_sources:
-        if source.source_type == PERSONAL_SOURCE_TYPE and source.external_id == "dropped":
+        if source.source_type == PERSONAL_SOURCE_TYPE and source.external_id == DROPPED_SOURCE_EXTERNAL_ID:
             imported += await _import_dropped_for_source(
                 db,
                 integration,
@@ -265,7 +257,6 @@ async def _import_watchlist_for_integration(
                 access_token,
                 source,
                 now,
-                max_pages,
             )
             continue
         if source.source_type == PERSONAL_SOURCE_TYPE:
@@ -382,15 +373,16 @@ async def _import_dropped_for_source(
     access_token: str,
     source: WatchlistSource,
     now: datetime,
-    max_pages: int | None,
 ) -> int:
     try:
+        # The dropped list has no lookback semantics and reconcile un-drops
+        # shows missing from it, so it is always fetched without a page cap.
         entries = await client.get_hidden_items(
             access_token,
             section="dropped",
             item_type="show",
             per_page=WATCHLIST_PER_PAGE,
-            max_pages=max_pages,
+            max_pages=None,
         )
     except TraktError as exc:
         logger.warning(

@@ -1244,7 +1244,7 @@ async def _deliver_trakt_watchlist_remove(
     watchlist_payload = _build_trakt_watchlist_payload(payload)
     _, response_code = await client.remove_from_watchlist(watchlist_payload, access_token)
     media_type = _coerce_str(payload.get("media_type")) or "movie"
-    if payload.get("dropped") and media_type in {"tv", "anime"}:
+    if payload.get("hide_dropped") and media_type in {"tv", "anime"}:
         # Dropped shows are also hidden in Trakt's dropped section so they no
         # longer show up in the user's progress on trakt.tv.
         hidden_payload = _build_trakt_hidden_dropped_payload(payload)
@@ -1452,7 +1452,9 @@ async def _deliver_simkl_watchlist_remove(
     )
     access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
     media_type = _coerce_str(payload.get("media_type")) or "movie"
-    if media_type in {"tv", "anime"}:
+    if payload.get("hide_dropped") and media_type in {"tv", "anime"}:
+        # Dropped shows are also moved to SIMKL's dropped list so they no
+        # longer show up in the user's watching list on simkl.com.
         watchlist_payload = _build_simkl_drop_watchlist_payload(payload)
         _, response_code = await client.add_to_list(watchlist_payload, access_token)
     else:
@@ -2501,6 +2503,33 @@ def _build_trakt_history_payload(
     raise ValueError("Trakt sync requires show or episode ids")
 
 
+def _resolve_trakt_show_ids(payload: dict[str, object]) -> dict[str, object]:
+    show_ids = _normalize_trakt_ids(payload.get("show_ids"))
+    if not show_ids:
+        show_ids = _normalize_trakt_ids(
+            {
+                "imdb": payload.get("imdb_id"),
+                "tmdb": payload.get("tmdb_id"),
+                "tvdb": payload.get("tvdb_id"),
+            }
+        )
+    return show_ids
+
+
+def _resolve_simkl_show_ids(payload: dict[str, object]) -> dict[str, object]:
+    show_ids = _normalize_simkl_ids(payload.get("show_ids"))
+    if not show_ids:
+        show_ids = _normalize_simkl_ids(
+            {
+                "imdb": payload.get("imdb_id"),
+                "tmdb": payload.get("tmdb_id"),
+                "tvdb": payload.get("tvdb_id"),
+                "simkl": payload.get("simkl_id"),
+            }
+        )
+    return show_ids
+
+
 def _build_trakt_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]:
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     if media_type in {"movie", "anime"}:
@@ -2517,15 +2546,7 @@ def _build_trakt_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]
             raise ValueError("Trakt watchlist sync requires movie ids")
         return {"movies": [{"ids": movie_ids}]}
 
-    show_ids = _normalize_trakt_ids(payload.get("show_ids"))
-    if not show_ids:
-        show_ids = _normalize_trakt_ids(
-            {
-                "imdb": payload.get("imdb_id"),
-                "tmdb": payload.get("tmdb_id"),
-                "tvdb": payload.get("tvdb_id"),
-            }
-        )
+    show_ids = _resolve_trakt_show_ids(payload)
     if not show_ids:
         raise ValueError("Trakt watchlist sync requires show ids")
     return {"shows": [{"ids": show_ids}]}
@@ -2538,13 +2559,7 @@ def _build_trakt_hidden_dropped_payload(payload: dict[str, object]) -> dict[str,
     if not show_ids:
         show_ids = _normalize_trakt_ids(payload.get("movie_ids"))
     if not show_ids:
-        show_ids = _normalize_trakt_ids(
-            {
-                "imdb": payload.get("imdb_id"),
-                "tmdb": payload.get("tmdb_id"),
-                "tvdb": payload.get("tvdb_id"),
-            }
-        )
+        show_ids = _resolve_trakt_show_ids(payload)
     if not show_ids:
         raise ValueError("Trakt hidden dropped sync requires show ids")
     return {"shows": [{"ids": show_ids}]}
@@ -2567,16 +2582,7 @@ def _build_simkl_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]
             raise ValueError("SIMKL watchlist sync requires movie ids")
         return {"movies": [{"ids": movie_ids}]}
 
-    show_ids = _normalize_simkl_ids(payload.get("show_ids"))
-    if not show_ids:
-        show_ids = _normalize_simkl_ids(
-            {
-                "imdb": payload.get("imdb_id"),
-                "tmdb": payload.get("tmdb_id"),
-                "tvdb": payload.get("tvdb_id"),
-                "simkl": payload.get("simkl_id"),
-            }
-        )
+    show_ids = _resolve_simkl_show_ids(payload)
     if not show_ids:
         raise ValueError("SIMKL watchlist sync requires show ids")
     # SIMKL has no "anime" container for POST payloads; anime are shows too.
@@ -2587,19 +2593,10 @@ def _build_simkl_drop_watchlist_payload(payload: dict[str, object]) -> dict[str,
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     if media_type not in {"tv", "anime"}:
         raise ValueError("SIMKL drop watchlist requires tv or anime media type")
-    show_ids = _normalize_simkl_ids(payload.get("show_ids"))
-    if not show_ids:
-        show_ids = _normalize_simkl_ids(
-            {
-                "imdb": payload.get("imdb_id"),
-                "tmdb": payload.get("tmdb_id"),
-                "tvdb": payload.get("tvdb_id"),
-                "simkl": payload.get("simkl_id"),
-            }
-        )
+    show_ids = _resolve_simkl_show_ids(payload)
     if not show_ids:
         raise ValueError("SIMKL drop watchlist requires show ids")
-    return {"to": "dropped", "shows": [{"ids": show_ids}]}
+    return {"shows": [{"ids": show_ids, "to": "dropped"}]}
 
 
 def _build_trakt_remove_payload(payload: dict[str, object]) -> dict[str, Any]:

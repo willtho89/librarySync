@@ -7,8 +7,7 @@ from typing import Any, Iterable, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.core.watchlist import (
-    clear_watchlist_rewatch_request,
-    log_watchlist_event,
+    mark_watchlist_item_dropped,
     upsert_watchlist_item,
 )
 from librarysync.core.watchlist_sources import (
@@ -165,27 +164,13 @@ async def process_dropped_candidates(
         seen_item_ids.append(item.id)
         if item.status == "dropped":
             continue
-        previous_status = item.status
-        await clear_watchlist_rewatch_request(
+        await mark_watchlist_item_dropped(
             db,
             item,
             user_id,
             item.media_item_id,
-            reason="dropped",
+            reason=f"{provider}_import",
             now=now,
-        )
-        item.status = "dropped"
-        item.updated_at = now
-        await log_watchlist_event(
-            db,
-            user_id,
-            item.media_item_id,
-            "watchlist_status_changed",
-            {
-                "status": "dropped",
-                "previous_status": previous_status,
-                "reason": f"{provider}_import",
-            },
         )
         marked += 1
     if reconcile:

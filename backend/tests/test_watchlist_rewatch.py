@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -7,6 +7,15 @@ import pytest
 from fastapi import HTTPException
 from librarysync.api import routes_watchlist
 from librarysync.core import watchlist
+from librarysync.db.models import (
+    Base,
+    EpisodeItem,
+    MediaItem,
+    User,
+    WatchedItem,
+    WatchlistItem,
+)
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 async def _noop(*args, **kwargs):
@@ -155,6 +164,29 @@ def test_enable_watchlist_rewatch_rejects_unwatched_movie() -> None:
         asyncio.run(routes_watchlist.enable_watchlist_rewatch("wl-1", current_user, db))
 
 
+def test_enable_watchlist_rewatch_rejects_dropped_item() -> None:
+    item = SimpleNamespace(
+        id="wl-1",
+        user_id="user-1",
+        media_item_id="media-1",
+        status="dropped",
+    )
+    media_item = SimpleNamespace(id="media-1", media_type="movie")
+    db = SimpleNamespace(
+        execute=AsyncMock(return_value=_FakeResult(row=(item, media_item))),
+        commit=AsyncMock(),
+    )
+    current_user = SimpleNamespace(id="user-1")
+
+    with pytest.raises(
+        HTTPException, match="Removed or dropped watchlist items cannot be queued for rewatch"
+    ) as exc:
+        asyncio.run(routes_watchlist.enable_watchlist_rewatch("wl-1", current_user, db))
+
+    assert exc.value.status_code == 400
+    db.commit.assert_not_awaited()
+
+
 def test_set_watchlist_rewatch_request_skips_dropped_item(monkeypatch) -> None:
     monkeypatch.setattr(watchlist, "log_watchlist_event", _noop)
 
@@ -236,8 +268,8 @@ def test_drop_watchlist_item_updates_status_and_enqueues_removal(monkeypatch) ->
     clear_mock = AsyncMock(return_value=False)
     log_mock = AsyncMock()
     removal_mock = AsyncMock()
-    monkeypatch.setattr(routes_watchlist, "clear_watchlist_rewatch_request", clear_mock)
-    monkeypatch.setattr(routes_watchlist, "log_watchlist_event", log_mock)
+    monkeypatch.setattr(watchlist, "clear_watchlist_rewatch_request", clear_mock)
+    monkeypatch.setattr(watchlist, "log_watchlist_event", log_mock)
     monkeypatch.setattr(routes_watchlist, "enqueue_personal_watchlist_removal", removal_mock)
 
     response = asyncio.run(routes_watchlist.drop_watchlist_item("wl-1", current_user, db))
@@ -267,8 +299,8 @@ def test_drop_watchlist_item_rejects_movie(monkeypatch) -> None:
     clear_mock = AsyncMock(return_value=False)
     log_mock = AsyncMock()
     removal_mock = AsyncMock()
-    monkeypatch.setattr(routes_watchlist, "clear_watchlist_rewatch_request", clear_mock)
-    monkeypatch.setattr(routes_watchlist, "log_watchlist_event", log_mock)
+    monkeypatch.setattr(watchlist, "clear_watchlist_rewatch_request", clear_mock)
+    monkeypatch.setattr(watchlist, "log_watchlist_event", log_mock)
     monkeypatch.setattr(routes_watchlist, "enqueue_personal_watchlist_removal", removal_mock)
 
     with pytest.raises(HTTPException, match="Drop is only supported for TV/anime watchlist items") as exc:
@@ -344,6 +376,102 @@ def test_restore_watchlist_item_evaluates_show_before_enqueuing_sync(monkeypatch
     evaluate_mock.assert_awaited_once_with(db, "user-1", item, media_item)
     sync_mock.assert_awaited_once_with(db, item, media_item, unhide_dropped=True)
     db.commit.assert_awaited_once()
+
+
+def _make_add_watchlist_payload() -> SimpleNamespace:
+    return SimpleNamespace(
+        imdb_id=None,
+        tmdb_id="1399",
+        tvdb_id=None,
+        tvmaze_id=None,
+        kitsu_id=None,
+        myanimelist_id=None,
+        anilist_id=None,
+        media_type="tv",
+        title="Test Show",
+        year=2024,
+        poster_url=None,
+    )
+
+
+def test_add_watchlist_item_unhides_dropped_item_on_sync(monkeypatch) -> None:
+    existing_media_item = SimpleNamespace(id="media-1")
+    dropped_item = SimpleNamespace(id="wl-old", status="dropped")
+    watchlist_item = SimpleNamespace(id="wl-1", media_item_id="media-1")
+    media_item = SimpleNamespace(id="media-1", media_type="tv")
+    db = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                _FakeResult(scalar=dropped_item),
+                _FakeResult(scalar=media_item),
+            ]
+        ),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    current_user = SimpleNamespace(id="user-1")
+
+    sync_mock = AsyncMock()
+    monkeypatch.setattr(
+        routes_watchlist, "find_media_item_by_ids", AsyncMock(return_value=existing_media_item)
+    )
+    monkeypatch.setattr(
+        routes_watchlist,
+        "upsert_watchlist_item",
+        AsyncMock(return_value=(watchlist_item, "created")),
+    )
+    monkeypatch.setattr(
+        routes_watchlist,
+        "ensure_manual_watchlist_source",
+        AsyncMock(return_value=SimpleNamespace(id="src-1")),
+    )
+    monkeypatch.setattr(routes_watchlist, "upsert_watchlist_source_item", AsyncMock())
+    monkeypatch.setattr(routes_watchlist, "enqueue_personal_watchlist_sync", sync_mock)
+
+    response = asyncio.run(routes_watchlist.add_watchlist_item(_make_add_watchlist_payload(), current_user, db))
+
+    assert response == {"id": "wl-1", "status": "created"}
+    sync_mock.assert_awaited_once_with(db, watchlist_item, media_item, unhide_dropped=True)
+
+
+def test_add_watchlist_item_skips_unhide_for_non_dropped_item(monkeypatch) -> None:
+    existing_media_item = SimpleNamespace(id="media-1")
+    watchlist_item = SimpleNamespace(id="wl-1", media_item_id="media-1")
+    media_item = SimpleNamespace(id="media-1", media_type="tv")
+    db = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                # No dropped row for this user/media item.
+                _FakeResult(scalar=None),
+                _FakeResult(scalar=media_item),
+            ]
+        ),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    current_user = SimpleNamespace(id="user-1")
+
+    sync_mock = AsyncMock()
+    monkeypatch.setattr(
+        routes_watchlist, "find_media_item_by_ids", AsyncMock(return_value=existing_media_item)
+    )
+    monkeypatch.setattr(
+        routes_watchlist,
+        "upsert_watchlist_item",
+        AsyncMock(return_value=(watchlist_item, "created")),
+    )
+    monkeypatch.setattr(
+        routes_watchlist,
+        "ensure_manual_watchlist_source",
+        AsyncMock(return_value=SimpleNamespace(id="src-1")),
+    )
+    monkeypatch.setattr(routes_watchlist, "upsert_watchlist_source_item", AsyncMock())
+    monkeypatch.setattr(routes_watchlist, "enqueue_personal_watchlist_sync", sync_mock)
+
+    response = asyncio.run(routes_watchlist.add_watchlist_item(_make_add_watchlist_payload(), current_user, db))
+
+    assert response == {"id": "wl-1", "status": "created"}
+    sync_mock.assert_awaited_once_with(db, watchlist_item, media_item, unhide_dropped=False)
 
 
 def test_list_watchlist_items_excludes_dropped_for_status_all() -> None:
@@ -474,11 +602,6 @@ def test_list_watchlist_items_excludes_dropped_for_expanded_all_statuses() -> No
 async def test_list_watchlist_items_hides_dropped_show_with_watch_progress() -> None:
     """End-to-end: a dropped show must not leak into the default watchlist
     view through the computed progress status filter."""
-    from datetime import date
-
-    from librarysync.db.models import Base, EpisodeItem, MediaItem, User, WatchedItem, WatchlistItem
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

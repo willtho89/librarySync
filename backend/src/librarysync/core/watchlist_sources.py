@@ -15,6 +15,7 @@ MANUAL_SOURCE_EXTERNAL_ID = "manual"
 PERSONAL_SOURCE_TYPE = "personal"
 URL_SOURCE_TYPE = "url"
 LEGACY_LIST_SOURCE_TYPE = "list"
+DROPPED_SOURCE_EXTERNAL_ID = "dropped"
 
 
 async def ensure_watchlist_source(
@@ -89,6 +90,39 @@ async def ensure_personal_watchlist_source(
         name=name,
         url=url,
     )
+
+
+async def ensure_dropped_watchlist_source(
+    db: AsyncSession,
+    user_id: str,
+    provider: str,
+    *,
+    name: str,
+) -> WatchlistSource:
+    return await ensure_watchlist_source(
+        db,
+        user_id=user_id,
+        provider=provider,
+        source_type=PERSONAL_SOURCE_TYPE,
+        external_id=DROPPED_SOURCE_EXTERNAL_ID,
+        name=name,
+    )
+
+
+def order_dropped_source_first(sources: list[WatchlistSource]) -> list[WatchlistSource]:
+    """Order the dropped source before all other sources.
+
+    Reconcile of the personal watchlist source may only run after dropped
+    items were linked to their own source, otherwise a show dropped on the
+    provider would be deleted and re-created on every import.
+    """
+    ordered = [
+        source
+        for source in sources
+        if source.source_type == PERSONAL_SOURCE_TYPE and source.external_id == DROPPED_SOURCE_EXTERNAL_ID
+    ]
+    ordered.extend(source for source in sources if source not in ordered)
+    return ordered
 
 
 async def list_watchlist_sources(

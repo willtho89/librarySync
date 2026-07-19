@@ -27,7 +27,9 @@ from librarysync.core.watchlist import (
     determine_movie_watchlist_status,
     determine_show_watchlist_status,
     evaluate_show_watchlist_status,
+    find_media_item_by_ids,
     log_watchlist_event,
+    mark_watchlist_item_dropped,
     normalize_media_ids,
     normalize_watchlist_statuses,
     set_watchlist_rewatch_request,
@@ -176,6 +178,20 @@ async def add_watchlist_item(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Provide at least one external ID",
         )
+    # Remember whether this is a dropped item being re-added so the provider
+    # sync below un-hides it from the provider's dropped section; otherwise the
+    # next dropped import would flip it straight back to dropped.
+    was_dropped = False
+    existing_media_item = await find_media_item_by_ids(db, payload.media_type, media_ids)
+    if existing_media_item:
+        existing_result = await db.execute(
+            select(WatchlistItem).where(
+                WatchlistItem.user_id == current_user.id,
+                WatchlistItem.media_item_id == existing_media_item.id,
+                WatchlistItem.status == "dropped",
+            )
+        )
+        was_dropped = existing_result.scalars().first() is not None
     watchlist_item, status_value = await upsert_watchlist_item(
         db,
         current_user.id,
@@ -214,7 +230,7 @@ async def add_watchlist_item(
             select(MediaItem).where(MediaItem.id == watchlist_item.media_item_id)
         )
         media_item = media_result.scalars().first()
-        await enqueue_personal_watchlist_sync(db, watchlist_item, media_item)
+        await enqueue_personal_watchlist_sync(db, watchlist_item, media_item, unhide_dropped=was_dropped)
         await db.commit()
     return {"id": watchlist_item.id, "status": status_value}
 
@@ -795,24 +811,12 @@ async def drop_watchlist_item(
     if item.status == "dropped":
         return {"id": item.id, "status": "unchanged"}
 
-    previous_status = item.status
-    effective_now = datetime.now(timezone.utc)
-    await clear_watchlist_rewatch_request(
+    await mark_watchlist_item_dropped(
         db,
         item,
         current_user.id,
         item.media_item_id,
-        reason="dropped",
-        now=effective_now,
-    )
-    item.status = "dropped"
-    item.updated_at = effective_now
-    await log_watchlist_event(
-        db,
-        current_user.id,
-        item.media_item_id,
-        "watchlist_status_changed",
-        {"status": "dropped", "previous_status": previous_status, "reason": "manual"},
+        reason="manual",
     )
     await enqueue_personal_watchlist_removal(db, item, media_item)
     await db.commit()

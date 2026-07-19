@@ -527,7 +527,9 @@ async function loadWatchlist() {
             }
         });
         menuPanel.appendChild(restoreButton);
-    } else if (item.media_type === "tv" || item.media_type === "anime") {
+    }
+
+    if (item.status !== "dropped" && (item.media_type === "tv" || item.media_type === "anime")) {
         // TV / Anime: Drop sends POST (marks as dropped, keeps the item)
         const dropButton = document.createElement("button");
         dropButton.type = "button";
@@ -546,7 +548,7 @@ async function loadWatchlist() {
         });
         menuPanel.appendChild(dropButton);
     } else {
-        // Movies: Remove deletes the item entirely
+        // Movies and dropped items: Remove deletes the item entirely
         const removeButton = document.createElement("button");
         removeButton.type = "button";
         removeButton.className = "danger-button";
@@ -568,9 +570,7 @@ async function loadWatchlist() {
     if (item.rewatch_requested) {
       badgeGroup.appendChild(rewatchBadge);
     }
-    if (item.status === "dropped") {
-      badgeGroup.appendChild(pill);
-    } else if (card.classList.contains("is-watched")) {
+    if (card.classList.contains("is-watched")) {
       badgeGroup.appendChild(pill);
     }
     if (badgeGroup.childElementCount > 0) {

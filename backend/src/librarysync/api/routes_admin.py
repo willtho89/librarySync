@@ -20,7 +20,7 @@ from librarysync.core.watch_pipeline import (
     build_stremio_payload,
     build_trakt_payload,
 )
-from librarysync.core.watchlist import normalize_media_ids
+from librarysync.core.watchlist import WATCHLIST_TERMINAL_STATUSES, normalize_media_ids
 from librarysync.core.watchlist_sync import enqueue_personal_watchlist_sync
 from librarysync.db.models import (
     EpisodeItem,
@@ -529,7 +529,7 @@ async def _enqueue_personal_watchlist_resync(
     result = await db.execute(
         select(WatchlistItem).where(
             WatchlistItem.media_item_id == media_item.id,
-            WatchlistItem.status.notin_(["removed", "dropped"]),
+            WatchlistItem.status.notin_(WATCHLIST_TERMINAL_STATUSES),
         )
     )
     for watchlist_item in result.scalars().all():

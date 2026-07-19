@@ -131,7 +131,7 @@ def _build_trakt_removal_payload(
         # Tells the delivery step to also hide the show in Trakt's dropped
         # section (POST /users/hidden/dropped), not just remove the watchlist
         # entry.
-        payload["dropped"] = True
+        payload["hide_dropped"] = True
     return payload
 
 
@@ -154,6 +154,19 @@ def _build_simkl_payload(
         payload["show_ids"] = ids
     else:
         return None
+    return payload
+
+
+def _build_simkl_removal_payload(
+    watchlist_item: WatchlistItem,
+    media_item: MediaItem,
+) -> dict[str, Any] | None:
+    payload = _build_simkl_payload(watchlist_item, media_item)
+    if payload is not None and watchlist_item.status == "dropped":
+        # Tells the delivery step to also move the show to SIMKL's dropped
+        # list (POST /sync/add-to-list with to=dropped), not just remove the
+        # watchlist entry.
+        payload["hide_dropped"] = True
     return payload
 
 
@@ -263,7 +276,7 @@ async def _enqueue_simkl_watchlist_removal(
         source_name="SIMKL watchlist",
         job_type="remove_watchlist",
         required_fields=has_required_simkl_fields,
-        build_payload=_build_simkl_payload,
+        build_payload=_build_simkl_removal_payload,
     )
 
 
