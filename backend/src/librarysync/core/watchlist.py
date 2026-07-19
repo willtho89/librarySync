@@ -930,7 +930,14 @@ async def _resolve_existing_watchlist_item(
     now: datetime,
     event_raw: dict[str, Any] | None,
     enqueue_sync: bool = False,
+    restore_dropped: bool = True,
 ) -> tuple[WatchlistItem, str]:
+    if existing.status == "dropped" and not restore_dropped:
+        # Provider imports must not resurrect dropped items; un-dropping is
+        # driven by the provider's dropped list (reconcile) or a manual
+        # restore, otherwise an item present in both the provider watchlist
+        # and its dropped section would flip-flop on every import.
+        return existing, "already_exists"
     if existing.status in WATCHLIST_TERMINAL_STATUSES:
         was_dropped = existing.status == "dropped"
         initial_status = "added"
@@ -986,6 +993,7 @@ async def upsert_watchlist_item(
     now: datetime | None = None,
     event_raw: dict[str, Any] | None = None,
     enqueue_sync: bool = False,
+    restore_dropped: bool = True,
 ) -> tuple[WatchlistItem | None, str]:
     """
     Create, restore, or return a watchlist item.
@@ -994,6 +1002,11 @@ async def upsert_watchlist_item(
     to connected providers via the watchlist outbox. Callers that enqueue the
     push themselves (manual API add) or that must not echo items back out
     (watchlist imports) leave this False.
+
+    When restore_dropped is False, an existing dropped item is returned
+    untouched instead of being resurrected; provider imports use this so
+    dropped state stays sticky and is only lifted by the dropped-list
+    reconcile or a manual restore.
     """
     normalized_ids = normalize_media_ids(ids)
     if not normalized_ids:
@@ -1056,6 +1069,7 @@ async def upsert_watchlist_item(
             now=now,
             event_raw=event_raw,
             enqueue_sync=enqueue_sync,
+            restore_dropped=restore_dropped,
         )
 
     initial_status = "added"
