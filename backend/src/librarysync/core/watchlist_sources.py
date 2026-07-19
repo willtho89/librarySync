@@ -6,8 +6,8 @@ from typing import Iterable
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.core.watchlist import log_watchlist_event
-from librarysync.db.models import WatchlistItem, WatchlistSource, WatchlistSourceItem
+from librarysync.core.watchlist import evaluate_show_watchlist_status, log_watchlist_event
+from librarysync.db.models import MediaItem, WatchlistItem, WatchlistSource, WatchlistSourceItem
 
 MANUAL_SOURCE_PROVIDER = "manual"
 MANUAL_SOURCE_TYPE = "manual"
@@ -15,6 +15,7 @@ MANUAL_SOURCE_EXTERNAL_ID = "manual"
 PERSONAL_SOURCE_TYPE = "personal"
 URL_SOURCE_TYPE = "url"
 LEGACY_LIST_SOURCE_TYPE = "list"
+DROPPED_SOURCE_EXTERNAL_ID = "dropped"
 
 
 async def ensure_watchlist_source(
@@ -89,6 +90,39 @@ async def ensure_personal_watchlist_source(
         name=name,
         url=url,
     )
+
+
+async def ensure_dropped_watchlist_source(
+    db: AsyncSession,
+    user_id: str,
+    provider: str,
+    *,
+    name: str,
+) -> WatchlistSource:
+    return await ensure_watchlist_source(
+        db,
+        user_id=user_id,
+        provider=provider,
+        source_type=PERSONAL_SOURCE_TYPE,
+        external_id=DROPPED_SOURCE_EXTERNAL_ID,
+        name=name,
+    )
+
+
+def order_dropped_source_first(sources: list[WatchlistSource]) -> list[WatchlistSource]:
+    """Order the dropped source before all other sources.
+
+    Reconcile of the personal watchlist source may only run after dropped
+    items were linked to their own source, otherwise a show dropped on the
+    provider would be deleted and re-created on every import.
+    """
+    ordered = [
+        source
+        for source in sources
+        if source.source_type == PERSONAL_SOURCE_TYPE and source.external_id == DROPPED_SOURCE_EXTERNAL_ID
+    ]
+    ordered.extend(source for source in sources if source not in ordered)
+    return ordered
 
 
 async def list_watchlist_sources(
@@ -266,3 +300,94 @@ async def reconcile_watchlist_source(
     db.add(source)
     await db.commit()
     return removed_count
+
+
+async def reconcile_dropped_source(
+    db: AsyncSession,
+    source: WatchlistSource,
+    *,
+    now: datetime,
+    seen_item_ids: Iterable[str],
+) -> int:
+    """Reconcile a provider "dropped" source after a fetch.
+
+    Items no longer in the provider's dropped list lose the source link;
+    surviving items (manual or linked elsewhere) are un-dropped, orphaned
+    items are deleted — mirroring reconcile_watchlist_source, except that
+    survivors flip from "dropped" back to an evaluated status instead of
+    keeping a stale terminal state.
+    """
+    seen_set = {str(item_id) for item_id in seen_item_ids}
+    if seen_set:
+        stmt = select(WatchlistSourceItem).where(
+            WatchlistSourceItem.source_id == source.id,
+            WatchlistSourceItem.watchlist_item_id.notin_(seen_set),
+        )
+    else:
+        stmt = select(WatchlistSourceItem).where(WatchlistSourceItem.source_id == source.id)
+    result = await db.execute(stmt)
+    stale = result.scalars().all()
+    if not stale:
+        source.last_synced_at = now
+        db.add(source)
+        await db.commit()
+        return 0
+    restored_count = 0
+    watchlist_item_ids = {item.watchlist_item_id for item in stale}
+    await db.execute(
+        delete(WatchlistSourceItem).where(
+            WatchlistSourceItem.id.in_([item.id for item in stale])
+        )
+    )
+    for watchlist_item_id in watchlist_item_ids:
+        item_result = await db.execute(
+            select(WatchlistItem).where(WatchlistItem.id == watchlist_item_id)
+        )
+        watchlist_item = item_result.scalars().first()
+        if not watchlist_item:
+            continue
+        remaining = await db.execute(
+            select(WatchlistSourceItem.id).where(
+                WatchlistSourceItem.watchlist_item_id == watchlist_item_id
+            )
+        )
+        has_other_sources = remaining.scalars().first() is not None
+        if not has_other_sources and watchlist_item.source != "manual":
+            await log_watchlist_event(
+                db,
+                watchlist_item.user_id,
+                watchlist_item.media_item_id,
+                "watchlist_removed",
+                {"reason": "source_removed", "source_id": source.id},
+            )
+            await db.delete(watchlist_item)
+            continue
+        if watchlist_item.status != "dropped":
+            continue
+        watchlist_item.status = "added"
+        watchlist_item.updated_at = now
+        await log_watchlist_event(
+            db,
+            watchlist_item.user_id,
+            watchlist_item.media_item_id,
+            "watchlist_status_changed",
+            {
+                "status": "added",
+                "previous_status": "dropped",
+                "reason": f"{source.provider}_import",
+            },
+        )
+        if watchlist_item.type in {"tv", "anime"}:
+            media_result = await db.execute(
+                select(MediaItem).where(MediaItem.id == watchlist_item.media_item_id)
+            )
+            media_item = media_result.scalars().first()
+            if media_item:
+                await evaluate_show_watchlist_status(
+                    db, watchlist_item.user_id, watchlist_item, media_item
+                )
+        restored_count += 1
+    source.last_synced_at = now
+    db.add(source)
+    await db.commit()
+    return restored_count

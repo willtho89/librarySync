@@ -214,7 +214,7 @@ class SimklClient:
         self, payload: dict[str, Any], access_token: str
     ) -> tuple[dict[str, Any], int]:
         response = await self._request(
-            "POST", "/sync/watchlist", access_token=access_token, json_body=payload
+            "POST", "/sync/add-to-list", access_token=access_token, json_body=payload
         )
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
@@ -223,7 +223,16 @@ class SimklClient:
         self, payload: dict[str, Any], access_token: str
     ) -> tuple[dict[str, Any], int]:
         response = await self._request(
-            "POST", "/sync/watchlist/remove", access_token=access_token, json_body=payload
+            "POST", "/sync/history/remove", access_token=access_token, json_body=payload
+        )
+        parsed = self._parse_json(response)
+        return parsed if isinstance(parsed, dict) else {}, response.status_code
+
+    async def add_to_list(
+        self, payload: dict[str, Any], access_token: str
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "POST", "/sync/add-to-list", access_token=access_token, json_body=payload
         )
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code

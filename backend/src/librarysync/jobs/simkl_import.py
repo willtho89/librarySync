@@ -24,9 +24,12 @@ from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
 from librarysync.core.watchlist_sources import (
+    DROPPED_SOURCE_EXTERNAL_ID,
     PERSONAL_SOURCE_TYPE,
+    ensure_dropped_watchlist_source,
     ensure_personal_watchlist_source,
     list_watchlist_sources,
+    order_dropped_source_first,
     reconcile_watchlist_source,
 )
 from librarysync.db.models import (
@@ -47,6 +50,7 @@ from librarysync.jobs.import_pipeline import (
 from librarysync.jobs.import_utils import chunked
 from librarysync.jobs.watchlist_pipeline import (
     WatchlistCandidate,
+    process_dropped_candidates,
     process_watchlist_candidates,
 )
 
@@ -65,6 +69,7 @@ WATCHLIST_STATUSES = {
     "planned",
     "watchlist",
 }
+DROPPED_STATUSES = {"dropped"}
 
 
 @dataclass(frozen=True)
@@ -482,6 +487,38 @@ async def _import_shows_payload(
     return imported
 
 
+async def _fetch_all_items_cached(
+    client: SimklClient,
+    access_token: str,
+    category: str,
+    payloads: dict[str, dict[str, Any] | None],
+    *,
+    user_id: str,
+) -> dict[str, Any] | None:
+    """Fetch /sync/all-items once per category per import run.
+
+    The dropped pass and the watchlist pass share the same payload; a failed
+    fetch is cached as None so both passes observe the same failure.
+    """
+    if category in payloads:
+        return payloads[category]
+    try:
+        payloads[category] = await client.fetch_all_items(
+            access_token,
+            category=category,
+            extended="full" if category in {"shows", "anime"} else None,
+        )
+    except SimklError as exc:
+        logger.warning(
+            "SIMKL all-items fetch failed for user %s (%s): %s",
+            user_id,
+            category,
+            exc,
+        )
+        payloads[category] = None
+    return payloads[category]
+
+
 async def _import_watchlist_for_integration(
     db: AsyncSession,
     integration: Integration,
@@ -496,30 +533,46 @@ async def _import_watchlist_for_integration(
         provider="simkl",
         name="SIMKL watchlist",
     )
+    await ensure_dropped_watchlist_source(
+        db,
+        integration.user_id,
+        "simkl",
+        name="SIMKL dropped",
+    )
     if sources is None:
         sources = await list_watchlist_sources(db, integration.user_id, provider="simkl")
     if not sources:
         return 0
+    ordered_sources = order_dropped_source_first(sources)
     imported = 0
-    for source in sources:
+    # /sync/all-items is fetched once per category and shared between the
+    # dropped pass and the watchlist pass below.
+    payloads: dict[str, dict[str, Any] | None] = {}
+    for source in ordered_sources:
         if source.source_type != PERSONAL_SOURCE_TYPE:
+            continue
+        if source.external_id == DROPPED_SOURCE_EXTERNAL_ID:
+            imported += await _import_dropped_for_source(
+                db,
+                integration,
+                client,
+                access_token,
+                source,
+                now,
+                payloads=payloads,
+            )
             continue
         candidates: list[WatchlistCandidate] = []
         total_entries = 0
         for category in ("movies", "shows", "anime"):
-            try:
-                payload = await client.fetch_all_items(
-                    access_token,
-                    category=category,
-                    extended="full" if category in {"shows", "anime"} else None,
-                )
-            except SimklError as exc:
-                logger.warning(
-                    "SIMKL watchlist fetch failed for user %s (%s): %s",
-                    integration.user_id,
-                    category,
-                    exc,
-                )
+            payload = await _fetch_all_items_cached(
+                client,
+                access_token,
+                category,
+                payloads,
+                user_id=integration.user_id,
+            )
+            if payload is None:
                 continue
             entries = _extract_all_items_entries(payload, category, WATCHLIST_STATUSES)
             total_entries += len(entries)
@@ -548,6 +601,61 @@ async def _import_watchlist_for_integration(
                 seen_item_ids=[],
             )
     return imported
+
+
+async def _import_dropped_for_source(
+    db: AsyncSession,
+    integration: Integration,
+    client: SimklClient,
+    access_token: str,
+    source: WatchlistSource,
+    now: datetime,
+    *,
+    payloads: dict[str, dict[str, Any] | None] | None = None,
+) -> int:
+    # Dropped movies are not ingested: the dropped status only exists for
+    # tv/anime in librarySync.
+    if payloads is None:
+        payloads = {}
+    candidates: list[WatchlistCandidate] = []
+    total_entries = 0
+    for category in ("shows", "anime"):
+        payload = await _fetch_all_items_cached(
+            client,
+            access_token,
+            category,
+            payloads,
+            user_id=integration.user_id,
+        )
+        if payload is None:
+            # Never reconcile after a failed fetch: an empty seen set would
+            # un-drop/delete every SIMKL-dropped item on a transient error.
+            return 0
+        entries = _extract_all_items_entries(payload, category, DROPPED_STATUSES)
+        total_entries += len(entries)
+        for entry in entries:
+            show = _extract_show_summary(entry)
+            if not show:
+                continue
+            candidate = _build_watchlist_show_candidate(
+                entry,
+                show,
+                source="simkl",
+                list_context={"name": "SIMKL dropped", "type": "personal"},
+            )
+            if candidate:
+                candidates.append(candidate)
+    if not candidates and total_entries:
+        # Entries existed but none could be parsed; skip reconcile defensively.
+        return 0
+    return await process_dropped_candidates(
+        db,
+        integration.user_id,
+        "simkl",
+        source,
+        candidates,
+        now=now,
+    )
 
 
 async def import_watchlist_source(

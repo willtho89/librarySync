@@ -196,6 +196,7 @@ Handles job types: `push_watched`, `push_rating`, `update_history`, `remove_hist
 #### Import Jobs
 - **`quick_import`**: Runs 7-day import window on the user's configured schedule (30 min to 7 days). Per-user runs are single-flight via a lease stored in the integration config (10-minute expiry, refreshed at each claim); an expired lease lets any worker resume a stuck run from its saved queue index
 - **`import_all`**: Sequences providers per user for full import
+- **Dropped ingestion**: Trakt (`GET /users/hidden/dropped?type=show`) and SIMKL (`status: "dropped"` in `/sync/all-items`) dropped shows are imported into the terminal `dropped` watchlist status, tracked via a per-provider `WatchlistSource` (`external_id="dropped"`); reconcile un-drops shows that leave the provider's dropped list. Import upserts never resurrect dropped items (`restore_dropped=False`)
 - **`merge_history`**: Post-import deduplication (same-day movie entries) and repoints sync/outbox rows
 - **`merge_all_history`**: Periodic deduplication of all user history in database (API merges on-the-fly until DB is clean)
 

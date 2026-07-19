@@ -453,4 +453,4 @@ def test_upsert_watchlist_item_enqueues_sync_on_restore_when_requested() -> None
     assert item is removed_item
     assert removed_item.status == "added"
     evaluate.assert_awaited_once_with(db, "user-1", removed_item, media_item)
-    sync.assert_awaited_once_with(db, removed_item, media_item)
+    sync.assert_awaited_once_with(db, removed_item, media_item, unhide_dropped=False)

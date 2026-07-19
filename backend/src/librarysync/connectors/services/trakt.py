@@ -359,6 +359,52 @@ class TraktClient:
             page += 1
         return entries
 
+    async def fetch_hidden_items(
+        self,
+        access_token: str,
+        section: str,
+        item_type: str | None = None,
+        page: int = 1,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        path = f"/users/hidden/{section}"
+        params: dict[str, str] = {"page": str(page), "limit": str(limit)}
+        if item_type:
+            params["type"] = item_type
+        response = await self._request("GET", path, access_token=access_token, params=params)
+        payload = self._parse_json(response)
+        items = _coerce_items(payload)
+        return items, dict(response.headers)
+
+    async def get_hidden_items(
+        self,
+        access_token: str,
+        section: str,
+        item_type: str | None = None,
+        per_page: int = 50,
+        max_pages: int | None = 10,
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        page = 1
+        while max_pages is None or page <= max_pages:
+            items, headers = await self.fetch_hidden_items(
+                access_token,
+                section=section,
+                item_type=item_type,
+                page=page,
+                limit=per_page,
+            )
+            if not items:
+                break
+            entries.extend(item for item in items if isinstance(item, dict))
+            page_count = _parse_page_count(headers)
+            if page_count and page >= page_count:
+                break
+            if len(items) < per_page:
+                break
+            page += 1
+        return entries
+
     async def add_to_watchlist(
         self, payload: dict[str, Any], access_token: str
     ) -> tuple[dict[str, Any], int]:
@@ -379,7 +425,32 @@ class TraktClient:
             access_token=access_token,
             json_body=payload,
         )
-        return self._parse_json(response), response.status_code
+        parsed = self._parse_json(response)
+        return parsed if isinstance(parsed, dict) else {}, response.status_code
+
+    async def add_hidden_items(
+        self, section: str, payload: dict[str, Any], access_token: str
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "POST",
+            f"/users/hidden/{section}",
+            access_token=access_token,
+            json_body=payload,
+        )
+        parsed = self._parse_json(response)
+        return parsed if isinstance(parsed, dict) else {}, response.status_code
+
+    async def remove_hidden_items(
+        self, section: str, payload: dict[str, Any], access_token: str
+    ) -> tuple[dict[str, Any], int]:
+        response = await self._request(
+            "POST",
+            f"/users/hidden/{section}/remove",
+            access_token=access_token,
+            json_body=payload,
+        )
+        parsed = self._parse_json(response)
+        return parsed if isinstance(parsed, dict) else {}, response.status_code
 
     async def fetch_trending_lists(
         self,

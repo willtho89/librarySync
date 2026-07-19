@@ -20,7 +20,11 @@ from librarysync.core.stremio_addon import (
     get_addon_config_by_id,
     normalize_default_catalogs,
 )
-from librarysync.core.watchlist import apply_show_status_filter, normalize_watchlist_statuses
+from librarysync.core.watchlist import (
+    WATCHLIST_TERMINAL_STATUSES,
+    apply_show_status_filter,
+    normalize_watchlist_statuses,
+)
 from librarysync.db.models import (
     MediaItem,
     StremioCustomCatalog,
@@ -296,7 +300,7 @@ async def _build_watchlist_query(
         .join(WatchlistItem, WatchlistItem.media_item_id == MediaItem.id)
         .where(
             WatchlistItem.user_id == user_id,
-            WatchlistItem.status != "removed",
+            WatchlistItem.status.notin_(WATCHLIST_TERMINAL_STATUSES),
         )
     )
     media_type = catalog.get("media_type")
@@ -346,7 +350,7 @@ async def _build_in_progress_query(
         .outerjoin(progress_subq, progress_subq.c.media_item_id == MediaItem.id)
         .where(
             WatchlistItem.user_id == user_id,
-            WatchlistItem.status != "removed",
+            WatchlistItem.status.notin_(WATCHLIST_TERMINAL_STATUSES),
             WatchlistItem.type.in_(["tv", "anime"]),
             MediaItem.media_type.in_(["tv", "anime"]),
         )

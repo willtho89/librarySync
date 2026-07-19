@@ -23,11 +23,14 @@ from librarysync.core.ratings import normalize_ten_point_rating
 from librarysync.core.security import encrypt_value
 from librarysync.core.watchlist_links import TraktListRef, parse_trakt_list_urls
 from librarysync.core.watchlist_sources import (
+    DROPPED_SOURCE_EXTERNAL_ID,
     LEGACY_LIST_SOURCE_TYPE,
     PERSONAL_SOURCE_TYPE,
     URL_SOURCE_TYPE,
+    ensure_dropped_watchlist_source,
     ensure_personal_watchlist_source,
     list_watchlist_sources,
+    order_dropped_source_first,
     reconcile_watchlist_source,
 )
 from librarysync.db.models import (
@@ -47,6 +50,7 @@ from librarysync.jobs.import_pipeline import (
 from librarysync.jobs.import_utils import chunked
 from librarysync.jobs.watchlist_pipeline import (
     WatchlistCandidate,
+    process_dropped_candidates,
     process_watchlist_candidates,
 )
 
@@ -230,14 +234,31 @@ async def _import_watchlist_for_integration(
         provider="trakt",
         name="Trakt watchlist",
     )
+    await ensure_dropped_watchlist_source(
+        db,
+        integration.user_id,
+        "trakt",
+        name="Trakt dropped",
+    )
     if sources is None:
         sources = await list_watchlist_sources(db, integration.user_id, provider="trakt")
     if not sources:
         return 0
+    ordered_sources = order_dropped_source_first(sources)
     candidates: list[WatchlistCandidate] = []
     imported = 0
     max_pages = None if lookback_days < 0 else WATCHLIST_MAX_PAGES
-    for source in sources:
+    for source in ordered_sources:
+        if source.source_type == PERSONAL_SOURCE_TYPE and source.external_id == DROPPED_SOURCE_EXTERNAL_ID:
+            imported += await _import_dropped_for_source(
+                db,
+                integration,
+                client,
+                access_token,
+                source,
+                now,
+            )
+            continue
         if source.source_type == PERSONAL_SOURCE_TYPE:
             total_entries = 0
             for watchlist_type in ("movies", "shows"):
@@ -343,6 +364,57 @@ async def _import_watchlist_for_integration(
             )
             candidates = []
     return imported
+
+
+async def _import_dropped_for_source(
+    db: AsyncSession,
+    integration: Integration,
+    client: TraktClient,
+    access_token: str,
+    source: WatchlistSource,
+    now: datetime,
+) -> int:
+    try:
+        # The dropped list has no lookback semantics and reconcile un-drops
+        # shows missing from it, so it is always fetched without a page cap.
+        entries = await client.get_hidden_items(
+            access_token,
+            section="dropped",
+            item_type="show",
+            per_page=WATCHLIST_PER_PAGE,
+            max_pages=None,
+        )
+    except TraktError as exc:
+        logger.warning(
+            "Trakt dropped fetch failed for user %s: %s",
+            integration.user_id,
+            exc,
+        )
+        return 0
+    candidates: list[WatchlistCandidate] = []
+    for entry in entries:
+        show = _extract_show_summary(entry)
+        if not show:
+            continue
+        candidate = _build_watchlist_show_candidate(
+            entry,
+            show,
+            source="trakt",
+            list_context={"name": "Trakt dropped", "type": "personal"},
+        )
+        if candidate:
+            candidates.append(candidate)
+    if not candidates and entries:
+        # Entries existed but none could be parsed; skip reconcile defensively.
+        return 0
+    return await process_dropped_candidates(
+        db,
+        integration.user_id,
+        "trakt",
+        source,
+        candidates,
+        now=now,
+    )
 
 
 async def import_watchlist_source(

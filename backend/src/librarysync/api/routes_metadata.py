@@ -32,6 +32,7 @@ from librarysync.core.metadata_providers import (
     TvdbProviderSettings,
     TvmazeProviderSettings,
 )
+from librarysync.core.watchlist import WATCHLIST_TERMINAL_STATUSES
 from librarysync.db.models import (
     EpisodeItem,
     MediaItem,
@@ -971,7 +972,7 @@ async def lookup_local(
         .where(
             WatchlistItem.user_id == current_user.id,
             WatchlistItem.media_item_id.is_not(None),
-            WatchlistItem.status != "removed",
+            WatchlistItem.status.notin_(WATCHLIST_TERMINAL_STATUSES),
         )
         .group_by(WatchlistItem.media_item_id)
         .subquery()

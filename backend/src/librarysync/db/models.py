@@ -413,7 +413,6 @@ class StremioCustomCatalog(Base):
             "slug",
             name="uq_stremio_custom_catalogs_user_slug",
         ),
-        Index("ix_stremio_custom_catalogs_user_id", "user_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -473,7 +472,6 @@ class StremioExternalCatalog(Base):
             "slug",
             name="uq_stremio_external_catalogs_user_slug",
         ),
-        Index("ix_stremio_external_catalogs_user_id", "user_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -578,7 +576,7 @@ class WatchlistItem(Base):
     )
     # type: movie, show
     type: Mapped[str] = mapped_column(String(32))
-    # status: added, in_progress, watched, not_released, removed
+    # status: added, in_progress, watched, not_released, hidden, dropped, removed
     status: Mapped[str] = mapped_column(String(32), default="added", index=True)
     source: Mapped[str] = mapped_column(String(32), default="manual")
     rewatch_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
