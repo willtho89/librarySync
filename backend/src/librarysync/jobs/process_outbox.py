@@ -1458,8 +1458,8 @@ async def _deliver_simkl_watchlist_remove(
         watchlist_payload = _build_simkl_drop_watchlist_payload(payload)
         _, response_code = await client.add_to_list(watchlist_payload, access_token)
     else:
-        watchlist_payload = _build_simkl_watchlist_payload(payload)
-        _, response_code = await client.remove_from_watchlist(watchlist_payload, access_token)
+        remove_payload = _build_simkl_watchlist_remove_payload(payload)
+        _, response_code = await client.remove_history(remove_payload, access_token)
     return response_code, None
 
 
@@ -2580,12 +2580,35 @@ def _build_simkl_watchlist_payload(payload: dict[str, object]) -> dict[str, Any]
             )
         if not movie_ids:
             raise ValueError("SIMKL watchlist sync requires movie ids")
-        return {"movies": [{"ids": movie_ids}]}
+        return {"movies": [{"ids": movie_ids, "to": "plantowatch"}]}
 
     show_ids = _resolve_simkl_show_ids(payload)
     if not show_ids:
         raise ValueError("SIMKL watchlist sync requires show ids")
     # SIMKL has no "anime" container for POST payloads; anime are shows too.
+    return {"shows": [{"ids": show_ids, "to": "plantowatch"}]}
+
+
+def _build_simkl_watchlist_remove_payload(payload: dict[str, object]) -> dict[str, Any]:
+    media_type = _coerce_str(payload.get("media_type")) or "movie"
+    if media_type == "movie":
+        movie_ids = _normalize_simkl_ids(payload.get("movie_ids"))
+        if not movie_ids:
+            movie_ids = _normalize_simkl_ids(
+                {
+                    "imdb": payload.get("imdb_id"),
+                    "tmdb": payload.get("tmdb_id"),
+                    "tvdb": payload.get("tvdb_id"),
+                    "simkl": payload.get("simkl_id"),
+                }
+            )
+        if not movie_ids:
+            raise ValueError("SIMKL watchlist removal requires movie ids")
+        return {"movies": [{"ids": movie_ids}]}
+
+    show_ids = _resolve_simkl_show_ids(payload)
+    if not show_ids:
+        raise ValueError("SIMKL watchlist removal requires show ids")
     return {"shows": [{"ids": show_ids}]}
 
 

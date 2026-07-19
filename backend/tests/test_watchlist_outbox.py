@@ -183,7 +183,7 @@ def test_simkl_watchlist_payload_uses_shows_container_for_anime() -> None:
 
     # SIMKL treats anime as shows in POST payloads (no "anime" container).
     assert payload == {
-        "shows": [{"ids": {"tmdb": 1234, "simkl": 99}}],
+        "shows": [{"ids": {"tmdb": 1234, "simkl": 99}, "to": "plantowatch"}],
     }
 
 
@@ -219,6 +219,7 @@ def test_simkl_watchlist_remove_delivery_moves_dropped_show_to_dropped_list() ->
     client = SimpleNamespace(
         add_to_list=AsyncMock(return_value=({}, 200)),
         remove_from_watchlist=AsyncMock(return_value=({}, 200)),
+        remove_history=AsyncMock(return_value=({}, 200)),
     )
     settings = SimpleNamespace(simkl_client_id="simkl-client", simkl_client_secret="secret")
 
@@ -245,6 +246,7 @@ def test_simkl_watchlist_remove_delivery_moves_dropped_show_to_dropped_list() ->
         "token",
     )
     client.remove_from_watchlist.assert_not_awaited()
+    client.remove_history.assert_not_awaited()
 
 
 def test_simkl_watchlist_remove_delivery_without_drop_removes_watchlist() -> None:
@@ -256,6 +258,7 @@ def test_simkl_watchlist_remove_delivery_without_drop_removes_watchlist() -> Non
     client = SimpleNamespace(
         add_to_list=AsyncMock(return_value=({}, 200)),
         remove_from_watchlist=AsyncMock(return_value=({}, 200)),
+        remove_history=AsyncMock(return_value=({}, 200)),
     )
     settings = SimpleNamespace(simkl_client_id="simkl-client", simkl_client_secret="secret")
 
@@ -277,10 +280,11 @@ def test_simkl_watchlist_remove_delivery_without_drop_removes_watchlist() -> Non
 
     assert response_code == 200
     assert external_id is None
-    client.remove_from_watchlist.assert_awaited_once_with(
+    client.remove_history.assert_awaited_once_with(
         {"shows": [{"ids": {"tmdb": 1399}}]},
         "token",
     )
+    client.remove_from_watchlist.assert_not_awaited()
     client.add_to_list.assert_not_awaited()
 
 
@@ -290,7 +294,7 @@ def test_simkl_watchlist_remove_delivery_removes_movie() -> None:
         payload={"media_type": "movie", "movie_ids": {"tmdb": "550"}},
     )
     integration = SimpleNamespace(id="integration-1")
-    client = SimpleNamespace(remove_from_watchlist=AsyncMock(return_value=({}, 200)))
+    client = SimpleNamespace(remove_history=AsyncMock(return_value=({}, 200)))
     settings = SimpleNamespace(simkl_client_id="simkl-client", simkl_client_secret="secret")
 
     with (
@@ -311,7 +315,7 @@ def test_simkl_watchlist_remove_delivery_removes_movie() -> None:
 
     assert response_code == 200
     assert external_id is None
-    client.remove_from_watchlist.assert_awaited_once_with(
+    client.remove_history.assert_awaited_once_with(
         {"movies": [{"ids": {"tmdb": 550}}]},
         "token",
     )
@@ -547,3 +551,97 @@ class TestPublicMetaDbWatchlistOutbox(unittest.TestCase):
         self.assertEqual(result.response_code, 200)
         self.assertIsNone(result.external_id)
         mocked.assert_awaited_once_with(None, job)
+
+
+def test_build_simkl_watchlist_payload_movie_uses_add_to_list_to_status() -> None:
+    payload = process_outbox._build_simkl_watchlist_payload(
+        {
+            "media_type": "movie",
+            "movie_ids": {"imdb": "TT0137523", "tmdb": "550"},
+        }
+    )
+    assert payload == {
+        "movies": [
+            {
+                "ids": {"imdb": "tt0137523", "tmdb": 550},
+                "to": "plantowatch",
+            }
+        ]
+    }
+
+
+def test_build_simkl_watchlist_payload_show_uses_add_to_list_to_status() -> None:
+    payload = process_outbox._build_simkl_watchlist_payload(
+        {
+            "media_type": "tv",
+            "show_ids": {"tvdb": "121361", "simkl": "1"},
+        }
+    )
+    assert payload == {
+        "shows": [
+            {
+                "ids": {"tvdb": 121361, "simkl": 1},
+                "to": "plantowatch",
+            }
+        ]
+    }
+
+
+def test_build_simkl_watchlist_remove_payload_movie_uses_full_item_payload() -> None:
+    payload = process_outbox._build_simkl_watchlist_remove_payload(
+        {
+            "media_type": "movie",
+            "movie_ids": {"imdb": "tt0137523", "tmdb": "550"},
+        }
+    )
+    assert payload == {"movies": [{"ids": {"imdb": "tt0137523", "tmdb": 550}}]}
+
+
+def test_build_simkl_watchlist_remove_payload_show_uses_full_item_payload() -> None:
+    payload = process_outbox._build_simkl_watchlist_remove_payload(
+        {
+            "media_type": "tv",
+            "show_ids": {"tvdb": "121361", "simkl": "1"},
+        }
+    )
+    assert payload == {"shows": [{"ids": {"tvdb": 121361, "simkl": 1}}]}
+
+
+def test_simkl_client_add_to_watchlist_uses_sync_add_to_list_endpoint() -> None:
+    payload = {
+        "movies": [{"ids": {"imdb": "tt0137523"}, "to": "plantowatch"}],
+    }
+    client = SimklClient(client_id="client", client_secret="secret")
+    with patch.object(
+        client,
+        "_request",
+        new=AsyncMock(return_value=httpx.Response(200, json={})),
+    ) as request:
+        asyncio.run(client.add_to_watchlist(payload, access_token="token"))
+
+    request.assert_awaited_once_with(
+        "POST",
+        "/sync/add-to-list",
+        access_token="token",
+        json_body=payload,
+    )
+
+
+def test_simkl_client_remove_from_watchlist_uses_sync_history_remove_endpoint() -> None:
+    payload = {
+        "shows": [{"ids": {"tvdb": "121361", "simkl": "1"}}],
+    }
+    client = SimklClient(client_id="client", client_secret="secret")
+    with patch.object(
+        client,
+        "_request",
+        new=AsyncMock(return_value=httpx.Response(201, json={})),
+    ) as request:
+        asyncio.run(client.remove_from_watchlist(payload, access_token="token"))
+
+    request.assert_awaited_once_with(
+        "POST",
+        "/sync/history/remove",
+        access_token="token",
+        json_body=payload,
+    )
