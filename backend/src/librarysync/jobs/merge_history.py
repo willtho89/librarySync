@@ -28,7 +28,7 @@ from librarysync.core.scheduler import (
     claim_scheduled_job,
     complete_scheduled_job,
     extend_scheduled_job,
-    release_scheduled_job,
+    fail_scheduled_job,
 )
 from librarysync.db.models import (
     EpisodeItem,
@@ -461,11 +461,12 @@ async def process_merge_history_once() -> int:
         )
         if not job:
             return 0
+        job_name = job.name
         try:
             total = await run_merge_history(db, job)
         except Exception:
             logger.exception("Merge history failed")
-            await release_scheduled_job(db, job, MERGE_PENDING_RETRY_DELAY)
+            await fail_scheduled_job(db, job_name, MERGE_PENDING_RETRY_DELAY)
             return 0
         await complete_scheduled_job(db, job, MERGE_PENDING_INTERVAL)
         return total
@@ -516,11 +517,12 @@ async def process_merge_all_history_once() -> int:
         )
         if not job:
             return 0
+        job_name = job.name
         try:
             total = await run_merge_all_history(db, job)
         except Exception:
             logger.exception("Merge-all history failed")
-            await release_scheduled_job(db, job, MERGE_ALL_HISTORY_RETRY_DELAY)
+            await fail_scheduled_job(db, job_name, MERGE_ALL_HISTORY_RETRY_DELAY)
             return 0
         await complete_scheduled_job(db, job, MERGE_ALL_HISTORY_INTERVAL)
         return total

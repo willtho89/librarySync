@@ -12,7 +12,7 @@ from librarysync.core.scheduler import (
     claim_scheduled_job,
     complete_scheduled_job,
     extend_scheduled_job,
-    release_scheduled_job,
+    fail_scheduled_job,
 )
 from librarysync.core.watchlist import backfill_show_episodes
 from librarysync.db.models import (
@@ -58,6 +58,7 @@ async def process_metadata_backfill_once() -> int:
             )
         if not job:
             return 0
+        job_name = job.name
         try:
             await run_metadata_backfill(
                 db,
@@ -67,7 +68,7 @@ async def process_metadata_backfill_once() -> int:
             )
         except Exception:
             logger.exception("Metadata backfill failed")
-            await release_scheduled_job(db, job, METADATA_BACKFILL_RETRY_DELAY)
+            await fail_scheduled_job(db, job_name, METADATA_BACKFILL_RETRY_DELAY)
             return 0
         interval = (
             METADATA_BACKFILL_FORCE_INTERVAL

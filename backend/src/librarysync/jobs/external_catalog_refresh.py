@@ -13,7 +13,7 @@ from librarysync.core.scheduler import (
     claim_scheduled_job,
     complete_scheduled_job,
     extend_scheduled_job,
-    release_scheduled_job,
+    fail_scheduled_job,
 )
 from librarysync.db.models import ScheduledJob, StremioExternalCatalog
 from librarysync.db.session import SessionLocal, init_session_factory
@@ -37,11 +37,12 @@ async def process_external_catalog_refresh_once() -> int:
         )
         if not job:
             return 0
+        job_name = job.name
         try:
             refreshed = await run_external_catalog_refresh(db, job)
         except Exception:
             logger.exception("External catalog refresh failed")
-            await release_scheduled_job(db, job, EXTERNAL_CATALOG_REFRESH_RETRY_DELAY)
+            await fail_scheduled_job(db, job_name, EXTERNAL_CATALOG_REFRESH_RETRY_DELAY)
             return 0
         await complete_scheduled_job(db, job, EXTERNAL_CATALOG_REFRESH_INTERVAL)
     return refreshed

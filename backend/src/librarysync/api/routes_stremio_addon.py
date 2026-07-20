@@ -448,7 +448,7 @@ async def _resolve_custom_media_item(
         "myanimelist_id",
         "anilist_id",
     ]:
-        apply_media_id_update(media_item, id_field, ids.get(id_field))
+        await apply_media_id_update(db, media_item, id_field, ids.get(id_field))
     if payload.year is not None and media_item.year is None:
         media_item.year = payload.year
     if payload.poster_url and not media_item.poster_url:

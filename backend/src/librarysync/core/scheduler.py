@@ -80,3 +80,23 @@ async def release_scheduled_job(
     job.lease_owner = None
     job.updated_at = now
     await db.commit()
+
+
+async def fail_scheduled_job(
+    db: AsyncSession,
+    job_name: str,
+    retry_delay: timedelta,
+    now: datetime | None = None,
+) -> None:
+    """Roll back a broken session and reschedule the job for a later retry.
+
+    Used from exception handlers where the failure may have poisoned the
+    session transaction (e.g. an IntegrityError during flush). The job row is
+    re-fetched after the rollback because the rollback expires the previously
+    loaded instance.
+    """
+    await db.rollback()
+    job = await db.get(ScheduledJob, job_name)
+    if job is None:
+        return
+    await release_scheduled_job(db, job, retry_delay, now)

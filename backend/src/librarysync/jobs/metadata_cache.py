@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from librarysync.core.scheduler import (
     claim_scheduled_job,
     complete_scheduled_job,
-    release_scheduled_job,
+    fail_scheduled_job,
 )
 from librarysync.db.models import (
     MediaItem,
@@ -53,13 +53,14 @@ async def process_metadata_cache_refresh_once() -> int:
         )
         if not job:
             return 0
+        job_name = job.name
         try:
             logger.info("Starting metadata cache refresh")
             result = await run_metadata_cache_refresh(db, job)
             logger.info("Metadata cache refresh processed %d entries", result)
         except Exception:
             logger.exception("Metadata cache refresh failed")
-            await release_scheduled_job(db, job, METADATA_CACHE_RETRY_DELAY)
+            await fail_scheduled_job(db, job_name, METADATA_CACHE_RETRY_DELAY)
             return 0
         await complete_scheduled_job(db, job, METADATA_CACHE_INTERVAL)
     return 1 if result else 0

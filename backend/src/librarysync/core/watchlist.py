@@ -279,12 +279,36 @@ async def _persist_episode_list_for_media_item(
     by_number = {item.episode_number: item for item in existing}
     by_tmdb = {item.tmdb_id: item for item in existing if item.tmdb_id}
 
+    # Episode tmdb ids are globally unique, not per show/season: the same
+    # provider id may already be attached to an episode of another season
+    # (or show). Preload those so we never stamp a duplicate.
+    provider_tmdb_ids = {
+        episode.provider_id
+        for episode in episodes
+        if provider == "tmdb" and episode.episode_number is not None and episode.provider_id
+    }
+    taken_tmdb_ids: set[str] = set()
+    if provider_tmdb_ids:
+        taken_result = await db.execute(
+            select(EpisodeItem.tmdb_id).where(EpisodeItem.tmdb_id.in_(provider_tmdb_ids))
+        )
+        taken_tmdb_ids = set(taken_result.scalars().all())
+
     dirty = False
     for episode in episodes:
         episode_number = episode.episode_number
         if episode_number is None:
             continue
         tmdb_id = episode.provider_id if provider == "tmdb" else None
+        if tmdb_id and tmdb_id in taken_tmdb_ids and tmdb_id not in by_tmdb:
+            logger.warning(
+                "Skipping tmdb_id=%s for show %s season %s episode %s due to conflict",
+                tmdb_id,
+                media_item.id,
+                season_number,
+                episode_number,
+            )
+            tmdb_id = None
         episode_item = None
         if tmdb_id:
             episode_item = by_tmdb.get(tmdb_id)
@@ -311,6 +335,8 @@ async def _persist_episode_list_for_media_item(
                 raw=raw,
             )
             db.add(episode_item)
+            if tmdb_id:
+                taken_tmdb_ids.add(tmdb_id)
             dirty = True
             continue
 
@@ -322,6 +348,7 @@ async def _persist_episode_list_for_media_item(
             dirty = True
         if tmdb_id and not episode_item.tmdb_id:
             episode_item.tmdb_id = tmdb_id
+            taken_tmdb_ids.add(tmdb_id)
             dirty = True
         if episode.still_url:
             existing_raw = episode_item.raw if isinstance(episode_item.raw, dict) else {}
@@ -369,6 +396,15 @@ async def backfill_show_episodes(
                     None,
                 )
                 if candidate and candidate.provider_id:
+                    if not await _can_assign_media_id(
+                        db, media_item, "tmdb_id", candidate.provider_id
+                    ):
+                        logger.warning(
+                            "Skipping tmdb_id=%s for media item %s due to conflict",
+                            candidate.provider_id,
+                            media_item.id,
+                        )
+                        return False
                     media_item.tmdb_id = candidate.provider_id
                     if not media_item.title and candidate.title:
                         media_item.title = candidate.title
@@ -942,12 +978,48 @@ async def find_media_item_by_ids(
     return result.scalars().first()
 
 
-def apply_media_id_update(item: MediaItem, field: str, value: str | None) -> None:
+_MEDIA_ID_FIELDS_GLOBAL = {"imdb_id"}
+_MEDIA_ID_FIELDS_PER_TYPE = {
+    "tmdb_id",
+    "tvdb_id",
+    "tvmaze_id",
+    "kitsu_id",
+    "myanimelist_id",
+    "anilist_id",
+}
+
+
+async def _can_assign_media_id(
+    db: AsyncSession, item: MediaItem, field: str, value: str
+) -> bool:
+    if field in _MEDIA_ID_FIELDS_GLOBAL:
+        clauses = [getattr(MediaItem, field) == value]
+    elif field in _MEDIA_ID_FIELDS_PER_TYPE:
+        clauses = [getattr(MediaItem, field) == value, MediaItem.media_type == item.media_type]
+    else:
+        return False
+    result = await db.execute(select(MediaItem.id).where(*clauses))
+    existing = result.scalars().first()
+    return existing is None or existing == item.id
+
+
+async def apply_media_id_update(
+    db: AsyncSession, item: MediaItem, field: str, value: str | None
+) -> None:
     if not value:
         return
     current = getattr(item, field)
-    if not current:
-        setattr(item, field, value)
+    if current:
+        return
+    if not await _can_assign_media_id(db, item, field, value):
+        logger.warning(
+            "Skipping %s=%s for media item %s due to conflict",
+            field,
+            value,
+            item.id,
+        )
+        return
+    setattr(item, field, value)
 
 
 async def _resolve_existing_watchlist_item(
@@ -1071,13 +1143,15 @@ async def upsert_watchlist_item(
         db.add(media_item)
         await db.flush()
     else:
-        apply_media_id_update(media_item, "imdb_id", normalized_ids.get("imdb_id"))
-        apply_media_id_update(media_item, "tmdb_id", normalized_ids.get("tmdb_id"))
-        apply_media_id_update(media_item, "tvdb_id", normalized_ids.get("tvdb_id"))
-        apply_media_id_update(media_item, "tvmaze_id", normalized_ids.get("tvmaze_id"))
-        apply_media_id_update(media_item, "kitsu_id", normalized_ids.get("kitsu_id"))
-        apply_media_id_update(media_item, "myanimelist_id", normalized_ids.get("myanimelist_id"))
-        apply_media_id_update(media_item, "anilist_id", normalized_ids.get("anilist_id"))
+        await apply_media_id_update(db, media_item, "imdb_id", normalized_ids.get("imdb_id"))
+        await apply_media_id_update(db, media_item, "tmdb_id", normalized_ids.get("tmdb_id"))
+        await apply_media_id_update(db, media_item, "tvdb_id", normalized_ids.get("tvdb_id"))
+        await apply_media_id_update(db, media_item, "tvmaze_id", normalized_ids.get("tvmaze_id"))
+        await apply_media_id_update(db, media_item, "kitsu_id", normalized_ids.get("kitsu_id"))
+        await apply_media_id_update(
+            db, media_item, "myanimelist_id", normalized_ids.get("myanimelist_id")
+        )
+        await apply_media_id_update(db, media_item, "anilist_id", normalized_ids.get("anilist_id"))
         if year is not None and media_item.year is None:
             media_item.year = year
         if poster_url and not media_item.poster_url:

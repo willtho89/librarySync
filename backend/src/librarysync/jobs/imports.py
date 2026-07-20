@@ -245,6 +245,7 @@ async def _process_import_run(
     spec: ImportRunSpec,
 ) -> int:
     config = dict(run.config or {})
+    run_id = run.id
     state = spec.parse_state(config)
     queue = list(state.queue)
     if not queue or state.index >= len(queue):
@@ -304,6 +305,14 @@ async def _process_import_run(
         failed_config = spec.mark_failed(config, now, str(exc)[:500])
         if failed_config is not None:
             failed_config[spec.index_key] = next_index if next_index is not None else state.index
+        # The import may have died mid-flush (e.g. an IntegrityError), leaving
+        # the session transaction unusable. Roll back and re-fetch the run row
+        # so the failure state below can actually be committed; otherwise the
+        # run stays in_progress and retries the same failing provider forever.
+        await db.rollback()
+        refreshed_run = await db.get(Integration, run_id)
+        if refreshed_run is not None:
+            run = refreshed_run
         run.config = failed_config
         await _finalize_merge(
             db,

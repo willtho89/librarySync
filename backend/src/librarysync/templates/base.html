@@ -143,16 +143,14 @@
        <!-- Toast Container -->
        <div id="toast-container" class="fixed top-20 left-1/2 z-50 -translate-x-1/2 space-y-2"></div>
 
-       <!-- Mobile Menu Overlay -->
+       <!-- Mobile Menu Overlay (styles live in input.css via [data-mobile-menu-backdrop]; do not add utility classes here — they compile to the utilities layer and would override the .is-open state) -->
       <div
-        class="fixed inset-0 z-[60] bg-slate/60 backdrop-blur-sm transition-opacity duration-300 opacity-0 pointer-events-none"
         data-mobile-menu-backdrop
         aria-hidden="true"
       ></div>
 
-      <!-- Mobile Menu Panel -->
+      <!-- Mobile Menu Panel (styles live in input.css via [data-mobile-menu-panel]; see note above) -->
       <nav
-        class="fixed inset-y-0 right-0 z-[60] flex w-full max-w-[300px] translate-x-full flex-col border-l border-line/60 bg-surface shadow-2xl transition-transform duration-300 ease-out"
         data-mobile-menu-panel
         id="mobile-menu-panel"
         aria-label="Mobile menu"

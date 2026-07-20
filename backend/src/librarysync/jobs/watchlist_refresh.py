@@ -8,7 +8,7 @@ from librarysync.core.scheduler import (
     claim_scheduled_job,
     complete_scheduled_job,
     extend_scheduled_job,
-    release_scheduled_job,
+    fail_scheduled_job,
 )
 from librarysync.core.watchlist import (
     apply_watchlist_status_change,
@@ -46,11 +46,12 @@ async def process_watchlist_refresh_once() -> int:
         )
         if not job:
             return 0
+        job_name = job.name
         try:
             await run_watchlist_refresh(db, job)
         except Exception:
             logger.exception("Watchlist refresh failed")
-            await release_scheduled_job(db, job, WATCHLIST_REFRESH_RETRY_DELAY)
+            await fail_scheduled_job(db, job_name, WATCHLIST_REFRESH_RETRY_DELAY)
             return 0
         await complete_scheduled_job(db, job, WATCHLIST_REFRESH_INTERVAL)
     return 1
