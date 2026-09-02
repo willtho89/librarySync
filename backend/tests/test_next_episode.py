@@ -36,6 +36,17 @@ class TestSelectNextEpisode:
         episodes = [_episode("e1", 1, 1), _episode("e2", 1, 2)]
         assert select_next_episode(episodes, set()) is episodes[0]
 
+    def test_uses_latest_watched_episode_instead_of_earliest_unwatched(self):
+        episodes = [
+            _episode("s1e1", 1, 1),
+            _episode("s1e2", 1, 2),
+            _episode("s1e3", 1, 3),
+            _episode("s2e1", 2, 1),
+            _episode("s2e2", 2, 2),
+            _episode("s2e3", 2, 3),
+        ]
+        assert select_next_episode(episodes, {"s2e2"}) is episodes[5]
+
     def test_returns_none_when_all_watched(self):
         episodes = [_episode("e1", 1, 1), _episode("e2", 1, 2)]
         assert select_next_episode(episodes, {"e1", "e2"}) is None
@@ -251,6 +262,33 @@ async def test_find_next_episode_and_bulk_return_first_released_unwatched(db_ses
     )
     assert bulk_next[first_show.id].id == first_show_ep2.id
     assert bulk_next[second_show.id].id == second_show_ep2.id
+
+
+@pytest.mark.asyncio
+async def test_find_next_episode_uses_last_watched_episode_across_seasons(db_session: AsyncSession):
+    user = await _create_user(db_session)
+    show = await _create_show(db_session, "Season Hopping Show")
+
+    await _create_episode(db_session, show.id, 1, 1, date(2024, 1, 1), title="S1E1")
+    await _create_episode(db_session, show.id, 1, 2, date(2024, 1, 2), title="S1E2")
+    season_two_ep1 = await _create_episode(db_session, show.id, 2, 1, date(2024, 2, 1), title="S2E1")
+    season_two_ep2 = await _create_episode(db_session, show.id, 2, 2, date(2024, 2, 2), title="S2E2")
+    season_two_ep3 = await _create_episode(db_session, show.id, 2, 3, date(2024, 2, 3), title="S2E3")
+
+    db_session.add(
+        WatchedItem(
+            user_id=user.id,
+            media_item_id=None,
+            episode_item_id=season_two_ep2.id,
+            watched_at=datetime(2024, 2, 10, tzinfo=timezone.utc),
+            source="manual",
+        )
+    )
+    await db_session.flush()
+
+    next_episode = await find_next_episode(db_session, user.id, show.id, date(2024, 2, 10))
+    assert next_episode is not None
+    assert next_episode.id == season_two_ep3.id
 
 
 @pytest.mark.asyncio
