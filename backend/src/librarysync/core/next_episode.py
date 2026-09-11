@@ -14,6 +14,28 @@ from librarysync.db.models import EpisodeItem, MediaItem, WatchedItem, WatchEven
 SHOW_MEDIA_TYPES = ("tv", "anime")
 
 
+def _coerce_finale_type(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value in {1, 2, 3} else None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned in {"1", "2", "3"}:
+            return int(cleaned)
+    return None
+
+
+def _episode_finale_type(episode: EpisodeItem) -> int | None:
+    raw = episode.raw if isinstance(getattr(episode, "raw", None), dict) else {}
+    simkl = raw.get("simkl")
+    if isinstance(simkl, dict):
+        finale_type = _coerce_finale_type(simkl.get("finale_type"))
+        if finale_type is not None:
+            return finale_type
+    return _coerce_finale_type(raw.get("finale_type"))
+
+
 def select_next_episode(
     released_episodes: Iterable[EpisodeItem],
     watched_episode_ids: set[str],
@@ -35,6 +57,7 @@ def episode_to_payload(episode: EpisodeItem) -> dict:
         "episode_number": episode.episode_number,
         "title": episode.title,
         "air_date": episode.air_date.isoformat() if episode.air_date else None,
+        "finale_type": _episode_finale_type(episode),
     }
 
 

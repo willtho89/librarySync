@@ -98,6 +98,13 @@ async function loadUpNext() {
   }
 }
 
+function getFinaleBadgeLabel(finaleType) {
+  if (finaleType === 1) return "Mid-season finale";
+  if (finaleType === 2) return "Season finale";
+  if (finaleType === 3) return "Series finale";
+  return "";
+}
+
 function buildUpNextRow(item) {
   const nextEpisode = item.next_episode || {};
   const episodeLabel = formatSeasonEpisode(
@@ -143,6 +150,14 @@ function buildUpNextRow(item) {
     const badge = document.createElement("span");
     badge.className = "up-next-new-badge";
     badge.textContent = "New";
+    titleRow.appendChild(badge);
+  }
+
+  const finaleLabel = getFinaleBadgeLabel(nextEpisode.finale_type);
+  if (finaleLabel) {
+    const badge = document.createElement("span");
+    badge.className = "up-next-new-badge";
+    badge.textContent = finaleLabel;
     titleRow.appendChild(badge);
   }
 

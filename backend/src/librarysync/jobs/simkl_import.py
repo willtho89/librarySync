@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -102,6 +102,7 @@ class EpisodeSummary:
     tmdb_id: str | None
     tvdb_id: str | None
     simkl_id: str | None
+    air_date: date | None
     raw: dict[str, Any]
 
 
@@ -319,6 +320,26 @@ def _extract_activity_timestamp(payload: dict[str, Any] | None) -> datetime | No
             parsed = parse_datetime(block.get("all"))
             if parsed:
                 return parsed
+    return None
+
+
+def _parse_date_value(value: object) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    parsed = _parse_datetime(value)
+    if parsed:
+        return parsed.date()
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if len(cleaned) >= 10:
+            try:
+                return datetime.strptime(cleaned[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
     return None
 
 
@@ -1279,6 +1300,7 @@ async def _get_or_create_episode_item(
         season_number=episode.season_number,
         episode_number=episode.episode_number,
         title=episode.title,
+        air_date=episode.air_date,
         tmdb_id=episode.tmdb_id,
         tvdb_id=episode.tvdb_id,
         imdb_id=episode.imdb_id,
@@ -1410,6 +1432,8 @@ async def _apply_episode_updates(
     await _maybe_set_episode_id(db, item, "tvdb_id", episode.tvdb_id)
     if episode.title and not item.title:
         item.title = episode.title
+    if episode.air_date and item.air_date != episode.air_date:
+        item.air_date = episode.air_date
     item.raw = _merge_episode_raw(item.raw, episode.simkl_id, episode.raw)
 
 
@@ -1782,13 +1806,22 @@ def _extract_episode_summary(entry: dict[str, Any]) -> EpisodeSummary | None:
         tmdb_id=_coerce_str(ids.get("tmdb")),
         tvdb_id=_coerce_str(ids.get("tvdb")),
         simkl_id=_coerce_str(ids.get("simkl")),
+        air_date=_extract_episode_air_date(payload),
         raw=_sanitize_simkl_payload(payload),
     )
 
 
+def _extract_episode_air_date(payload: dict[str, Any]) -> date | None:
+    for key in ("air_date", "aired", "date", "release_date"):
+        parsed = _parse_date_value(payload.get(key))
+        if parsed:
+            return parsed
+    return None
+
+
 def _sanitize_simkl_payload(payload: dict[str, Any]) -> dict[str, Any]:
     keep: dict[str, Any] = {}
-    for key in ("title", "year", "season", "episode", "number"):
+    for key in ("title", "year", "season", "episode", "number", "air_date", "aired", "date", "finale_type"):
         if key in payload:
             keep[key] = payload[key]
     ids = payload.get("ids")
