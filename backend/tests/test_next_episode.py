@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
-def _episode(episode_id, season, episode_number, air_date=None, title="Episode"):
+def _episode(episode_id, season, episode_number, air_date=None, title="Episode", raw=None):
     return SimpleNamespace(
         id=episode_id,
         show_media_item_id="show-1",
@@ -24,6 +24,7 @@ def _episode(episode_id, season, episode_number, air_date=None, title="Episode")
         episode_number=episode_number,
         title=title,
         air_date=air_date,
+        raw=raw,
     )
 
 
@@ -54,11 +55,22 @@ class TestEpisodeToPayload:
             "episode_number": 5,
             "title": "Finale",
             "air_date": "2024-03-01",
+            "finale_type": None,
         }
 
     def test_handles_missing_air_date(self):
         episode = _episode("e1", 1, 1, air_date=None)
         assert episode_to_payload(episode)["air_date"] is None
+
+    def test_serializes_finale_type_from_simkl_raw(self):
+        episode = _episode(
+            "e1",
+            1,
+            10,
+            air_date=date(2024, 3, 1),
+            raw={"simkl": {"finale_type": "3"}},
+        )
+        assert episode_to_payload(episode)["finale_type"] == 3
 
 
 class TestOrderUpNextItems:
