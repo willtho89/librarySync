@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api import (
     routes_activity,
+    routes_addon_watch_state,
     routes_admin,
     routes_auth,
     routes_blacklist,
@@ -102,6 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_watchlist.router)
     app.include_router(routes_stremio_addon.router)
     app.include_router(routes_stremio_addon_public.router)
+    app.include_router(routes_addon_watch_state.router)
     app.include_router(routes_admin.router)
 
     app_version = get_app_version()

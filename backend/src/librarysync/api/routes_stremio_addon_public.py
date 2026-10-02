@@ -20,6 +20,9 @@ from librarysync.core.stremio_addon import (
     get_addon_config_by_id,
     normalize_default_catalogs,
 )
+from librarysync.core.stremio_addon import (
+    resolve_meta_id as _resolve_meta_id,
+)
 from librarysync.core.watchlist import (
     WATCHLIST_TERMINAL_STATUSES,
     apply_show_status_filter,
@@ -46,18 +49,6 @@ def _get_app_version() -> str:
         return metadata.version("librarysync")
     except metadata.PackageNotFoundError:
         return "unknown"
-
-
-def _resolve_meta_id(media_item: MediaItem) -> str | None:
-    raw = media_item.raw if isinstance(media_item.raw, dict) else {}
-    stremio_id = raw.get("stremio_id")
-
-    if not stremio_id:
-        stremio_payload = raw.get("stremio")
-        if isinstance(stremio_payload, dict):
-            stremio_id = stremio_payload.get("id") or stremio_payload.get("_id")
-
-    return str(stremio_id) if stremio_id else media_item.imdb_id
 
 
 def _resolve_stremio_type(media_type: str) -> Literal["movie", "series"] | None:
@@ -229,6 +220,7 @@ def _build_manifest(
     catalogs: list[dict],
     external_catalogs: list[StremioExternalCatalog],
     custom_catalogs: list[StremioCustomCatalog],
+    watch_state_enabled: bool = False,
 ) -> dict[str, Any]:
     manifest_catalogs: list[dict[str, Any]] = []
     seen_types: set[str] = set()
@@ -279,7 +271,7 @@ def _build_manifest(
         )
         seen_types.add(stremio_type)
 
-    return {
+    manifest = {
         "id": "org.librarysync.catalogs",
         "version": _get_app_version(),
         "name": "librarySync Watchlists",
@@ -288,6 +280,15 @@ def _build_manifest(
         "types": sorted(seen_types) if seen_types else ["movie", "series"],
         "catalogs": manifest_catalogs,
     }
+    if watch_state_enabled:
+        manifest["types"] = ["movie", "series"]
+        manifest["resources"].append({"name": "watch_state", "types": ["movie", "series"]})
+        manifest["watchState"] = {
+            "version": 2,
+            "push": {"events": ["stop", "played", "unplayed"]},
+            "pull": {"items": True, "watched": True, "ttlSeconds": 300},
+        }
+    return manifest
 
 
 async def _build_watchlist_query(
@@ -500,7 +501,7 @@ async def stremio_addon_manifest(
         .order_by(StremioExternalCatalog.created_at.asc())
     )
     external_catalogs = external_result.scalars().all()
-    return _build_manifest(catalogs, external_catalogs, custom_catalogs)
+    return _build_manifest(catalogs, external_catalogs, custom_catalogs, config.watch_state_enabled)
 
 
 @router.get("/{addon_id}/catalog/{catalog_type}/{catalog_id}.json", include_in_schema=False)

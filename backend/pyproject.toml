@@ -1,25 +1,25 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=84.0.0", "wheel>=0.48.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "librarysync"
-version = "0.19.1"
+version = "0.20.0"
 description = "librarySync backend"
 requires-python = ">=3.13"
 dependencies = [
-  "fastapi>=0.133.1",
-  "uvicorn[standard]>=0.44.0",
+  "fastapi>=0.142.2",
+  "uvicorn[standard]>=0.54.0",
   "jinja2>=3.1.6",
-  "sqlalchemy>=2.0.49",
-  "alembic>=1.18.4",
-  "psycopg[binary]>=3.3.3",
-  "pydantic>=2.12.5",
-  "python-dotenv>=1.2.2",
+  "sqlalchemy>=2.1.2",
+  "alembic>=1.20.0",
+  "psycopg[binary]>=3.3.6",
+  "pydantic>=2.13.5",
+  "python-dotenv>=1.2.4",
   "httpx>=0.28.1",
   "passlib[bcrypt]>=1.7.4",
   "python-jose[cryptography]>=3.5.0",
-  "greenlet>=3.4.0",
+  "greenlet>=3.5.6",
   "parsett>=1.8.5",
 ]
 
@@ -40,4 +40,4 @@ librarysync = [
 ]
 
 [dependency-groups]
-dev = ["ruff>=0.15.3", "pytest>=9.0.3", "pytest-asyncio>=0.23.0", "aiosqlite>=0.20.0"]
+dev = ["ruff>=0.16.10", "pytest>=9.1.1", "pytest-asyncio>=1.4.0", "aiosqlite>=0.22.1"]

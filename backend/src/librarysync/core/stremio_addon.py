@@ -7,10 +7,27 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.db.models import StremioAddonConfig
+from librarysync.db.models import MediaItem, StremioAddonConfig
 
 DEFAULT_PAGE_SIZE = 30
 DEFAULT_SHOW_IN_HOME = True
+
+
+def resolve_meta_id(media_item: MediaItem) -> str | None:
+    raw = media_item.raw if isinstance(media_item.raw, dict) else {}
+    stremio_payload = raw.get("stremio")
+    stremio_id = raw.get("stremio_id")
+    if not stremio_id and isinstance(stremio_payload, dict):
+        stremio_id = stremio_payload.get("id") or stremio_payload.get("_id")
+    if stremio_id:
+        return str(stremio_id)
+    if media_item.imdb_id:
+        return media_item.imdb_id
+    for prefix, field in (("tmdb", "tmdb_id"), ("tvdb", "tvdb_id"), ("kitsu", "kitsu_id")):
+        value = getattr(media_item, field)
+        if value:
+            return f"{prefix}:{value}"
+    return None
 
 DEFAULT_CATALOGS: list[dict[str, Any]] = [
     {

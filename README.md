@@ -13,6 +13,7 @@ my watch history in sync.
 - Ratings support synced where supported.
 - Imports from Trakt, SIMKL, Letterboxd, and Stremio (quick import + import all).
 - Sync providers include Trakt, SIMKL, Letterboxd, Stremio, AniList, and PublicMetaDB.
+- Optional two-way watch history with AIOStreams' Jellyfin-compatible apps through the LibrarySync addon.
 - Outbox-based delivery with retries and per-user rate limiting.
 - Metadata lookup and enrichment with TMDB, TVDB, IMDb, TVMaze, Kitsu, MyAnimeList, PublicMetaDB.
 - Minimal web UI (static HTML + JS).
@@ -88,6 +89,39 @@ All defaults below are from `.env.example`.
 - `LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE` (default `750`): Maximum number of items per SIMKL batch request (limited by 20MB POST size).
 
 ## Integrations
+
+### AIOStreams watch history
+
+AIOStreams supports tracker addons through its
+[Watch State v2 protocol](https://docs.aiostreams.viren070.me/reference/addon-protocol/watch-state/).
+LibrarySync's existing Stremio addon can act as that tracker:
+
+1. Open **Stremio Addon** in LibrarySync.
+2. Enable **Sync watch history with AIOStreams** and save the status.
+3. Add the manifest URL to your AIOStreams configuration, or refresh/reinstall an existing install.
+4. Enable the addon's **Watch State** resource and choose it as your user's tracker in AIOStreams.
+
+The addon supplies the user's complete watched movies and episodes, including history imported
+from other services, recent watched timestamps, and available next episodes. AIOStreams can
+reuse a version token when history has not changed. Completed playback (`stop` with `played: true`)
+and manual watched marks create LibrarySync history and enter the normal metadata/sync pipeline.
+An unfinished stop creates no history. Marking a title unwatched removes that user's watches up
+to the event's timestamp and queues deletion from supported connected services. Retried events
+are deduplicated, and delayed events cannot undo a newer mark from the tracker.
+
+This setting is off by default. The manifest URL is the credential for history access and writes;
+keep it private. Disabling watch history or the addon immediately disables both history endpoints.
+Each LibrarySync user has a separate addon URL; the addon does not advertise shared viewer support.
+
+Playback reporting requires the AIOStreams app or another Jellyfin-compatible client. Stremio
+playback still needs the existing Stremio import integration. This tracker currently syncs completed
+watch history, not resume positions, ratings, favourites, or dropped status. Series events require
+explicit season and episode numbers (including season 0 for specials); absolute-numbered events
+with a null season are rejected rather than assigned a guessed season. Whole-show or season marks
+are delivered by AIOStreams as individual episode events because the addon does not declare bulk support.
+
+The schema migration runs with the normal API startup. AIOStreams' instance settings
+`WATCH_STATE_REPORT_ENABLED` and `WATCH_STATE_PULL_ENABLED` must permit the directions you use.
 
 ### Letterboxd
 Letterboxd unfortunately does not have a devleoper program to request API access. For personal use it is possible to extract the required information from the app. Special thanks to @dado3212 with https://github.com/dado3212/letterboxd-scripts/ for guidance on retrieving the `client_id` and `client_secret`.

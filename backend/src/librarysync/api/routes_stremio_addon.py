@@ -83,6 +83,7 @@ class StremioCatalogUpdate(BaseModel):
 
 class StremioAddonConfigUpdate(BaseModel):
     is_enabled: bool | None = None
+    watch_state_enabled: bool | None = None
     catalogs: list[StremioCatalogUpdate] | None = None
 
 
@@ -534,6 +535,7 @@ async def get_stremio_addon_config(
     return {
         "addon_id": config.id,
         "is_enabled": bool(config.is_enabled),
+        "watch_state_enabled": bool(config.watch_state_enabled),
         "catalogs": catalogs,
         "external_catalogs": external_catalogs,
         "custom_catalogs": custom_catalogs,
@@ -557,6 +559,9 @@ async def update_stremio_addon_config(
     if "is_enabled" in payload.model_fields_set:
         config.is_enabled = bool(payload.is_enabled)
 
+    if "watch_state_enabled" in payload.model_fields_set:
+        config.watch_state_enabled = bool(payload.watch_state_enabled)
+
     if payload.catalogs:
         catalogs = _merge_catalog_updates(catalogs, payload.catalogs)
         config.default_catalogs = catalogs
@@ -569,6 +574,7 @@ async def update_stremio_addon_config(
 
     return {
         "is_enabled": config.is_enabled,
+        "watch_state_enabled": config.watch_state_enabled,
         "catalogs": config.default_catalogs,
     }
 

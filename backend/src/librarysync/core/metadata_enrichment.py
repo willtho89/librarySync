@@ -501,6 +501,13 @@ async def _apply_candidate_to_media_item(
 ) -> None:
     ids = _extract_candidate_ids(candidate)
     await _apply_candidate_ids(db, media_item, ids)
+    raw = media_item.raw if isinstance(media_item.raw, dict) else {}
+    if (
+        candidate.title
+        and raw.get("source") == "aiostreams_watch_state"
+        and media_item.title == raw.get("stremio_id")
+    ):
+        media_item.title = candidate.title
     if (
         update_poster
         and candidate.poster_url

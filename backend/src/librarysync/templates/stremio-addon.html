@@ -53,6 +53,16 @@
         <input id="stremio-addon-enabled" type="checkbox" />
         <span>Enable addon</span>
       </label>
+      <label class="inline-control">
+        <input id="stremio-addon-watch-state" type="checkbox" />
+        <span>Sync watch history with AIOStreams</span>
+      </label>
+      <p class="helper-text">
+        Share your LibrarySync watched history with AIOStreams and record completed watches from
+        its Jellyfin-compatible apps. Marking a title unwatched removes its LibrarySync history
+        and queues removal from connected services. Your addon URL grants access to this history;
+        keep it private. Save, then refresh or reinstall the addon in AIOStreams.
+      </p>
       <div class="flex flex-wrap items-center gap-3">
         <button id="stremio-addon-enable-save" type="button" class="btn btn-secondary btn-sm">
           Save status

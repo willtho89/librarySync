@@ -130,6 +130,10 @@ function renderControlSection() {
   if (enabledToggle) {
     enabledToggle.checked = !!(addonState.config && addonState.config.is_enabled);
   }
+  const watchStateToggle = document.getElementById("stremio-addon-watch-state");
+  if (watchStateToggle) {
+    watchStateToggle.checked = !!(addonState.config && addonState.config.watch_state_enabled);
+  }
 }
 
 function buildSelect(options, selectedValue) {
@@ -1368,12 +1372,16 @@ async function handleEnableSave() {
   try {
     const response = await requestJSON("/api/stremio-addon/config", {
       method: "POST",
-      body: JSON.stringify({ is_enabled: enabledToggle.checked }),
+      body: JSON.stringify({
+        is_enabled: enabledToggle.checked,
+        watch_state_enabled: !!document.getElementById("stremio-addon-watch-state")?.checked,
+      }),
     });
     if (!addonState.config) {
       addonState.config = {};
     }
     addonState.config.is_enabled = response.is_enabled;
+    addonState.config.watch_state_enabled = response.watch_state_enabled;
     setControlsMessage("Status saved.");
   } catch (error) {
     setControlsMessage(error.message, true);

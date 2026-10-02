@@ -394,6 +394,7 @@ class StremioAddonConfig(Base):
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    watch_state_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     default_catalogs: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
