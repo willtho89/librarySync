@@ -193,6 +193,11 @@ async def test_pull_full_history_and_version_gate(context):
     assert full["watched"]["episodes"] == ["tt0903747:3:7"]
     assert full["watched"]["counts"] == {"tt0903747": {"watched": 1, "total": 0}}
     assert full["watched"]["nextUp"][0]["videoId"] == "tt0903747:3:8"
+    # AIOStreams requires videoId on every recent item, including movies. A missing
+    # movie id rejects the whole payload and prevents all episode history importing.
+    by_type = {item["type"]: item for item in full["items"]}
+    assert by_type["movie"]["videoId"] == by_type["movie"]["metaId"] == "tmdb:42"
+    assert by_type["series"]["videoId"] == "tt0903747:3:7"
     unchanged = (await client.get(f"{BASE}/watch_state/pull.json", params={"since": full["version"]})).json()
     assert "watched" not in unchanged
     assert unchanged["items"] == full["items"]

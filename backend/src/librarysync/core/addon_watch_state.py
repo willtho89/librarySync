@@ -221,7 +221,13 @@ async def build_watch_state(db: AsyncSession, user_id: str, since: str | None) -
         if not meta_id or (not episode and media.media_type != "movie"):
             continue
         at = int(watched.watched_at.replace(tzinfo=timezone.utc).timestamp())
-        row = {"type": "series" if episode else "movie", "metaId": meta_id, "played": True, "at": at}
+        row = {
+            "type": "series" if episode else "movie",
+            "metaId": meta_id,
+            "videoId": meta_id,
+            "played": True,
+            "at": at,
+        }
         video_id = meta_id
         if episode:
             video_id = _video_id(meta_id, episode)
