@@ -333,6 +333,10 @@ async def add_watched_item(
     )
     db.add_all([watched, event])
     await db.flush()
+    from librarysync.core.watch_state_history import record_manual_state
+
+    await record_manual_state(db, watched, media_item, episode_item, watch_changed=True,
+                              rating_changed=rating is not None)
     await enqueue_new_item_job(
         db,
         current_user.id,
@@ -913,6 +917,10 @@ async def update_watched_item(
                 )
                 show_item = result.scalars().first()
         if media_item or episode_item:
+            from librarysync.core.watch_state_history import record_manual_state
+
+            await record_manual_state(db, watched, media_item or show_item, episode_item,
+                                      watch_changed=watched_at_updated, rating_changed=rating_updated)
             await _enqueue_update_syncs(
                 db,
                 watched,

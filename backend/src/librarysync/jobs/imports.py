@@ -50,7 +50,6 @@ from librarysync.core.import_schedule import parse_datetime
 from librarysync.core.worker_identity import worker_instance_id
 from librarysync.db.models import Integration
 from librarysync.db.session import SessionLocal, init_session_factory
-from librarysync.jobs.aiostreams_import import AIOStreamsImportStrategy
 from librarysync.jobs.anilist_import import AniListImportStrategy
 from librarysync.jobs.import_base import ImportContext, ImportStrategyRegistry
 from librarysync.jobs.letterboxd_import import LetterboxdImportStrategy
@@ -95,7 +94,6 @@ def _build_registry(lookback_days: int) -> ImportStrategyRegistry:
             PublicMetaDbImportStrategy(lookback_days=lookback_days),
             AniListImportStrategy(lookback_days=lookback_days),
             StremioImportStrategy(lookback_days=lookback_days),
-            AIOStreamsImportStrategy(lookback_days=lookback_days),
         ]
     )
 

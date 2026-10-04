@@ -309,6 +309,7 @@ class TestPublicMetaDBRatingDuplicate:
             id="job-1",
             user_id="user-1",
             attempts=1,
+            job_type="push_rating",
             payload={
                 "media_type": "movie",
                 "tmdb_id": 550,
@@ -323,6 +324,7 @@ class TestPublicMetaDBRatingDuplicate:
             id="job-2",
             user_id="user-1",
             attempts=1,
+            job_type="push_rating",
             payload={
                 "media_type": "tv",
                 "tmdb_id": 1399,

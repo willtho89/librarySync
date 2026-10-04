@@ -60,6 +60,9 @@ def _build_outbox_dedupe_key(
     job_type: str,
     payload: dict[str, object],
 ) -> str | None:
+    state_entry_id = payload.get("state_entry_id")
+    if state_entry_id:
+        return f"{user_id}:{provider}:rating:{state_entry_id}"
     watch_sync_id = payload.get("watch_sync_id")
     if watch_sync_id:
         return f"{user_id}:{provider}:{job_type}:{watch_sync_id}"
@@ -98,11 +101,19 @@ async def enqueue_outbox_job(
         if existing:
             if existing.status != "in_progress":
                 existing.payload = payload
+                existing.job_type = job_type
                 existing.status = status
                 existing.run_after = None
                 existing.last_error = None
                 existing.updated_at = now
-            return existing
+                return existing
+            if not payload.get("state_entry_id"):
+                return existing
+            # The in-flight operation owns its unique key until delivery finishes.
+            # Its successor must remain durable without overwriting the payload being sent.
+            dedupe_key = None
+    if status not in ACTIVE_OUTBOX_STATUSES:
+        dedupe_key = None
     job = OutboxJob(
         user_id=user_id,
         target_provider=target_provider,

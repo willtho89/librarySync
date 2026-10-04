@@ -1616,4 +1616,5 @@ window.librarysyncPageInit = async ({ user }) => {
   bindForm("custom-catalog-items-lookup-form", handleCustomLookupSubmit);
   bindAddonActions();
   await loadAddonConfig();
+  await window.initializeWatchStatePage();
 };

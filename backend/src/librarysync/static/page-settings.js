@@ -25,7 +25,6 @@ const DEFAULT_IMPORT_QUEUE_ORDER = [
   "publicmetadb",
   "anilist",
   "stremio",
-  "aiostreams",
 ];
 const WATCHLIST_PROVIDER_LABELS = {
   trakt: "Trakt",
@@ -533,41 +532,6 @@ async function loadIntegrations() {
     setMessage("stremio-message", "");
     if (stremioDisconnect) {
       stremioDisconnect.hidden = true;
-    }
-  }
-
-  const aiostreams = integrations.find((item) => item.provider === "aiostreams");
-  const aiostreamsForm = document.getElementById("aiostreams-form");
-  if (aiostreamsForm) {
-    const apiBaseInput = aiostreamsForm.querySelector("input[name='api_base_url']");
-    const usernameInput = aiostreamsForm.querySelector("input[name='username']");
-    if (aiostreams && aiostreams.config && aiostreams.config.api_base_url && apiBaseInput) {
-      apiBaseInput.value = aiostreams.config.api_base_url;
-    }
-    if (aiostreams && aiostreams.config && aiostreams.config.username && usernameInput) {
-      usernameInput.value = aiostreams.config.username;
-    }
-  }
-  const aiostreamsMessage = document.getElementById("aiostreams-message");
-  const aiostreamsDisconnect = document.getElementById("aiostreams-disconnect");
-  const aiostreamsConnected = isIntegrationConnected(aiostreams);
-  setIntegrationStatusBadge("aiostreams-status", aiostreamsConnected);
-  if (aiostreamsConnected) {
-    const username =
-      aiostreams && aiostreams.config && aiostreams.config.username
-        ? aiostreams.config.username
-        : null;
-    const label = username
-      ? `Connected as ${username}.`
-      : "AIOStreams Proxy is connected.";
-    setMessage("aiostreams-message", label);
-    if (aiostreamsDisconnect) {
-      aiostreamsDisconnect.hidden = false;
-    }
-  } else {
-    setMessage("aiostreams-message", "");
-    if (aiostreamsDisconnect) {
-      aiostreamsDisconnect.hidden = true;
     }
   }
 
@@ -1184,57 +1148,6 @@ async function handleStremioDisconnect() {
     await loadIntegrations();
   } catch (error) {
     setMessage("stremio-message", error.message, true);
-  }
-}
-
-async function handleAIOStreamsSave(data, form) {
-  setMessage("aiostreams-message", "");
-  const apiBaseUrl = (data.get("api_base_url") || "").trim();
-  const username = (data.get("username") || "").trim();
-  const auth = (data.get("auth") || "").trim();
-  if (!apiBaseUrl || !auth) {
-    setMessage("aiostreams-message", "Enter base URL and auth.", true);
-    return;
-  }
-  const payload = { api_base_url: apiBaseUrl, auth };
-  if (username) {
-    payload.username = username;
-  }
-  try {
-    await requestJSON("/api/integrations/aiostreams", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    const input = form ? form.querySelector("input[name='auth']") : null;
-    if (input) {
-      input.value = "";
-    }
-    setMessage("aiostreams-message", "Saved.");
-    await loadIntegrations();
-  } catch (error) {
-    setMessage("aiostreams-message", error.message, true);
-  }
-}
-
-async function handleAIOStreamsTest() {
-  setMessage("aiostreams-message", "");
-  try {
-    await requestJSON("/api/integrations/aiostreams/test", { method: "POST" });
-    setMessage("aiostreams-message", "Connection test succeeded.");
-    await loadIntegrations();
-  } catch (error) {
-    setMessage("aiostreams-message", error.message, true);
-  }
-}
-
-async function handleAIOStreamsDisconnect() {
-  setMessage("aiostreams-message", "");
-  try {
-    await requestJSON("/api/integrations/aiostreams/disconnect", { method: "POST" });
-    setMessage("aiostreams-message", "Disconnected.");
-    await loadIntegrations();
-  } catch (error) {
-    setMessage("aiostreams-message", error.message, true);
   }
 }
 
@@ -3439,7 +3352,6 @@ window.librarysyncPageInit = async ({ user }) => {
   bindForm("watchlist-source-form", handleWatchlistSourceAdd);
   bindForm("quick-import-form", handleQuickImportScheduleSave);
   bindForm("stremio-form", handleStremioConnect);
-  bindForm("aiostreams-form", handleAIOStreamsSave);
   bindForm("publicmetadb-sync-form", handlePublicMetaDbSyncSave);
   bindForm("settings-form", handleSettingsSave);
   bindForm("tmdb-form", handleTmdbSave);
@@ -3507,14 +3419,6 @@ window.librarysyncPageInit = async ({ user }) => {
   const stremioDisconnect = document.getElementById("stremio-disconnect");
   if (stremioDisconnect) {
     stremioDisconnect.addEventListener("click", handleStremioDisconnect);
-  }
-  const aiostreamsTest = document.getElementById("aiostreams-test");
-  if (aiostreamsTest) {
-    aiostreamsTest.addEventListener("click", handleAIOStreamsTest);
-  }
-  const aiostreamsDisconnect = document.getElementById("aiostreams-disconnect");
-  if (aiostreamsDisconnect) {
-    aiostreamsDisconnect.addEventListener("click", handleAIOStreamsDisconnect);
   }
   const publicmetadbSyncTest = document.getElementById("publicmetadb-sync-test");
   if (publicmetadbSyncTest) {

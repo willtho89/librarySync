@@ -11,11 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.config import settings
-from librarysync.connectors.services.aiostreams_proxy import (
-    AIOStreamsClient,
-    AIOStreamsError,
-    has_required_aiostreams_fields,
-)
 from librarysync.connectors.services.anilist import (
     AniListClient,
     AniListError,
@@ -130,12 +125,6 @@ class StremioLoginConfig(BaseModel):
     email: str
     password: str
     api_base_url: str | None = None
-
-
-class AIOStreamsConfig(BaseModel):
-    api_base_url: str | None = None
-    auth: str
-    username: str | None = None
 
 
 class PublicMetaDbSyncConfig(BaseModel):
@@ -1172,131 +1161,6 @@ async def disconnect_publicmetadb_sync(
 
 
 @router.post(
-    "/aiostreams",
-    summary="Connect AIOStreams Proxy",
-    description="Store AIOStreams Proxy auth for the current user.",
-)
-async def aiostreams_connect(
-    payload: AIOStreamsConfig,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    auth = _normalize_optional(payload.auth)
-    if not auth:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Auth token is required"
-        )
-    api_base_url = _normalize_optional(payload.api_base_url)
-    username = _normalize_optional(payload.username)
-
-    integration = await _get_integration(db, current_user.id, "aiostreams")
-    existing_base = None
-    if integration and integration.config:
-        existing_base = integration.config.get("api_base_url")
-    if not api_base_url:
-        api_base_url = existing_base
-    if not api_base_url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="API base URL is required",
-        )
-    if not username:
-        username = _parse_aiostreams_username(auth)
-
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="aiostreams",
-            status="connected",
-        )
-
-    config = dict(integration.config or {})
-    config["api_base_url"] = api_base_url
-    if username:
-        config["username"] = username
-    else:
-        config.pop("username", None)
-    integration.status = "connected"
-    integration.config = config
-    db.add(integration)
-    await db.flush()
-
-    secret_payload = {"auth": auth}
-    await _upsert_integration_secret(db, integration, secret_payload)
-
-    await db.commit()
-    return _integration_to_out(integration, True).model_dump()
-
-
-@router.post(
-    "/aiostreams/test",
-    summary="Test AIOStreams Proxy",
-    description="Verify access to the AIOStreams stats endpoint.",
-)
-async def aiostreams_test(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    integration, secret_data = await _load_integration(db, current_user.id, "aiostreams")
-    if not integration or not secret_data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="AIOStreams integration not configured",
-        )
-    if not has_required_aiostreams_fields(secret_data):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="AIOStreams auth is missing",
-        )
-    api_base_url = None
-    if integration.config and integration.config.get("api_base_url"):
-        api_base_url = str(integration.config["api_base_url"])
-    if not api_base_url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="AIOStreams API base URL is missing",
-        )
-    auth = str(secret_data.get("auth"))
-    username = None
-    if integration.config and integration.config.get("username"):
-        username = str(integration.config["username"])
-    if not username:
-        username = _parse_aiostreams_username(auth)
-    client = AIOStreamsClient(api_base_url=api_base_url)
-    try:
-        stats = await client.get_stats(auth)
-    except AIOStreamsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
-    if username:
-        users = stats.get("users") if isinstance(stats, dict) else None
-        if not isinstance(users, dict) or username not in users:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="AIOStreams user not found in stats response",
-            )
-    return {"status": "ok"}
-
-
-@router.post(
-    "/aiostreams/disconnect",
-    summary="Disconnect AIOStreams Proxy",
-    description="Remove stored AIOStreams auth for the current user.",
-)
-async def aiostreams_disconnect(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    return await _disconnect_integration(
-        db,
-        current_user.id,
-        "aiostreams",
-        cleanup=_clear_aiostreams_profile,
-    )
-
-
-@router.post(
     "/stremio/login",
     summary="Connect Stremio",
     description="Login to Stremio and store the auth key for the current user.",
@@ -1431,10 +1295,6 @@ def _clear_anilist_profile(config: dict[str, object]) -> None:
     _clear_oauth_state(config)
 
 
-def _clear_aiostreams_profile(config: dict[str, object]) -> None:
-    config.pop("username", None)
-
-
 def _apply_stremio_profile(
     config: dict[str, object],
     user_payload: object,
@@ -1491,12 +1351,3 @@ def _format_stremio_error(error: StremioError) -> str:
     if response_body:
         return f"{message} (body={response_body})"
     return message
-
-
-def _parse_aiostreams_username(auth: str | None) -> str | None:
-    if not isinstance(auth, str):
-        return None
-    cleaned = auth.strip()
-    if not cleaned or ":" not in cleaned:
-        return None
-    return cleaned.split(":", 1)[0].strip() or None

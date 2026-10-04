@@ -115,6 +115,8 @@ def _build_item_from_payload(payload: dict) -> dict | None:
 
 
 def _event_source(event_type: str) -> str | None:
+    if event_type == "aiostreams_watch_state":
+        return "aiostreams"
     if event_type.endswith("_imported") or event_type.endswith("_blacklisted"):
         return event_type.split("_")[0]
     if event_type.startswith("manual_"):

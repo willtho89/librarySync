@@ -10,7 +10,8 @@
 
 - **Authentication**: Multi-user JWT cookies with optional registration toggle
 - **History Management**: Manual add, update, delete, bulk delete; optional deletion in integrations; mark next released episode of a show as watched
-- **Ratings**: 0.5–5.0 star ratings synced to supported providers
+- **Ratings**: History uses 0.5–5.0 stars; independent Watch State ratings retain 0–10 scores and decimals.
+- **AIOStreams Watch State v2**: Explicit watched marks, resume, watchlist/drop state, independent ratings, durable bulk marks, consent-based viewers, and diagnostics. The proxy importer is retired; historical records remain readable.
 - **Metadata Providers**: TMDB, TVDB, IMDb, TVMaze, Kitsu, MyAnimeList (per-user configuration)
 - **Metadata Pipeline**: Async lookup and enrichment (posters/IDs) with local cache reuse
 - **Import Sources**: Trakt, SIMKL, Letterboxd, Stremio (quick import and full import)
@@ -181,12 +182,18 @@ librarySync/
 ## 7) Worker Modes & Jobs
 
 ### Worker Modes
-Configured via `LIBRARYSYNC_WORKER_MODES`: `outbox`, `metadata`, `metadata_backfill`, `metadata_cache`, `quick_import`, `import_all`, `watchlist`, `merge_history`, `merge_all_history`
+Configured via `LIBRARYSYNC_WORKER_MODES`: `outbox`, `metadata`, `metadata_backfill`, `metadata_cache`, `quick_import`, `import_all`, `watch_state`, `watchlist`, `merge_history`, `merge_all_history`
 
 ### Job Types
 
 #### Outbox Processing (`process_outbox`)
-Handles job types: `push_watched`, `push_rating`, `update_history`, `remove_history`, `update_log_entry`, `delete_log_entry`, `remove_watched`, and internal `new_item_added`
+Handles job types: `push_watched`, `push_rating`, `remove_rating`, `update_history`, `remove_history`, `update_log_entry`, `delete_log_entry`, `remove_watched`, and internal `new_item_added`
+
+#### Watch State Inbox
+- `watch_state` drains durable bulk receipts and mapping retries.
+- Public addon routes serialize changes per user and enforce addon opt-in and viewer consent.
+- `WatchStateEntry` separates watched, playback, watchlist, drop and rating projections.
+- Database revision triggers invalidate complete snapshots for imports and direct SQL changes.
 
 #### Metadata Jobs
 - **`metadata_lookup`**: Resolves lookup requests into candidates

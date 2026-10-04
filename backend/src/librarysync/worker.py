@@ -15,6 +15,7 @@ from librarysync.jobs.metadata_backfill import process_metadata_backfill_once
 from librarysync.jobs.metadata_cache import process_metadata_cache_refresh_once
 from librarysync.jobs.metadata_lookup import process_metadata_lookups_once
 from librarysync.jobs.process_outbox import process_outbox_once
+from librarysync.jobs.watch_state import process_watch_state_once
 from librarysync.jobs.watchlist_refresh import process_watchlist_refresh_once
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class ModeConfig:
 
 
 MODE_CONFIGS: dict[str, ModeConfig] = {
+    "watch_state": ModeConfig("watch_state", process_watch_state_once, 1.0, 0.1),
     "outbox": ModeConfig("outbox", process_outbox_once, 0.5, 0.1),
     "metadata": ModeConfig("metadata", process_metadata_lookups_once, 1.0, 0.2),
     "metadata_backfill": ModeConfig("metadata_backfill", process_metadata_backfill_once, 30.0, 5.0),

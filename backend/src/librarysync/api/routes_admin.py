@@ -47,7 +47,6 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
 
 IMPORT_EVENT_PROVIDERS = {
-    "aiostreams",
     "anilist",
     "letterboxd",
     "simkl",
@@ -1137,7 +1136,7 @@ async def schedule_metadata_cache(
     description="Delete import history events for a provider to allow re-importing.",
 )
 async def reset_import_history(
-    provider: str = Query(..., description="Import provider (e.g., aiostreams)"),
+    provider: str = Query(..., description="Import provider (e.g., trakt)"),
     user_id: str | None = Query(
         None,
         description="Optional user id to scope the reset. Omit to reset all users.",

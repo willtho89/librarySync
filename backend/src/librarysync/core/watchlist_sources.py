@@ -364,6 +364,15 @@ async def reconcile_dropped_source(
             continue
         if watchlist_item.status != "dropped":
             continue
+        remaining_drop = await db.scalar(
+            select(WatchlistSourceItem.id).join(WatchlistSource).where(
+                WatchlistSourceItem.watchlist_item_id == watchlist_item_id,
+                WatchlistSource.source_type == PERSONAL_SOURCE_TYPE,
+                WatchlistSource.external_id == DROPPED_SOURCE_EXTERNAL_ID,
+            ).limit(1)
+        )
+        if remaining_drop:
+            continue
         watchlist_item.status = "added"
         watchlist_item.updated_at = now
         await log_watchlist_event(

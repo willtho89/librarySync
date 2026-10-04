@@ -285,8 +285,10 @@ def _build_manifest(
         manifest["resources"].append({"name": "watch_state", "types": ["movie", "series"]})
         manifest["watchState"] = {
             "version": 2,
-            "push": {"events": ["stop", "played", "unplayed"]},
-            "pull": {"items": True, "watched": True, "ttlSeconds": 300},
+            "push": {"events": ["start", "pause", "stop", "played", "unplayed", "watchlisted", "unwatchlisted",
+                                "dropped", "undropped", "rated", "unrated"], "bulk": True},
+            "pull": {"items": True, "watched": True, "watchlist": True, "ratings": True, "ttlSeconds": 300},
+            "viewers": True,
         }
     return manifest
 

@@ -92,7 +92,7 @@ async def test_opt_in_manifest_and_immediate_disable(context):
     assert updated.json()["watch_state_enabled"] is True
     manifest = (await client.get(f"{BASE}/manifest.json")).json()
     assert manifest["watchState"]["version"] == 2
-    assert manifest["watchState"]["push"]["events"] == ["stop", "played", "unplayed"]
+    assert {"start", "pause", "stop", "played", "unplayed"} <= set(manifest["watchState"]["push"]["events"])
     assert {"name": "watch_state", "types": ["movie", "series"]} in manifest["resources"]
     assert (await client.get("/api/stremio-addon/config")).json()["watch_state_enabled"] is True
     await client.post("/api/stremio-addon/config", json={"is_enabled": False})
@@ -283,7 +283,7 @@ async def test_unknown_addon_and_viewer_are_rejected(context):
 
 
 @pytest.mark.asyncio
-async def test_absolute_episode_is_rejected_without_guessing_season(context):
+async def test_absolute_episode_is_retained_without_guessing_season(context):
     client, db, _ = context
     response = await client.post(
         f"{BASE}/watch_state/push/series/kitsu:42323:7.json",
@@ -297,8 +297,10 @@ async def test_absolute_episode_is_rejected_without_guessing_season(context):
             "episode": 7,
         },
     )
-    assert response.status_code == 422
+    assert response.status_code == 204
     assert await db.scalar(select(func.count()).select_from(EpisodeItem)) == 0
+    pull = (await client.get(f"{BASE}/watch_state/pull.json")).json()
+    assert pull["watched"]["episodes"] == ["kitsu:42323:7"]
 
 
 def test_migration_keeps_existing_addons_opted_out():

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -679,6 +681,90 @@ class ProgressEvent(Base):
     )
 
 
+class WatchStateReceipt(Base):
+    """Durable protocol inbox. Payloads are private and never exposed by diagnostics."""
+
+    __tablename__ = "watch_state_receipts"
+    __table_args__ = (
+        UniqueConstraint("addon_id", "viewer", "entry_key", name="uq_watch_state_receipt_event"),
+        Index("ix_watch_state_receipt_user_received", "user_id", "received_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    addon_id: Mapped[str] = mapped_column(String(36), ForeignKey("stremio_addon_configs.id", ondelete="CASCADE"))
+    viewer: Mapped[str] = mapped_column(String(32), default="")
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    entry_key: Mapped[str] = mapped_column(String(64))
+    event: Mapped[str] = mapped_column(String(32))
+    media_type: Mapped[str] = mapped_column(String(16))
+    payload: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcomes: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    duplicates: Mapped[int] = mapped_column(Integer, default=0)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WatchStateEntry(Base):
+    """Current user state and removal tombstones, independent of historical watches."""
+
+    __tablename__ = "watch_state_entries"
+    __table_args__ = (
+        UniqueConstraint("user_id", "category", "target_key", name="uq_watch_state_entry_target"),
+        Index("ix_watch_state_entry_user_category_time", "user_id", "category", "occurred_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"))
+    category: Mapped[str] = mapped_column(String(16))
+    target_key: Mapped[str] = mapped_column(String(64))
+    media_type: Mapped[str] = mapped_column(String(16))
+    scope: Mapped[str] = mapped_column(String(16))
+    media_item_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("media_items.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    episode_item_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("episode_items.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    meta_id: Mapped[str] = mapped_column(String(255))
+    video_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    episode: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
+class WatchStateViewer(Base):
+    __tablename__ = "watch_state_viewers"
+    __table_args__ = (UniqueConstraint("addon_id", "viewer", name="uq_watch_state_viewer"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    addon_id: Mapped[str] = mapped_column(String(36), ForeignKey("stremio_addon_configs.id", ondelete="CASCADE"))
+    viewer: Mapped[str] = mapped_column(String(32))
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    invitation_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WatchStateRevision(Base):
+    __tablename__ = "watch_state_revisions"
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+
+
+class WatchStateCatalogRevision(Base):
+    __tablename__ = "watch_state_catalog_revision"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+
+
+class WatchStateSnapshot(Base):
+    __tablename__ = "watch_state_snapshots"
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    version: Mapped[str] = mapped_column(String(128))
+    payload: Mapped[dict] = mapped_column(JSON)
+    built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_pulled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class OutboxJob(Base):
     __tablename__ = "outbox"
     __table_args__ = (
@@ -754,3 +840,13 @@ class RateLimitBucket(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+@event.listens_for(Base.metadata, "after_create")
+def _install_watch_state_revisions(metadata, connection, **kwargs):
+    # Production migrations install these too. create_all-based tests get identical semantics.
+    from librarysync.db.watch_state_triggers import install_watch_state_triggers
+
+    if WatchStateEntry.__table__ not in kwargs.get("tables", ()):
+        return
+    install_watch_state_triggers(connection)

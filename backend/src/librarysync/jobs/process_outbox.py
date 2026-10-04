@@ -89,6 +89,7 @@ from librarysync.db.models import (
     OutboxJob,
     SyncAttempt,
     WatchedItem,
+    WatchStateEntry,
     WatchSync,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
@@ -140,10 +141,51 @@ class OutboxDispatcher:
         self._registry = registry
 
     async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        payload = job.payload or {}
+        if payload.get("state_entry_id"):
+            from librarysync.core.watch_state_events import utc
+            from librarysync.db.models import WatchStateEntry
+
+            entry = await db.get(WatchStateEntry, payload["state_entry_id"], with_for_update=True,
+                                 populate_existing=True)
+            if (not entry or entry.user_id != job.user_id
+                    or int(utc(entry.occurred_at).timestamp()) != payload.get("protocol_at")
+                    or entry.payload["event"] != payload.get("protocol_event")
+                    or entry.payload.get("rating") != payload.get("protocol_rating")):
+                return DeliveryResult(None, None)
+        elif await _superseded_history_rating(db, job):
+            return DeliveryResult(None, None)
         handler = self._registry.get(job.target_provider)
         if not handler:
             raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
         return await handler.deliver(db, job)
+
+
+async def _superseded_history_rating(db: AsyncSession, job: OutboxJob) -> bool:
+    """Independent ratings own supported scopes, including queued legacy writes."""
+    from librarysync.core.watch_state_ratings import RATING_SCOPES
+
+    payload = job.payload or {}
+    if (job.job_type != "push_rating" or payload.get("state_entry_id")
+            or job.target_provider not in RATING_SCOPES or not payload.get("watched_item_id")):
+        return False
+    watched = await db.get(WatchedItem, payload["watched_item_id"])
+    if not watched or watched.user_id != job.user_id:
+        return False
+    if watched.episode_item_id:
+        scope = "episode"
+        target = WatchStateEntry.episode_item_id == watched.episode_item_id
+    else:
+        media = await db.get(MediaItem, watched.media_item_id) if watched.media_item_id else None
+        scope = "movie" if media and media.media_type == "movie" else "series"
+        target = WatchStateEntry.media_item_id == watched.media_item_id
+    if scope not in RATING_SCOPES[job.target_provider]:
+        return False
+    entry = await db.scalar(select(WatchStateEntry).where(
+        WatchStateEntry.user_id == job.user_id, WatchStateEntry.category == "rating",
+        WatchStateEntry.scope == scope, target,
+    ).limit(1).with_for_update())
+    return entry is not None
 
 
 class LetterboxdOutboxHandler(OutboxHandler):
@@ -180,7 +222,7 @@ class TraktOutboxHandler(OutboxHandler):
         if job.job_type == "push_watched":
             response_code, external_id = await _deliver_trakt_watch(db, job)
             return DeliveryResult(response_code, external_id)
-        if job.job_type == "push_rating":
+        if job.job_type in {"push_rating", "remove_rating"}:
             response_code, external_id = await _deliver_trakt_rating(db, job)
             return DeliveryResult(response_code, external_id)
         if job.job_type == "push_watchlist":
@@ -205,7 +247,7 @@ class SimklOutboxHandler(OutboxHandler):
         if job.job_type == "push_watched":
             response_code, external_id = await _deliver_simkl_watch(db, job)
             return DeliveryResult(response_code, external_id)
-        if job.job_type == "push_rating":
+        if job.job_type in {"push_rating", "remove_rating"}:
             response_code, external_id = await _deliver_simkl_rating(db, job)
             return DeliveryResult(response_code, external_id)
         if job.job_type == "push_watchlist":
@@ -243,7 +285,7 @@ class PublicMetaDbOutboxHandler(OutboxHandler):
         if job.job_type == "push_watched":
             response_code, external_id = await _deliver_publicmetadb_watch(db, job)
             return DeliveryResult(response_code, external_id)
-        if job.job_type == "push_rating":
+        if job.job_type in {"push_rating", "remove_rating"}:
             response_code, external_id = await _deliver_publicmetadb_rating(db, job)
             return DeliveryResult(response_code, external_id)
         if job.job_type == "push_watchlist":
@@ -268,7 +310,7 @@ class AniListOutboxHandler(OutboxHandler):
         if job.job_type == "push_watched":
             response_code, external_id = await _deliver_anilist_watch(db, job)
             return DeliveryResult(response_code, external_id)
-        if job.job_type == "push_rating":
+        if job.job_type in {"push_rating", "remove_rating"}:
             response_code, external_id = await _deliver_anilist_rating(db, job)
             return DeliveryResult(response_code, external_id)
         if job.job_type == "remove_history":
@@ -372,7 +414,7 @@ async def _deliver_anilist_rating(
     rating = payload.get("rating")
     anilist_id = payload.get("anilist_id")
 
-    if not entry_id:
+    if not entry_id and not payload.get("state_entry_id"):
         raise AniListError("AniList entry ID is required for rating update")
     if not anilist_id:
         raise AniListError("AniList media ID is required")
@@ -388,6 +430,16 @@ async def _deliver_anilist_rating(
         raise AniListError("AniList access token is missing", status_code=401)
 
     client = AniListClient(access_token=access_token)
+
+    if payload.get("state_entry_id"):
+        viewer = await client.get_viewer()
+        existing = await client.get_media_list_entry(int(anilist_id), int(viewer["id"]))
+        if job.job_type == "remove_rating" and not existing:
+            return 200, None
+        status = existing.get("status", "PLANNING") if existing else "PLANNING"
+        score = 0 if job.job_type == "remove_rating" else payload["protocol_rating"]
+        result = await client.add_media_list_entry(media_id=int(anilist_id), status=status, score=score)
+        return 200, str(result["id"]) if result.get("id") else None
 
     # Convert rating from 0.5-5.0 to 0-10 scale
     anilist_score = convert_rating_to_anilist_scale(rating)
@@ -465,7 +517,8 @@ def _group_batchable_jobs(jobs: list[OutboxJob]) -> tuple[list[list[OutboxJob]],
     grouped: dict[tuple[str, str, str], list[OutboxJob]] = {}
     remaining: list[OutboxJob] = []
     for job in jobs:
-        if job.target_provider in BATCHABLE_PROVIDERS and job.job_type in BATCHABLE_JOB_TYPES:
+        if (job.target_provider in BATCHABLE_PROVIDERS and job.job_type in BATCHABLE_JOB_TYPES
+                and not (job.payload or {}).get("state_entry_id")):
             key = (job.user_id, job.target_provider, job.job_type)
             grouped.setdefault(key, []).append(job)
         else:
@@ -528,7 +581,9 @@ async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
     error_message: str | None = None
 
     try:
-        response_code = await _deliver_batch(db, jobs)
+        deliveries = [job for job in jobs if not await _superseded_history_rating(db, job)]
+        if deliveries:
+            response_code = await _deliver_batch(db, deliveries)
     except LetterboxdError as exc:
         response_code = exc.status_code
         error_message = _format_letterboxd_error(exc)
@@ -1176,7 +1231,8 @@ async def _deliver_trakt_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | 
 
 async def _deliver_trakt_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
-    rating = _normalize_trakt_rating(payload.get("rating"))
+    clear = job.job_type == "remove_rating"
+    rating = None if clear else _normalize_trakt_rating(payload.get("rating"))
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
     if not integration or not secret_data:
         raise TraktError("Trakt credentials are missing", status_code=401)
@@ -1191,7 +1247,10 @@ async def _deliver_trakt_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
     )
     access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
     ratings_payload = _build_trakt_rating_payload(payload, rating)
-    response, response_code = await client.add_ratings(ratings_payload, access_token)
+    if clear:
+        response, response_code = await client.remove_ratings(ratings_payload, access_token)
+    else:
+        response, response_code = await client.add_ratings(ratings_payload, access_token)
     external_id = _extract_trakt_history_id(response, _coerce_str(payload.get("media_type")))
     return response_code, external_id
 
@@ -1392,7 +1451,8 @@ async def _deliver_simkl_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | 
 
 async def _deliver_simkl_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
-    rating = _normalize_simkl_rating(payload.get("rating"))
+    clear = job.job_type == "remove_rating"
+    rating = None if clear else _normalize_simkl_rating(payload.get("rating"))
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
     if not integration or not secret_data:
         raise SimklError("SIMKL credentials are missing", status_code=401)
@@ -1407,7 +1467,10 @@ async def _deliver_simkl_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
     )
     access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
     ratings_payload = _build_simkl_rating_payload(payload, rating)
-    response, response_code = await client.add_ratings(ratings_payload, access_token)
+    if clear:
+        response, response_code = await client.remove_ratings(ratings_payload, access_token)
+    else:
+        response, response_code = await client.add_ratings(ratings_payload, access_token)
     external_id = _extract_simkl_history_id(response)
     return response_code, external_id
 
@@ -1938,12 +2001,13 @@ async def _deliver_publicmetadb_rating(
     if tmdb_id is None:
         raise ValueError("PublicMetaDB rating sync requires a TMDB ID")
     media_type = _normalize_publicmetadb_media_type(payload)
-    score = _normalize_publicmetadb_rating(payload.get("rating"))
+    clear = job.job_type == "remove_rating"
+    score = None if clear else _normalize_publicmetadb_rating(payload.get("rating"))
     label = _normalize_publicmetadb_label(payload.get("label"))
     season_number = _coerce_int(payload.get("season_number"))
     episode_number = _coerce_int(payload.get("episode_number"))
     client, api_key = await _load_publicmetadb_client(db, job.user_id)
-    if media_type == "tv":
+    if media_type == "tv" and payload.get("rating_scope", "episode") == "episode":
         if season_number is None or episode_number is None:
             raise ValueError(
                 "PublicMetaDB TV rating sync requires season_number and episode_number"
@@ -1959,6 +2023,8 @@ async def _deliver_publicmetadb_rating(
         )
         if existing_id:
             await client.delete_episode_rating(api_key, existing_id)
+        if clear:
+            return 200, None
         try:
             _response_payload, response_code = await client.create_episode_rating(
                 api_key,
@@ -1993,6 +2059,8 @@ async def _deliver_publicmetadb_rating(
     )
     if existing_id:
         await client.delete_rating(api_key, existing_id)
+    if clear:
+        return 200, None
     try:
         _response_payload, response_code = await client.create_rating(
             api_key,
@@ -2746,20 +2814,25 @@ def _build_simkl_remove_payload(payload: dict[str, object]) -> dict[str, Any]:
     raise ValueError("SIMKL remove requires show or episode ids")
 
 
-def _build_trakt_rating_payload(payload: dict[str, object], rating: int) -> dict[str, Any]:
+def _build_trakt_rating_payload(payload: dict[str, object], rating: int | None) -> dict[str, Any]:
+    score = {"rating": rating} if rating is not None else {}
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     if media_type == "movie":
         movie_ids = _normalize_trakt_ids(payload.get("movie_ids"))
         if not movie_ids:
             raise ValueError("Trakt rating requires movie ids")
-        return {"movies": [{"ids": movie_ids, "rating": rating}]}
+        return {"movies": [{"ids": movie_ids, **score}]}
 
     show_ids = _normalize_trakt_ids(payload.get("show_ids"))
     episode_ids = _normalize_trakt_ids(payload.get("episode_ids"))
     season_number = _coerce_int(payload.get("season_number"))
     episode_number = _coerce_int(payload.get("episode_number"))
+    if show_ids and payload.get("rating_scope") == "series":
+        return {"shows": [{"ids": show_ids, **score}]}
+    if show_ids and payload.get("rating_scope") == "season" and season_number is not None:
+        return {"shows": [{"ids": show_ids, "seasons": [{"number": season_number, **score}]}]}
     if episode_ids:
-        return {"episodes": [{"ids": episode_ids, "rating": rating}]}
+        return {"episodes": [{"ids": episode_ids, **score}]}
     if show_ids and season_number is not None and episode_number is not None:
         return {
             "shows": [
@@ -2768,7 +2841,7 @@ def _build_trakt_rating_payload(payload: dict[str, object], rating: int) -> dict
                     "seasons": [
                         {
                             "number": season_number,
-                            "episodes": [{"number": episode_number, "rating": rating}],
+                            "episodes": [{"number": episode_number, **score}],
                         }
                     ],
                 }
@@ -2777,20 +2850,23 @@ def _build_trakt_rating_payload(payload: dict[str, object], rating: int) -> dict
     raise ValueError("Trakt rating requires show or episode ids")
 
 
-def _build_simkl_rating_payload(payload: dict[str, object], rating: int) -> dict[str, Any]:
+def _build_simkl_rating_payload(payload: dict[str, object], rating: int | None) -> dict[str, Any]:
+    score = {"rating": rating} if rating is not None else {}
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     if media_type == "movie":
         movie_ids = _normalize_simkl_ids(payload.get("movie_ids"))
         if not movie_ids:
             raise ValueError("SIMKL rating requires movie ids")
-        return {"movies": [{"ids": movie_ids, "rating": rating}]}
+        return {"movies": [{"ids": movie_ids, **score}]}
 
     show_ids = _normalize_simkl_ids(payload.get("show_ids"))
     episode_ids = _normalize_simkl_ids(payload.get("episode_ids"))
     season_number = _coerce_int(payload.get("season_number"))
     episode_number = _coerce_int(payload.get("episode_number"))
+    if show_ids and payload.get("rating_scope") == "series":
+        return {"shows": [{"ids": show_ids, **score}]}
     if episode_ids:
-        return {"episodes": [{"ids": episode_ids, "rating": rating}]}
+        return {"episodes": [{"ids": episode_ids, **score}]}
     if show_ids and season_number is not None and episode_number is not None:
         return {
             "shows": [
@@ -2799,7 +2875,7 @@ def _build_simkl_rating_payload(payload: dict[str, object], rating: int) -> dict
                     "seasons": [
                         {
                             "number": season_number,
-                            "episodes": [{"number": episode_number, "rating": rating}],
+                            "episodes": [{"number": episode_number, **score}],
                         }
                     ],
                 }

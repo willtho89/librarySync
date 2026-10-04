@@ -8,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.config import settings
-from librarysync.connectors.services.aiostreams_proxy import has_required_aiostreams_fields
 from librarysync.connectors.services.anilist import has_required_anilist_fields
 from librarysync.connectors.services.letterboxd import has_required_letterboxd_fields
 from librarysync.connectors.services.publicmetadb import has_required_publicmetadb_fields
@@ -29,7 +28,6 @@ IMPORT_ALL_PRIORITY = (
     "publicmetadb",
     "anilist",
     "stremio",
-    "aiostreams",
 )
 DEFAULT_IMPORT_QUEUE_ORDER = (
     "trakt",
@@ -38,7 +36,6 @@ DEFAULT_IMPORT_QUEUE_ORDER = (
     "publicmetadb",
     "anilist",
     "stremio",
-    "aiostreams",
 )
 
 IMPORT_ALL_STATUS_PENDING = "pending"
@@ -199,9 +196,6 @@ async def load_import_ready_providers(db: AsyncSession, user_id: str) -> list[st
             if not settings.anilist_client_id or not settings.anilist_client_secret:
                 continue
             if not has_required_anilist_fields(secret_data):
-                continue
-        elif provider == "aiostreams":
-            if not has_required_aiostreams_fields(secret_data):
                 continue
         else:
             continue
