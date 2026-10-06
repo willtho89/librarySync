@@ -23,6 +23,23 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.13", "3.14"]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: librarysync
+          POSTGRES_PASSWORD: librarysync
+          POSTGRES_DB: librarysync_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U librarysync -d librarysync_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # Enables the PostgreSQL-gated tests; they create and drop their own schemas.
+      WATCH_STATE_TEST_DATABASE_URL: postgresql+psycopg://librarysync:librarysync@localhost:5432/librarysync_test
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -41,3 +58,50 @@ jobs:
 
       - name: Pytest
         run: uv run python -m pytest backend/tests -ra
+
+  migrations:
+    name: Alembic migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: librarysync
+          POSTGRES_PASSWORD: librarysync
+          POSTGRES_DB: librarysync
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U librarysync -d librarysync"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://librarysync:librarysync@localhost:5432/librarysync
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      - name: Upgrade to head
+        run: uv run alembic upgrade head
+
+      - name: Check models match migrations
+        run: uv run alembic check
+
+      - name: Downgrade to base
+        run: uv run alembic downgrade base
+
+      - name: Upgrade to head again
+        run: uv run alembic upgrade head
