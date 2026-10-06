@@ -23,6 +23,7 @@ from librarysync.connectors.services.letterboxd import (
 )
 from librarysync.core.catalog_ordering import CatalogOrderBy
 from librarysync.core.http_client import get_http_client
+from librarysync.core.integration_tokens import ensure_letterboxd_access_token
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_providers import MetadataProviderService
 from librarysync.core.watchlist_links import (
@@ -1044,7 +1045,8 @@ async def _build_letterboxd_client(
         client_secret=str(secret_data.get("client_secret")),
         refresh_token=str(secret_data.get("refresh_token")),
     )
-    access_token = await client.refresh_access_token()
+    # Letterboxd rotates refresh tokens, so the refreshed token must be persisted.
+    access_token = await ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     return client, access_token
 
 
