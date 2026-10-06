@@ -1,0 +1,9 @@
+# Install with `uvx pre-commit install`. Keep `rev` in sync with the ruff version in uv.lock.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+        types_or: [python, pyi]

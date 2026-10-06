@@ -2,15 +2,44 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Supersede outdated PR runs, but let every main commit finish so release.py can rely on its result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint-test:
+    name: Lint & test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.13", "3.14"]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: librarysync
+          POSTGRES_PASSWORD: librarysync
+          POSTGRES_DB: librarysync_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U librarysync -d librarysync_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # Enables the PostgreSQL-gated tests; they create and drop their own schemas.
+      WATCH_STATE_TEST_DATABASE_URL: postgresql+psycopg://librarysync:librarysync@localhost:5432/librarysync_test
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -22,11 +51,119 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv sync --group dev
+        run: uv sync --locked --group dev
 
       - name: Ruff
-        run: uv run ruff check backend/src backend/tests
+        run: uv run ruff check backend/src backend/tests scripts
 
       - name: Pytest
-        run: uv run python -m pytest backend/tests
+        run: uv run python -m pytest backend/tests -ra
+
+  migrations:
+    name: Alembic migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: librarysync
+          POSTGRES_PASSWORD: librarysync
+          POSTGRES_DB: librarysync
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U librarysync -d librarysync"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://librarysync:librarysync@localhost:5432/librarysync
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      - name: Upgrade to head
+        run: uv run alembic upgrade head
+
+      - name: Check models match migrations
+        run: uv run alembic check
+
+      - name: Downgrade to base
+        run: uv run alembic downgrade base
+
+      - name: Upgrade to head again
+        run: uv run alembic upgrade head
+
+  frontend:
+    name: Frontend CSS
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build CSS
+        working-directory: frontend
+        run: npm run build:css
+
+      - name: Check committed CSS is up to date
+        run: |
+          if ! git diff --exit-code -- backend/src/librarysync/static/styles.css; then
+            echo "::error::styles.css is stale; run 'npm run build:css' in frontend/ and commit the result."
+            exit 1
+          fi
+
+  docker:
+    name: Docker image
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: false
+          load: true
+          tags: librarysync:ci
+          cache-from: type=gha,scope=librarysync-ci
+          cache-to: type=gha,mode=max,scope=librarysync-ci
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: librarysync:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          # Report only for now; switch to "1" to block PRs on fixable findings.
+          exit-code: "0"
