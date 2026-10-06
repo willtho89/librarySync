@@ -408,6 +408,95 @@ async function requestJSON(path, options = {}) {
   return data;
 }
 
+function createAbortError() {
+  try {
+    return new DOMException("The operation was aborted.", "AbortError");
+  } catch (error) {
+    const abortError = new Error("The operation was aborted.");
+    abortError.name = "AbortError";
+    return abortError;
+  }
+}
+
+function isAbortError(error) {
+  return Boolean(error && error.name === "AbortError");
+}
+
+function waitWithSignal(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(createAbortError());
+    };
+    const timer = window.setTimeout(() => {
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      resolve();
+    }, ms);
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+const METADATA_LOOKUP_TIMEOUT_MESSAGE =
+  "Lookup timed out — is the metadata worker running?";
+
+// Polls an async metadata lookup until it completes, fails, times out or is aborted.
+// Resolves with the completed lookup payload. Rejects with an Error whose `code` is
+// "failed" or "timeout", with request errors from requestJSON, or with an AbortError
+// when `signal` aborts. `onUpdate` receives each still-pending payload (partial results).
+async function pollMetadataLookup(lookupId, options = {}) {
+  const {
+    timeoutMs = 60000,
+    initialDelayMs = 1200,
+    maxDelayMs = 5000,
+    backoffFactor = 1.5,
+    onUpdate = null,
+    signal = null,
+  } = options;
+  const deadline = Date.now() + timeoutMs;
+  let delayMs = initialDelayMs;
+  while (true) {
+    if (signal && signal.aborted) {
+      throw createAbortError();
+    }
+    const data = await requestJSON(`/api/metadata/lookup/${encodeURIComponent(lookupId)}`, {
+      signal: signal || undefined,
+    });
+    if (signal && signal.aborted) {
+      throw createAbortError();
+    }
+    const status = data && data.status;
+    if (status === "completed") {
+      return data;
+    }
+    if (status === "failed") {
+      const failure = new Error((data && data.error) || "Lookup failed.");
+      failure.code = "failed";
+      failure.lookup = data;
+      throw failure;
+    }
+    if (typeof onUpdate === "function") {
+      onUpdate(data);
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      const timeout = new Error(METADATA_LOOKUP_TIMEOUT_MESSAGE);
+      timeout.code = "timeout";
+      timeout.lookup = data;
+      throw timeout;
+    }
+    await waitWithSignal(Math.min(delayMs, remainingMs), signal);
+    delayMs = Math.min(maxDelayMs, Math.round(delayMs * backoffFactor));
+  }
+}
+
 async function loadCurrentUser() {
   if (authState.loaded) {
     return authState.user;

@@ -12,7 +12,7 @@ const addonState = {
   items: [],
   candidates: [],
   lookupId: null,
-  lookupTimer: null,
+  lookupController: null,
   installLinks: {
     manifestUrl: "",
     installUrl: "",
@@ -775,13 +775,14 @@ function resetCustomLookupUI() {
   }
   addonState.candidates = [];
   addonState.lookupId = null;
+  cancelCustomLookupPolling();
   setMessage("custom-catalog-items-message", "");
 }
 
-function clearCustomLookupTimer() {
-  if (addonState.lookupTimer) {
-    window.clearTimeout(addonState.lookupTimer);
-    addonState.lookupTimer = null;
+function cancelCustomLookupPolling() {
+  if (addonState.lookupController) {
+    addonState.lookupController.abort();
+    addonState.lookupController = null;
   }
 }
 
@@ -865,26 +866,8 @@ function renderCustomCandidates(candidates) {
   setMessage("custom-catalog-items-message", "");
 }
 
-async function pollCustomLookupStatus(lookupId) {
-  try {
-    const data = await requestJSON(`/api/metadata/lookup/${lookupId}`);
-    if (data.status === "completed") {
-      renderCustomCandidates(data.candidates || []);
-      return;
-    }
-    if (data.status === "failed") {
-      setMessage("custom-catalog-items-message", data.error || "Lookup failed.", true);
-      return;
-    }
-    addonState.lookupTimer = window.setTimeout(() => pollCustomLookupStatus(lookupId), 1500);
-  } catch (error) {
-    setMessage("custom-catalog-items-message", error.message, true);
-  }
-}
-
 async function handleCustomLookupSubmit(data) {
   resetCustomLookupUI();
-  clearCustomLookupTimer();
   const query = (data.get("query") || "").trim();
   if (!query) {
     setMessage("custom-catalog-items-message", "Enter a title or ID to search.", true);
@@ -893,16 +876,29 @@ async function handleCustomLookupSubmit(data) {
   const catalog = addonState.customCatalogs.find(
     (entry) => entry.id === addonState.selectedCatalogId
   );
+  const controller = new AbortController();
+  addonState.lookupController = controller;
   try {
     setMessage("custom-catalog-items-message", "Searching...");
     const response = await requestJSON("/api/metadata/lookup", {
       method: "POST",
       body: JSON.stringify({ query, search_scope: catalogSearchScope(catalog) }),
+      signal: controller.signal,
     });
     addonState.lookupId = response.lookup_id;
-    await pollCustomLookupStatus(response.lookup_id);
+    const result = await pollMetadataLookup(response.lookup_id, {
+      signal: controller.signal,
+    });
+    renderCustomCandidates(result.candidates || []);
   } catch (error) {
+    if (isAbortError(error)) {
+      return;
+    }
     setMessage("custom-catalog-items-message", error.message, true);
+  } finally {
+    if (addonState.lookupController === controller) {
+      addonState.lookupController = null;
+    }
   }
 }
 

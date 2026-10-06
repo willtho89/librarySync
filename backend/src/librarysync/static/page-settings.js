@@ -3021,15 +3021,15 @@ function startMaintenanceAutoRefresh() {
 
 const blacklistState = {
   lookupId: null,
-  timer: null,
+  pollController: null,
   candidates: [],
   entries: [],
 };
 
-function clearBlacklistLookupTimer() {
-  if (blacklistState.timer) {
-    window.clearTimeout(blacklistState.timer);
-    blacklistState.timer = null;
+function cancelBlacklistLookupPolling() {
+  if (blacklistState.pollController) {
+    blacklistState.pollController.abort();
+    blacklistState.pollController = null;
   }
 }
 
@@ -3049,39 +3049,35 @@ function resetBlacklistLookupUI() {
 
 async function handleBlacklistLookupSubmit(data) {
   resetBlacklistLookupUI();
-  clearBlacklistLookupTimer();
+  cancelBlacklistLookupPolling();
   const query = (data.get("query") || "").trim();
   if (!query) {
     setMessage("blacklist-lookup-message", "Enter a TV show name or ID to search.", true);
     return;
   }
+  const controller = new AbortController();
+  blacklistState.pollController = controller;
   try {
     setMessage("blacklist-lookup-message", "Searching...");
     const response = await requestJSON("/api/metadata/lookup", {
       method: "POST",
       body: JSON.stringify({ query, search_scope: "tv" }),
+      signal: controller.signal,
     });
     blacklistState.lookupId = response.lookup_id;
-    await pollBlacklistLookupStatus(response.lookup_id);
+    const result = await pollMetadataLookup(response.lookup_id, {
+      signal: controller.signal,
+    });
+    renderBlacklistCandidates(result.candidates || []);
   } catch (error) {
-    setMessage("blacklist-lookup-message", error.message, true);
-  }
-}
-
-async function pollBlacklistLookupStatus(lookupId) {
-  try {
-    const data = await requestJSON(`/api/metadata/lookup/${lookupId}`);
-    if (data.status === "completed") {
-      renderBlacklistCandidates(data.candidates || []);
+    if (isAbortError(error)) {
       return;
     }
-    if (data.status === "failed") {
-      setMessage("blacklist-lookup-message", data.error || "Lookup failed.", true);
-      return;
-    }
-    blacklistState.timer = window.setTimeout(() => pollBlacklistLookupStatus(lookupId), 1500);
-  } catch (error) {
     setMessage("blacklist-lookup-message", error.message, true);
+  } finally {
+    if (blacklistState.pollController === controller) {
+      blacklistState.pollController = null;
+    }
   }
 }
 
