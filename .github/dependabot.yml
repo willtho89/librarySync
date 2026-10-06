@@ -10,8 +10,46 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
+    groups:
+      github-actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
-  - package-ecosystem: "pip"
+  # uv workspace: root pyproject.toml + uv.lock, member in backend/.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "docker"
     directory: "/backend"
     schedule:
       interval: "weekly"
@@ -21,4 +59,8 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-
+    groups:
+      docker-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
