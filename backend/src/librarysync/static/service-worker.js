@@ -89,6 +89,16 @@ function orNetworkError(response) {
   return response || Response.error();
 }
 
+function ensureOfflinePage() {
+  // Logging out clears every librarysync cache; restore the offline fallback lazily.
+  return caches
+    .open(CACHE_NAME)
+    .then((cache) =>
+      cache.match(OFFLINE_URL).then((cached) => cached || cache.add(OFFLINE_URL)),
+    )
+    .catch(() => {});
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
@@ -142,6 +152,7 @@ self.addEventListener("fetch", (event) => {
           if (isAppPage) {
             putInCache(event.request, response);
           }
+          event.waitUntil(ensureOfflinePage());
           return response;
         })
         .catch(() =>
