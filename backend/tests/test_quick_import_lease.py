@@ -42,6 +42,8 @@ def _mock_db(integrations: list[Integration]) -> MagicMock:
     db = MagicMock()
     result = MagicMock()
     result.scalars.return_value.all.return_value = integrations
+    # The claim first scans (id, config) rows unlocked, then locks the due ones.
+    result.all.return_value = [(integration.id, integration.config) for integration in integrations]
     db.execute = AsyncMock(return_value=result)
     return db
 

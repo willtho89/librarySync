@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable
 
 from sqlalchemy import select
@@ -51,6 +51,13 @@ IMPORT_ALL_REQUESTED_KEY = "import_all_requested_at"
 IMPORT_ALL_STARTED_KEY = "import_all_started_at"
 IMPORT_ALL_COMPLETED_KEY = "import_all_completed_at"
 IMPORT_ALL_ERROR_KEY = "import_all_error"
+IMPORT_ALL_LEASE_OWNER_KEY = "import_all_lease_owner"
+IMPORT_ALL_LEASE_UNTIL_KEY = "import_all_lease_until"
+
+# A full import of one provider can run for a long time; the lease is renewed
+# at every provider step and only lets another worker take over a run whose
+# owner stopped making progress.
+IMPORT_ALL_LEASE_SECONDS = 2 * 60 * 60
 
 IMPORT_ALL_ACTIVE_STATUSES = {
     IMPORT_ALL_STATUS_PENDING,
@@ -109,15 +116,38 @@ def mark_import_all_started(config: dict | None, started_at: datetime) -> dict:
     return updated
 
 
-def mark_import_all_completed(config: dict | None, completed_at: datetime) -> dict:
+def import_all_lease_blocked(config: dict | None, now: datetime, owner: str) -> bool:
+    """Return True when another worker holds a live lease on the run."""
+    config = config or {}
+    lease_until = parse_datetime(config.get(IMPORT_ALL_LEASE_UNTIL_KEY))
+    if not lease_until or lease_until <= now:
+        return False
+    return str(config.get(IMPORT_ALL_LEASE_OWNER_KEY) or "") != owner
+
+
+def mark_import_all_lease(config: dict | None, owner: str, now: datetime) -> dict:
     updated = dict(config or {})
+    updated[IMPORT_ALL_LEASE_OWNER_KEY] = owner
+    updated[IMPORT_ALL_LEASE_UNTIL_KEY] = (now + timedelta(seconds=IMPORT_ALL_LEASE_SECONDS)).isoformat()
+    return updated
+
+
+def _clear_import_all_lease(config: dict | None) -> dict:
+    updated = dict(config or {})
+    updated.pop(IMPORT_ALL_LEASE_OWNER_KEY, None)
+    updated.pop(IMPORT_ALL_LEASE_UNTIL_KEY, None)
+    return updated
+
+
+def mark_import_all_completed(config: dict | None, completed_at: datetime) -> dict:
+    updated = _clear_import_all_lease(config)
     updated[IMPORT_ALL_STATUS_KEY] = IMPORT_ALL_STATUS_COMPLETED
     updated[IMPORT_ALL_COMPLETED_KEY] = completed_at.isoformat()
     return updated
 
 
 def mark_import_all_failed(config: dict | None, failed_at: datetime, error: str) -> dict:
-    updated = dict(config or {})
+    updated = _clear_import_all_lease(config)
     updated[IMPORT_ALL_STATUS_KEY] = IMPORT_ALL_STATUS_FAILED
     updated[IMPORT_ALL_COMPLETED_KEY] = failed_at.isoformat()
     updated[IMPORT_ALL_ERROR_KEY] = error

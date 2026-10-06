@@ -17,8 +17,10 @@ from librarysync.core.import_all import (
     IMPORT_ALL_STATUS_PENDING,
     build_import_all_queue,
     import_all_active,
+    import_all_lease_blocked,
     mark_import_all_completed,
     mark_import_all_failed,
+    mark_import_all_lease,
     mark_import_all_started,
     parse_import_all_state,
 )
@@ -154,11 +156,27 @@ async def _claim_quick_import_runs(db: AsyncSession, limit: int) -> list[Integra
     owner = worker_instance_id()
     candidate_limit = max(limit * 5, limit)
     async with db.begin():
-        result = await db.execute(
-            select(Integration)
+        # Pick due runs from an unlocked scan first: runs that are not due (e.g. with
+        # the schedule disabled) never get updated_at bumped, so a plain "oldest N"
+        # window would fill up with them and starve every other user.
+        scan = await db.execute(
+            select(Integration.id, Integration.config)
             .where(Integration.provider == IMPORT_ALL_PROVIDER)
             .order_by(Integration.updated_at)
-            .limit(candidate_limit)
+        )
+        due_ids = [
+            run_id
+            for run_id, config in scan.all()
+            if not import_all_active(config)
+            and should_run_quick_import(config, now)
+            and not quick_import_lease_blocked(config, now, owner)
+        ][:candidate_limit]
+        if not due_ids:
+            return []
+        result = await db.execute(
+            select(Integration)
+            .where(Integration.id.in_(due_ids))
+            .order_by(Integration.updated_at)
             .with_for_update(skip_locked=True)
         )
         runs: list[Integration] = []
@@ -196,6 +214,7 @@ async def _claim_quick_import_runs(db: AsyncSession, limit: int) -> list[Integra
 
 
 async def _claim_import_all_runs(db: AsyncSession, limit: int) -> list[Integration]:
+    owner = worker_instance_id()
     async with db.begin():
         result = await db.execute(
             select(Integration)
@@ -207,14 +226,18 @@ async def _claim_import_all_runs(db: AsyncSession, limit: int) -> list[Integrati
                 .in_([IMPORT_ALL_STATUS_PENDING, IMPORT_ALL_STATUS_IN_PROGRESS]),
             )
             .order_by(Integration.updated_at)
-            .limit(limit)
             .with_for_update(skip_locked=True)
         )
-        runs = result.scalars().all()
+        now = datetime.now(timezone.utc)
+        # Single-flight across workers: skip runs another live worker is importing.
+        runs = [
+            run for run in result.scalars().all() if not import_all_lease_blocked(run.config, now, owner)
+        ][:limit]
         if not runs:
             return []
-        now = datetime.now(timezone.utc)
         for run in runs:
+            run.config = mark_import_all_lease(run.config, owner, now)
+            run.updated_at = now
             state = parse_import_all_state(run.config)
             if state.status == IMPORT_ALL_STATUS_PENDING:
                 config = mark_import_all_started(run.config, now)
