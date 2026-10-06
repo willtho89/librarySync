@@ -10,6 +10,8 @@ const historyState = {
     orderDir: "desc",
   },
   searchTimer: null,
+  requestVersion: 0,
+  loadController: null,
 };
 
 let historyUiBound = false;
@@ -466,16 +468,34 @@ async function loadHistory() {
     return;
   }
   bindHistoryUi();
+  // Only the most recent request may render; abort and ignore older ones.
+  const requestVersion = historyState.requestVersion + 1;
+  historyState.requestVersion = requestVersion;
+  if (historyState.loadController) {
+    historyState.loadController.abort();
+  }
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  historyState.loadController = controller;
   container.textContent = "Loading...";
   const params = buildHistoryQueryParams();
   let data = null;
   try {
-    data = await requestJSON(`/api/history/items?${params.toString()}`);
+    data = await requestJSON(`/api/history/items?${params.toString()}`, {
+      signal: controller ? controller.signal : undefined,
+    });
   } catch (error) {
+    if (requestVersion !== historyState.requestVersion || error.name === "AbortError") {
+      return;
+    }
+    historyState.loadController = null;
     setMessage("history-message", error.message, true);
     container.textContent = "Unable to load history.";
     return;
   }
+  if (requestVersion !== historyState.requestVersion) {
+    return;
+  }
+  historyState.loadController = null;
   const items = data && data.items ? data.items : [];
   const total = data && typeof data.total === "number" ? data.total : items.length;
   historyState.total = total;
