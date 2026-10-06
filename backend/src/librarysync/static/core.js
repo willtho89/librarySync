@@ -660,18 +660,33 @@ function showToast(message, isError = false, duration = 3000) {
     return;
   }
 
+  // Build the toast from DOM nodes: messages can contain server-provided text,
+  // so they must never be parsed as HTML.
   const toast = document.createElement("div");
   toast.className = `toast ${isError ? "toast-error" : "toast-success"}`;
-  toast.innerHTML = `
-    <div class="toast-content">
-      <span class="toast-icon">${isError ? "⚠️" : "✓"}</span>
-      <span class="toast-message">${message}</span>
-    </div>
-    <button class="toast-close" aria-label="Close notification">×</button>
-  `;
+
+  const content = document.createElement("div");
+  content.className = "toast-content";
+  const icon = document.createElement("span");
+  icon.className = "toast-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = isError ? "⚠️" : "✓";
+  const text = document.createElement("span");
+  text.className = "toast-message";
+  text.textContent = message === null || message === undefined ? "" : String(message);
+  content.appendChild(icon);
+  content.appendChild(text);
+
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "toast-close";
+  closeButton.setAttribute("aria-label", "Close notification");
+  closeButton.textContent = "×";
+
+  toast.appendChild(content);
+  toast.appendChild(closeButton);
 
   // Add close button functionality
-  const closeButton = toast.querySelector(".toast-close");
   closeButton.addEventListener("click", () => {
     toast.remove();
   });
