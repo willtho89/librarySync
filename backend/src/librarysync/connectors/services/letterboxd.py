@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from librarysync.connectors.services.pagination import PagedEntries
 from librarysync.core.http_client import get_http_client
 
 DEFAULT_LETTERBOXD_API_BASE_URL = "https://api.letterboxd.com/api/v0"
@@ -622,7 +623,7 @@ class LetterboxdClient:
                 if exc.status_code in {400, 404}:
                     continue
                 raise
-            entries: list[dict[str, Any]] = []
+            entries = PagedEntries()
             cursor: str | None = None
             for page_index in range(max_pages):
                 if page_index > 0:
@@ -639,6 +640,8 @@ class LetterboxdClient:
                 cursor = _extract_next_cursor(payload)
                 if not cursor:
                     break
+            else:
+                entries.truncated = True
             return entries
         if last_error:
             raise last_error
@@ -682,7 +685,7 @@ class LetterboxdClient:
                 if exc.status_code in {400, 404}:
                     continue
                 raise
-            entries: list[dict[str, Any]] = []
+            entries = PagedEntries()
             cursor: str | None = None
             for page_index in range(max_pages):
                 if page_index > 0:
@@ -697,6 +700,8 @@ class LetterboxdClient:
                 cursor = _extract_next_cursor(payload)
                 if not cursor:
                     break
+            else:
+                entries.truncated = True
             return entries
         if last_error:
             raise last_error

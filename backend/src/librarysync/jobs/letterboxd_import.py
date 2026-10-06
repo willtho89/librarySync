@@ -232,6 +232,8 @@ async def _import_watchlist_for_integration(
                 candidate = _build_watchlist_candidate(entry)
                 if candidate:
                     candidates.append(candidate)
+            # A page-capped listing is incomplete; never reconcile removals against it.
+            complete = not getattr(entries, "truncated", False)
             if candidates:
                 imported += await process_watchlist_candidates(
                     db,
@@ -240,9 +242,10 @@ async def _import_watchlist_for_integration(
                     source,
                     candidates,
                     now=now,
+                    reconcile=complete,
                 )
                 candidates = []
-            elif not entries:
+            elif not entries and complete:
                 await reconcile_watchlist_source(
                     db,
                     source,
@@ -298,6 +301,7 @@ async def _import_watchlist_for_integration(
                 source,
                 candidates,
                 now=now,
+                reconcile=not getattr(list_entries, "truncated", False),
             )
             candidates = []
     return imported

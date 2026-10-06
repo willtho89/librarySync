@@ -564,6 +564,9 @@ async def _import_watchlist_for_integration(
             continue
         candidates: list[WatchlistCandidate] = []
         total_entries = 0
+        # A failed category fetch leaves the listing incomplete; reconciling
+        # against it would delete that category's watchlist items.
+        complete = True
         for category in ("movies", "shows", "anime"):
             payload = await _fetch_all_items_cached(
                 client,
@@ -573,6 +576,7 @@ async def _import_watchlist_for_integration(
                 user_id=integration.user_id,
             )
             if payload is None:
+                complete = False
                 continue
             entries = _extract_all_items_entries(payload, category, WATCHLIST_STATUSES)
             total_entries += len(entries)
@@ -592,8 +596,9 @@ async def _import_watchlist_for_integration(
                 source,
                 candidates,
                 now=now,
+                reconcile=complete,
             )
-        elif total_entries == 0:
+        elif total_entries == 0 and complete:
             await reconcile_watchlist_source(
                 db,
                 source,

@@ -261,6 +261,9 @@ async def _import_watchlist_for_integration(
             continue
         if source.source_type == PERSONAL_SOURCE_TYPE:
             total_entries = 0
+            # Removals are only reconciled against a complete listing; a failed
+            # or page-capped fetch must not delete the items it did not return.
+            complete = True
             for watchlist_type in ("movies", "shows"):
                 try:
                     entries = await client.get_watchlist(
@@ -276,6 +279,9 @@ async def _import_watchlist_for_integration(
                         exc,
                     )
                     entries = []
+                    complete = False
+                if getattr(entries, "truncated", False):
+                    complete = False
                 total_entries += len(entries)
                 for entry in entries:
                     candidate = _build_watchlist_candidate(
@@ -293,9 +299,10 @@ async def _import_watchlist_for_integration(
                     source,
                     candidates,
                     now=now,
+                    reconcile=complete,
                 )
                 candidates = []
-            elif total_entries == 0:
+            elif total_entries == 0 and complete:
                 await reconcile_watchlist_source(
                     db,
                     source,
@@ -361,6 +368,7 @@ async def _import_watchlist_for_integration(
                 source,
                 candidates,
                 now=now,
+                reconcile=not getattr(entries, "truncated", False),
             )
             candidates = []
     return imported

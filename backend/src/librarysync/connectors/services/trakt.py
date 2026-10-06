@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 import httpx
 
 from librarysync.connectors.services.base import ServiceConnector
+from librarysync.connectors.services.pagination import PagedEntries
 from librarysync.core.canonical import ProgressEvent
 from librarysync.core.http_client import get_http_client
 
@@ -348,7 +349,7 @@ class TraktClient:
         per_page: int = 50,
         max_pages: int | None = 10,
     ) -> list[dict[str, Any]]:
-        entries: list[dict[str, Any]] = []
+        entries = PagedEntries()
         page = 1
         while max_pages is None or page <= max_pages:
             items, headers = await self.fetch_watchlist(
@@ -366,6 +367,8 @@ class TraktClient:
             if len(items) < per_page:
                 break
             page += 1
+        else:
+            entries.truncated = True
         return entries
 
     async def fetch_hidden_items(
@@ -532,7 +535,7 @@ class TraktClient:
         per_page: int = 50,
         max_pages: int | None = 1,
     ) -> list[dict[str, Any]]:
-        entries: list[dict[str, Any]] = []
+        entries = PagedEntries()
         page = 1
         while max_pages is None or page <= max_pages:
             items, headers = await self.fetch_list_items(
@@ -553,6 +556,8 @@ class TraktClient:
             if len(items) < per_page:
                 break
             page += 1
+        else:
+            entries.truncated = True
         return entries
 
     async def fetch_user_list_items(
@@ -590,7 +595,7 @@ class TraktClient:
         per_page: int = 50,
         max_pages: int | None = 1,
     ) -> list[dict[str, Any]]:
-        entries: list[dict[str, Any]] = []
+        entries = PagedEntries()
         page = 1
         while max_pages is None or page <= max_pages:
             items, headers = await self.fetch_user_list_items(
@@ -612,6 +617,8 @@ class TraktClient:
             if len(items) < per_page:
                 break
             page += 1
+        else:
+            entries.truncated = True
         return entries
 
     async def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
