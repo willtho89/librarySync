@@ -19,6 +19,76 @@ const historySelectionState = {
   items: [],
   selectedIds: new Set(),
 };
+const historyDeleteDialog = {
+  bound: false,
+  resolve: null,
+  releaseFocus: null,
+};
+
+function finishHistoryDeleteDialog(result) {
+  const modal = document.getElementById("history-delete-modal");
+  if (!modal || modal.hasAttribute("hidden")) {
+    return;
+  }
+  modal.setAttribute("hidden", "");
+  const { resolve, releaseFocus } = historyDeleteDialog;
+  historyDeleteDialog.resolve = null;
+  historyDeleteDialog.releaseFocus = null;
+  if (releaseFocus) {
+    releaseFocus();
+  }
+  if (resolve) {
+    resolve(result);
+  }
+}
+
+function bindHistoryDeleteDialog(modal) {
+  if (historyDeleteDialog.bound) {
+    return;
+  }
+  historyDeleteDialog.bound = true;
+  modal.querySelectorAll("[data-modal-close]").forEach((button) => {
+    button.addEventListener("click", () => finishHistoryDeleteDialog(null));
+  });
+  const form = document.getElementById("history-delete-form");
+  if (form) {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const toggle = document.getElementById("history-delete-item-integrations");
+      finishHistoryDeleteDialog({ deleteIntegrations: Boolean(toggle && toggle.checked) });
+    });
+  }
+}
+
+// Resolves to null when cancelled, or { deleteIntegrations } when confirmed.
+function confirmHistoryItemDelete(item) {
+  const modal = document.getElementById("history-delete-modal");
+  if (!modal) {
+    const confirmed = window.confirm(`Delete "${item.title}" from your history?`);
+    return Promise.resolve(confirmed ? { deleteIntegrations: false } : null);
+  }
+  bindHistoryDeleteDialog(modal);
+  finishHistoryDeleteDialog(null);
+  const titleEl = modal.querySelector("[data-history-delete-title]");
+  if (titleEl) {
+    titleEl.textContent = item.title ? `"${item.title}"` : "this entry";
+  }
+  const toggle = document.getElementById("history-delete-item-integrations");
+  if (toggle) {
+    toggle.checked = false;
+  }
+  modal.removeAttribute("hidden");
+  return new Promise((resolve) => {
+    historyDeleteDialog.resolve = resolve;
+    historyDeleteDialog.releaseFocus = activateFocusTrap(
+      modal.querySelector(".modal-panel") || modal,
+      {
+        initialFocus: "[data-history-delete-cancel]",
+        onEscape: () => finishHistoryDeleteDialog(null),
+      }
+    );
+  });
+}
 
 function historyHasActiveFilters() {
   return (
@@ -868,16 +938,11 @@ async function loadHistory() {
 
     deleteButton.addEventListener("click", async () => {
       closeHistoryMenus();
-      const confirmed = window.confirm(
-        `Delete "${item.title}" from your history?`
-      );
-      if (!confirmed) {
+      const choice = await confirmHistoryItemDelete(item);
+      if (!choice) {
         return;
       }
-      const deleteIntegrations = window.confirm(
-        "Also delete this item from all connected integrations? " +
-          "Click OK to remove it there too, or Cancel to delete locally only."
-      );
+      const { deleteIntegrations } = choice;
       try {
         setMessage("history-message", "Deleting...");
         const url = deleteIntegrations

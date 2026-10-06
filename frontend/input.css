@@ -710,7 +710,7 @@
   }
 
   .modal {
-    @apply fixed inset-0 z-50 flex items-center justify-center p-6;
+    @apply fixed inset-0 z-[70] flex items-center justify-center p-6;
   }
 
   .modal-backdrop {
