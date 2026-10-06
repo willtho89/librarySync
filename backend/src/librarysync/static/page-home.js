@@ -417,7 +417,7 @@ function renderDashboardCharts(data) {
     overall: isDark ? "rgba(169, 182, 195, 1)" : "rgba(100, 116, 139, 1)",
     overallAlpha: isDark ? "rgba(169, 182, 195, 0.2)" : "rgba(100, 116, 139, 0.2)",
     text: isDark ? "rgb(231, 238, 245)" : "rgb(24, 32, 45)",
-    muted: isDark ? "rgb(169, 182, 195)" : "rgb(100, 116, 139)",
+    muted: isDark ? "rgb(169, 182, 195)" : "rgb(96, 111, 133)",
     grid: isDark ? "rgba(46, 63, 79, 0.3)" : "rgba(214, 223, 230, 0.3)",
   };
 
