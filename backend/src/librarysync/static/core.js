@@ -827,6 +827,16 @@ function showToast(message, isError = false, duration = 3000) {
   });
 }
 
+// Reports a failed background request with an error toast. Aborted requests and
+// expired sessions (which already redirect to login) are not reported.
+function showRequestErrorToast(context, error) {
+  if (isAbortError(error) || (error && error.status === 401)) {
+    return;
+  }
+  const detail = error && error.message ? error.message : "Unknown error";
+  showToast(`${context}: ${detail}`, true, 6000);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   initBase().catch((error) => {
     console.error("page bootstrap failed", error);

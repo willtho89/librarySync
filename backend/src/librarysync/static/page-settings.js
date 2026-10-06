@@ -15,6 +15,7 @@ const activityState = {
 const settingsState = {
   hasAnyImports: false,
   status: null,
+  statusErrorNotified: false,
   importQueue: [],
   watchlistSources: [],
 };
@@ -112,6 +113,7 @@ async function loadStatusData() {
       requestJSON("/api/activity/events?limit=100"),
     ]);
     settingsState.status = statusData;
+    settingsState.statusErrorNotified = false;
     activityState.jobs = outboxData && outboxData.jobs ? outboxData.jobs : [];
     activityState.events =
       eventsData && eventsData.events ? eventsData.events : [];
@@ -142,6 +144,11 @@ async function loadStatusData() {
     }
   } catch (error) {
     console.error("status load failed", error);
+    // This runs on a timer, so only toast the first failure of a streak.
+    if (!settingsState.statusErrorNotified) {
+      settingsState.statusErrorNotified = true;
+      showRequestErrorToast("Could not refresh status", error);
+    }
   }
 }
 
@@ -857,6 +864,7 @@ async function loadWatchlistSources() {
     renderWatchlistSources(sources);
   } catch (error) {
     console.error("watchlist sources load failed", error);
+    showRequestErrorToast("Could not load watchlist sources", error);
   }
 }
 
@@ -3453,8 +3461,10 @@ window.librarysyncPageInit = async ({ user }) => {
       loadStatusData(),
       initBlacklist(),
     ]);
-    startMaintenanceAutoRefresh();
   } catch (error) {
     console.error("settings load failed", error);
+    showRequestErrorToast("Could not load settings", error);
+  } finally {
+    startMaintenanceAutoRefresh();
   }
 };

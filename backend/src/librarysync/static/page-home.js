@@ -95,6 +95,7 @@ async function loadUpNext() {
     renderUpNext();
   } catch (error) {
     console.error("Failed to load up next", error);
+    showRequestErrorToast("Could not load Up Next", error);
   }
 }
 
@@ -293,6 +294,7 @@ async function loadHomeStatus() {
     renderHomeStatus(data);
   } catch (error) {
     console.error("Failed to load home status", error);
+    showRequestErrorToast("Could not load sync status", error);
   }
 }
 
@@ -325,6 +327,8 @@ async function loadDashboardStats() {
       dashboardSections.forEach((section) => {
         section.style.display = "none";
       });
+    } else {
+      showRequestErrorToast("Could not load dashboard stats", error);
     }
   }
 }
