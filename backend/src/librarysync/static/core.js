@@ -149,21 +149,47 @@ function initMobileMenu() {
     });
   };
 
+  // The closed panel is only translated off-screen, so make it inert to keep its
+  // links out of the tab order and the accessibility tree.
+  const setPanelHidden = (hidden) => {
+    if (hidden) {
+      panel.setAttribute("inert", "");
+    } else {
+      panel.removeAttribute("inert");
+    }
+    panel.setAttribute("aria-hidden", hidden ? "true" : "false");
+  };
+
+  let releaseFocus = null;
+
   function openMenu() {
     panel.classList.add("is-open");
     backdrop.classList.add("is-open");
-    panel.setAttribute("aria-hidden", "false");
+    setPanelHidden(false);
     setExpanded(true);
     document.body.style.overflow = "hidden";
+    if (!releaseFocus) {
+      releaseFocus = activateFocusTrap(panel, {
+        initialFocus: closeButton,
+        onEscape: closeMenu,
+      });
+    }
   }
 
   function closeMenu() {
     panel.classList.remove("is-open");
     backdrop.classList.remove("is-open");
-    panel.setAttribute("aria-hidden", "true");
+    setPanelHidden(true);
     setExpanded(false);
     document.body.style.overflow = "";
+    if (releaseFocus) {
+      const release = releaseFocus;
+      releaseFocus = null;
+      release();
+    }
   }
+
+  setPanelHidden(!panel.classList.contains("is-open"));
 
   toggleButtons.forEach((button) => {
     if (panel.id && !button.hasAttribute("aria-controls")) {
@@ -187,12 +213,6 @@ function initMobileMenu() {
 
   panel.querySelectorAll("a, button[data-logout]").forEach((link) => {
     link.addEventListener("click", closeMenu);
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && panel.classList.contains("is-open")) {
-      closeMenu();
-    }
   });
 }
 
