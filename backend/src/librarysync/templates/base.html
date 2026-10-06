@@ -2,7 +2,7 @@
 <html lang="en" class="h-full" data-app-version="{{ app_version }}">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>{{ page_title }} - librarySync</title>
     <meta name="description" content="librarySync keeps your watch history and ratings aligned across providers." />
     <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
@@ -141,7 +141,7 @@
        </header>
 
        <!-- Toast Container -->
-       <div id="toast-container" class="fixed top-20 left-1/2 z-50 -translate-x-1/2 space-y-2"></div>
+       <div id="toast-container" class="fixed top-20 left-1/2 z-50 -translate-x-1/2 space-y-2" role="status" aria-live="polite"></div>
 
        <!-- Mobile Menu Overlay (styles live in input.css via [data-mobile-menu-backdrop]; do not add utility classes here — they compile to the utilities layer and would override the .is-open state) -->
       <div
@@ -280,9 +280,9 @@
           Watchlist
         </a>
 
-        <a href="/add-watched" class="group flex flex-1 flex-col items-center gap-1 p-2 text-[10px] font-medium {% if active_page == 'add-watched' %}text-primary{% else %}text-muted hover:text-ink{% endif %}" data-auth-only>
+        <a href="/add-watched" aria-label="Add watched" class="group flex flex-1 flex-col items-center gap-1 p-2 text-[10px] font-medium {% if active_page == 'add-watched' %}text-primary{% else %}text-muted hover:text-ink{% endif %}" data-auth-only>
           <div class="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary transition-transform group-active:scale-95 {% if active_page == 'add-watched' %}bg-primary text-white shadow-glow{% endif %}">
-             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
           </div>
         </a>
 
