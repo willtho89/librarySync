@@ -278,6 +278,110 @@ function initTabsets() {
   });
 }
 
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+  "[contenteditable='true']",
+].join(",");
+
+function getFocusableElements(container) {
+  if (!container) {
+    return [];
+  }
+  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)).filter(
+    (el) => !el.closest("[hidden], [inert]") && el.getClientRects().length > 0
+  );
+}
+
+// Keeps keyboard focus inside `container` until the returned release function is called.
+// Focus moves into the container on activation and returns to the previously focused
+// element on release. `onEscape` is called when Escape is pressed while trapped.
+function activateFocusTrap(container, options = {}) {
+  if (!container) {
+    return () => {};
+  }
+  const { initialFocus = null, onEscape = null } = options;
+  const previouslyFocused =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  const focusContainer = () => {
+    if (!container.hasAttribute("tabindex")) {
+      container.setAttribute("tabindex", "-1");
+    }
+    container.focus();
+  };
+
+  const handleKeydown = (event) => {
+    if (event.key === "Escape" && typeof onEscape === "function") {
+      event.preventDefault();
+      onEscape(event);
+      return;
+    }
+    if (event.key !== "Tab") {
+      return;
+    }
+    const focusable = getFocusableElements(container);
+    if (!focusable.length) {
+      event.preventDefault();
+      focusContainer();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    const outside = !container.contains(active);
+    if (event.shiftKey && (active === first || active === container || outside)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (active === last || outside)) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const handleFocusIn = (event) => {
+    if (!container.contains(event.target)) {
+      const focusable = getFocusableElements(container);
+      if (focusable.length) {
+        focusable[0].focus();
+      } else {
+        focusContainer();
+      }
+    }
+  };
+
+  document.addEventListener("keydown", handleKeydown, true);
+  document.addEventListener("focusin", handleFocusIn);
+
+  const target =
+    (typeof initialFocus === "string"
+      ? container.querySelector(initialFocus)
+      : initialFocus) || getFocusableElements(container)[0];
+  if (target) {
+    target.focus();
+  } else {
+    focusContainer();
+  }
+
+  let released = false;
+  return (releaseOptions = {}) => {
+    if (released) {
+      return;
+    }
+    released = true;
+    document.removeEventListener("keydown", handleKeydown, true);
+    document.removeEventListener("focusin", handleFocusIn);
+    const { restoreFocus = true } = releaseOptions;
+    if (restoreFocus && previouslyFocused && previouslyFocused.isConnected) {
+      previouslyFocused.focus();
+    }
+  };
+}
+
 async function requestJSON(path, options = {}) {
   const headers = Object.assign(
     {},

@@ -1716,7 +1716,12 @@ function bindHistoryClear() {
     return isValid;
   };
 
+  let releaseFocus = null;
+
   const closeModal = () => {
+    if (modal.hasAttribute("hidden")) {
+      return;
+    }
     modal.setAttribute("hidden", "");
     if (form) {
       form.reset();
@@ -1725,6 +1730,11 @@ function bindHistoryClear() {
       confirmButton.disabled = true;
     }
     setMessage(modalMessageId, "");
+    if (releaseFocus) {
+      const release = releaseFocus;
+      releaseFocus = null;
+      release();
+    }
   };
 
   openButton.addEventListener("click", () => {
@@ -1736,7 +1746,12 @@ function bindHistoryClear() {
     }
     if (input) {
       input.value = "";
-      input.focus();
+    }
+    if (!releaseFocus) {
+      releaseFocus = activateFocusTrap(modal.querySelector("[role='dialog']") || modal, {
+        initialFocus: input,
+        onEscape: closeModal,
+      });
     }
   });
 
