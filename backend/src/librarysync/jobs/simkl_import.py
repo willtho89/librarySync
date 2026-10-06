@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass
@@ -15,14 +14,11 @@ from librarysync.connectors.services.simkl import (
     SimklClient,
     SimklError,
     has_required_simkl_fields,
-    is_token_expired,
-    parse_expires_at,
-    token_to_secret_payload,
 )
 from librarysync.core.import_schedule import parse_datetime
+from librarysync.core.integration_tokens import ensure_simkl_access_token
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
-from librarysync.core.security import encrypt_value
 from librarysync.core.watchlist_sources import (
     DROPPED_SOURCE_EXTERNAL_ID,
     PERSONAL_SOURCE_TYPE,
@@ -35,7 +31,6 @@ from librarysync.core.watchlist_sources import (
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
-    IntegrationSecret,
     MediaItem,
     WatchEvent,
     WatchlistSource,
@@ -55,6 +50,8 @@ from librarysync.jobs.watchlist_pipeline import (
 )
 
 LOOKBACK_DAYS = settings.history_lookback_days
+_ensure_simkl_access_token = ensure_simkl_access_token
+
 logger = logging.getLogger(__name__)
 SIMKL_ACTIVITY_KEYS = {
     "movies": "movies",
@@ -1958,43 +1955,3 @@ def _parse_datetime(value: object) -> datetime | None:
     return None
 
 
-async def _ensure_simkl_access_token(
-    db: AsyncSession,
-    integration_id: str,
-    secret_data: dict[str, object],
-    client: SimklClient,
-) -> str:
-    access_token = secret_data.get("access_token")
-    refresh_token = secret_data.get("refresh_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise SimklError("SIMKL access token is missing", status_code=401)
-    expires_at = parse_expires_at(secret_data.get("expires_at"))
-    if not is_token_expired(expires_at):
-        return access_token
-    if not isinstance(refresh_token, str) or not refresh_token:
-        raise SimklError("SIMKL refresh token is missing", status_code=401)
-    token = await client.refresh_access_token(refresh_token)
-    updated = dict(secret_data)
-    updated.update(token_to_secret_payload(token))
-    await _save_integration_secret(db, integration_id, updated)
-    return token.access_token
-
-
-async def _save_integration_secret(
-    db: AsyncSession, integration_id: str, secret_data: dict[str, object]
-) -> None:
-    encrypted = encrypt_value(json.dumps(secret_data))
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration_id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(
-            integration_id=integration_id,
-            secret_data=encrypted,
-        )
-    else:
-        secret.secret_data = encrypted
-    db.add(secret)

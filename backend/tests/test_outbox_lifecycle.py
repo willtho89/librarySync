@@ -206,3 +206,16 @@ async def test_shutdown_releases_unprocessed_claimed_jobs(factory):
     statuses = sorted(job.status for job in await _jobs(factory))
     assert len(delivered) == 1
     assert statuses == ["pending", "pending", "succeeded"]
+
+
+@pytest.mark.asyncio
+async def test_rejected_token_is_expired_and_retried_once(factory):
+    await _enqueue(factory, "push_watched", {"watched_item_id": "w1"})
+    deliver = AsyncMock(side_effect=TraktError("unauthorized", status_code=401))
+    expire = AsyncMock(return_value=True)
+
+    with _outbox_patches(factory, deliver=deliver), patch.object(process_outbox, "expire_access_token", expire):
+        await process_outbox.process_outbox_once()
+
+    expire.assert_awaited_once()
+    assert (await _jobs(factory))[0].status == "failed_retryable"

@@ -19,18 +19,9 @@ from librarysync.connectors.services.letterboxd import (
     extract_member_name,
     has_required_letterboxd_fields,
 )
-from librarysync.connectors.services.letterboxd import (
-    is_token_expired as is_letterboxd_token_expired,
-)
-from librarysync.connectors.services.letterboxd import (
-    parse_expires_at as parse_letterboxd_expires_at,
-)
-from librarysync.connectors.services.letterboxd import (
-    token_to_secret_payload as letterboxd_token_to_secret_payload,
-)
+from librarysync.core.integration_tokens import ensure_letterboxd_access_token
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import coerce_star_rating
-from librarysync.core.security import encrypt_value
 from librarysync.core.watchlist_links import parse_letterboxd_list_urls
 from librarysync.core.watchlist_sources import (
     LEGACY_LIST_SOURCE_TYPE,
@@ -42,7 +33,6 @@ from librarysync.core.watchlist_sources import (
 )
 from librarysync.db.models import (
     Integration,
-    IntegrationSecret,
     MediaItem,
     WatchlistSource,
 )
@@ -68,6 +58,8 @@ TMDB_URL_RE = re.compile(r"/(?:movie|film|tv)/(\d+)", re.IGNORECASE)
 ENTRY_KEY_BATCH_SIZE = 200
 WATCHLIST_PER_PAGE = 50
 WATCHLIST_MAX_PAGES = 10
+_ensure_letterboxd_access_token = ensure_letterboxd_access_token
+
 logger = logging.getLogger(__name__)
 
 
@@ -383,46 +375,6 @@ async def _build_letterboxd_context(
                 db.add(integration)
                 await db.commit()
     return client, access_token, member_id
-
-
-async def _ensure_letterboxd_access_token(
-    db: AsyncSession,
-    integration_id: str,
-    secret_data: dict[str, object],
-    client: LetterboxdClient,
-) -> str:
-    access_token = secret_data.get("access_token")
-    expires_at = parse_letterboxd_expires_at(secret_data.get("expires_at"))
-    if isinstance(access_token, str) and access_token and not is_letterboxd_token_expired(
-        expires_at
-    ):
-        return access_token
-    token = await client.refresh_access_token_payload()
-    updated = dict(secret_data)
-    updated.update(letterboxd_token_to_secret_payload(token))
-    await _save_integration_secret(db, integration_id, updated)
-    await db.commit()
-    return token.access_token
-
-
-async def _save_integration_secret(
-    db: AsyncSession, integration_id: str, secret_data: dict[str, object]
-) -> None:
-    encrypted = encrypt_value(json.dumps(secret_data))
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration_id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(
-            integration_id=integration_id,
-            secret_data=encrypted,
-        )
-    else:
-        secret.secret_data = encrypted
-    db.add(secret)
 
 
 def _select_letterboxd_since(now: datetime, lookback_days: int) -> datetime:

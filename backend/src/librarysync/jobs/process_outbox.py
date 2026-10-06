@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -28,15 +27,6 @@ from librarysync.connectors.services.letterboxd import (
     extract_member_name,
     has_required_letterboxd_fields,
 )
-from librarysync.connectors.services.letterboxd import (
-    is_token_expired as is_letterboxd_token_expired,
-)
-from librarysync.connectors.services.letterboxd import (
-    parse_expires_at as parse_letterboxd_expires_at,
-)
-from librarysync.connectors.services.letterboxd import (
-    token_to_secret_payload as letterboxd_token_to_secret_payload,
-)
 from librarysync.connectors.services.publicmetadb import (
     PublicMetaDbClient,
     PublicMetaDbError,
@@ -46,15 +36,6 @@ from librarysync.connectors.services.simkl import (
     SimklClient,
     SimklError,
     has_required_simkl_fields,
-)
-from librarysync.connectors.services.simkl import (
-    is_token_expired as is_simkl_token_expired,
-)
-from librarysync.connectors.services.simkl import (
-    parse_expires_at as parse_simkl_expires_at,
-)
-from librarysync.connectors.services.simkl import (
-    token_to_secret_payload as simkl_token_to_secret_payload,
 )
 from librarysync.connectors.services.stremio import (
     DEFAULT_STREMIO_API_BASE_URL,
@@ -71,22 +52,23 @@ from librarysync.connectors.services.trakt import (
     TraktClient,
     TraktError,
     has_required_trakt_fields,
-    is_token_expired,
-    parse_expires_at,
-    token_to_secret_payload,
 )
 from librarysync.core.import_control import load_blocked_outbox_users
+from librarysync.core.integration_tokens import (
+    ensure_letterboxd_access_token,
+    ensure_simkl_access_token,
+    ensure_trakt_access_token,
+    expire_access_token,
+)
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.core.ratings import coerce_star_rating
-from librarysync.core.security import encrypt_value
 from librarysync.core.shutdown import shutdown_requested
 from librarysync.core.watch_pipeline import process_new_item_job, process_watchlist_update_job
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
-    IntegrationSecret,
     MediaItem,
     OutboxJob,
     SyncAttempt,
@@ -101,6 +83,10 @@ SUPERSEDED_STATUS = "superseded"
 BATCHABLE_PROVIDERS = {"trakt", "simkl"}
 BATCHABLE_JOB_TYPES = {"push_watched", "push_rating"}
 MIXED_PROVIDER_ORDER = ("trakt", "simkl", "publicmetadb", "letterboxd", "stremio")
+_ensure_letterboxd_access_token = ensure_letterboxd_access_token
+_ensure_trakt_access_token = ensure_trakt_access_token
+_ensure_simkl_access_token = ensure_simkl_access_token
+
 logger = logging.getLogger(__name__)
 
 
@@ -565,13 +551,27 @@ async def _requeue_job(
     return True
 
 
+OAUTH_PROVIDERS = {"trakt", "simkl", "letterboxd"}
+AUTH_RETRY_ATTEMPTS = 2
+
+
 async def _finalize_job(
     db: AsyncSession,
     job: OutboxJob,
     status: str,
     error_message: str | None,
     now: datetime,
+    response_code: int | None = None,
 ) -> tuple[str, str | None]:
+    if (
+        status == "failed_permanent"
+        and response_code == 401
+        and job.target_provider in OAUTH_PROVIDERS
+        and job.attempts <= AUTH_RETRY_ATTEMPTS
+        and await expire_access_token(db, job.user_id, job.target_provider)
+    ):
+        # The provider rejected a token we believed valid; refresh it on the next attempt.
+        status = "failed_retryable"
     if status == "failed_retryable" and job.attempts >= settings.outbox_max_attempts:
         status = "failed_permanent"
         error_message = f"Gave up after {job.attempts} attempts: {error_message or 'unknown error'}"
@@ -726,7 +726,7 @@ async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
         status = "failed_retryable"
 
     for job in jobs:
-        job_status, job_error = await _finalize_job(db, job, status, error_message, now)
+        job_status, job_error = await _finalize_job(db, job, status, error_message, now, response_code)
         if job_status != SUPERSEDED_STATUS:
             await _update_watch_sync(
                 db,
@@ -888,7 +888,7 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
         error_message = str(exc)
         status = "failed_retryable"
 
-    status, error_message = await _finalize_job(db, job, status, error_message, now)
+    status, error_message = await _finalize_job(db, job, status, error_message, now, response_code)
     if status != SUPERSEDED_STATUS:
         await _update_watch_sync(
             db,
@@ -1132,27 +1132,6 @@ async def _deliver_letterboxd_delete(
     access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     _, response_code = await client.delete_log_entry(str(entry_id), access_token=access_token)
     return response_code, str(entry_id)
-
-
-async def _ensure_letterboxd_access_token(
-    db: AsyncSession,
-    integration_id: str,
-    secret_data: dict[str, object],
-    client: LetterboxdClient,
-) -> str:
-    access_token = secret_data.get("access_token")
-    expires_at = parse_letterboxd_expires_at(secret_data.get("expires_at"))
-    if (
-        isinstance(access_token, str)
-        and access_token
-        and not is_letterboxd_token_expired(expires_at)
-    ):
-        return access_token
-    token = await client.refresh_access_token_payload()
-    updated = dict(secret_data)
-    updated.update(letterboxd_token_to_secret_payload(token))
-    await _save_integration_secret(db, integration_id, updated)
-    return token.access_token
 
 
 def _extract_letterboxd_member_id(integration: Integration) -> str | None:
@@ -3233,65 +3212,6 @@ async def _sync_local_watched_at(
     if watched.watched_at != watched_at:
         watched.watched_at = watched_at
         db.add(watched)
-
-
-async def _ensure_trakt_access_token(
-    db: AsyncSession,
-    integration_id: str,
-    secret_data: dict[str, object],
-    client: TraktClient,
-) -> str:
-    access_token = secret_data.get("access_token")
-    refresh_token = secret_data.get("refresh_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise TraktError("Trakt access token is missing", status_code=401)
-    if not isinstance(refresh_token, str) or not refresh_token:
-        raise TraktError("Trakt refresh token is missing", status_code=401)
-    expires_at = parse_expires_at(secret_data.get("expires_at"))
-    if not is_token_expired(expires_at):
-        return access_token
-    token = await client.refresh_access_token(refresh_token)
-    updated = dict(secret_data)
-    updated.update(token_to_secret_payload(token))
-    await _save_integration_secret(db, integration_id, updated)
-    return token.access_token
-
-
-async def _ensure_simkl_access_token(
-    db: AsyncSession,
-    integration_id: str,
-    secret_data: dict[str, object],
-    client: SimklClient,
-) -> str:
-    access_token = secret_data.get("access_token")
-    refresh_token = secret_data.get("refresh_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise SimklError("SIMKL access token is missing", status_code=401)
-    if not isinstance(refresh_token, str) or not refresh_token:
-        return access_token
-    expires_at = parse_simkl_expires_at(secret_data.get("expires_at"))
-    if not is_simkl_token_expired(expires_at):
-        return access_token
-    token = await client.refresh_access_token(refresh_token)
-    updated = dict(secret_data)
-    updated.update(simkl_token_to_secret_payload(token))
-    await _save_integration_secret(db, integration_id, updated)
-    return token.access_token
-
-
-async def _save_integration_secret(
-    db: AsyncSession, integration_id: str, secret_data: dict[str, object]
-) -> None:
-    encrypted = encrypt_value(json.dumps(secret_data))
-    result = await db.execute(
-        select(IntegrationSecret).where(IntegrationSecret.integration_id == integration_id)
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(integration_id=integration_id, secret_data=encrypted)
-    else:
-        secret.secret_data = encrypted
-    db.add(secret)
 
 
 def _extract_trakt_history_id(payload: object, media_type: str | None) -> str | None:
