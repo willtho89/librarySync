@@ -301,7 +301,7 @@ function renderImportQueue(queue) {
   }
   list.hidden = false;
   empty.hidden = true;
-  providers.forEach((provider) => {
+  providers.forEach((provider, index) => {
     const label = formatIntegrationName(provider);
     const item = document.createElement("li");
     item.className = "import-queue-item";
@@ -311,12 +311,12 @@ function renderImportQueue(queue) {
     const main = document.createElement("div");
     main.className = "import-queue-main";
 
-    const handle = document.createElement("button");
-    handle.type = "button";
+    // Pointer-only drag affordance; keyboard users reorder with the move buttons.
+    const handle = document.createElement("span");
     handle.className = "import-queue-handle";
     handle.draggable = true;
     handle.textContent = "Drag";
-    handle.setAttribute("aria-label", `Drag to reorder ${label}`);
+    handle.setAttribute("aria-hidden", "true");
 
     const name = document.createElement("span");
     name.className = "import-queue-name";
@@ -329,12 +329,81 @@ function renderImportQueue(queue) {
     indexEl.className = "import-queue-index";
     indexEl.dataset.queueIndex = "true";
 
+    const controls = document.createElement("div");
+    controls.className = "import-queue-controls";
+    controls.appendChild(indexEl);
+    controls.appendChild(
+      buildImportQueueMoveButton(provider, label, "up", index === 0)
+    );
+    controls.appendChild(
+      buildImportQueueMoveButton(provider, label, "down", index === providers.length - 1)
+    );
+
     item.appendChild(main);
-    item.appendChild(indexEl);
+    item.appendChild(controls);
     list.appendChild(item);
   });
   updateImportQueueIndices(list);
   bindImportQueueDrag(list);
+}
+
+function buildImportQueueMoveButton(provider, label, direction, disabled) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn btn-ghost btn-xs";
+  button.dataset.queueMove = direction;
+  button.disabled = disabled;
+  button.setAttribute("aria-label", `Move ${label} ${direction}`);
+  button.title = `Move ${direction}`;
+  const icon = document.createElement("span");
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = direction === "up" ? "↑" : "↓";
+  button.appendChild(icon);
+  button.addEventListener("click", () => {
+    void moveImportQueueProvider(provider, direction);
+  });
+  return button;
+}
+
+function focusImportQueueMoveButton(provider, direction) {
+  const list = document.getElementById("import-queue-list");
+  if (!list) {
+    return;
+  }
+  const item = Array.from(list.querySelectorAll(".import-queue-item")).find(
+    (entry) => entry.dataset.provider === provider
+  );
+  if (!item) {
+    return;
+  }
+  const preferred = item.querySelector(`[data-queue-move="${direction}"]`);
+  const fallback = item.querySelector(
+    `[data-queue-move="${direction === "up" ? "down" : "up"}"]`
+  );
+  const target = preferred && !preferred.disabled ? preferred : fallback;
+  if (target && !target.disabled) {
+    target.focus();
+  }
+}
+
+async function moveImportQueueProvider(provider, direction) {
+  if (settingsState.importQueueSaving) {
+    return;
+  }
+  const order = settingsState.importQueue.slice();
+  const index = order.indexOf(provider);
+  const targetIndex = direction === "up" ? index - 1 : index + 1;
+  if (index === -1 || targetIndex < 0 || targetIndex >= order.length) {
+    return;
+  }
+  [order[index], order[targetIndex]] = [order[targetIndex], order[index]];
+  settingsState.importQueueSaving = true;
+  try {
+    await saveImportQueueOrder(order);
+  } finally {
+    settingsState.importQueueSaving = false;
+  }
+  focusImportQueueMoveButton(provider, direction);
 }
 
 async function loadImportQueue() {

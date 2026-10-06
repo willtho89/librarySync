@@ -2950,6 +2950,14 @@
     line-height: var(--tw-leading, var(--text-xs--line-height));
     color: var(--color-muted);
   }
+  .import-queue-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing);
+  }
+  .import-queue-controls .import-queue-index {
+    margin-right: var(--spacing);
+  }
   .import-queue-handle {
     display: inline-flex;
     align-items: center;

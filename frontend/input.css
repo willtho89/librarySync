@@ -863,6 +863,14 @@
     @apply text-xs text-muted;
   }
 
+  .import-queue-controls {
+    @apply flex items-center gap-1;
+  }
+
+  .import-queue-controls .import-queue-index {
+    @apply mr-1;
+  }
+
   .import-queue-handle {
     @apply inline-flex items-center rounded-lg border border-line/60 bg-surface px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted transition;
     @apply cursor-grab;
