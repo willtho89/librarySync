@@ -9,8 +9,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from librarysync.config import settings
 from librarysync.connectors.services.anilist import (
@@ -80,6 +81,7 @@ from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.security import encrypt_value
+from librarysync.core.shutdown import shutdown_requested
 from librarysync.core.watch_pipeline import process_new_item_job, process_watchlist_update_job
 from librarysync.db.models import (
     EpisodeItem,
@@ -95,6 +97,7 @@ from librarysync.db.models import (
 from librarysync.db.session import SessionLocal, init_session_factory
 
 RETRYABLE_STATUSES = ("pending", "failed_retryable")
+SUPERSEDED_STATUS = "superseded"
 BATCHABLE_PROVIDERS = {"trakt", "simkl"}
 BATCHABLE_JOB_TYPES = {"push_watched", "push_rating"}
 MIXED_PROVIDER_ORDER = ("trakt", "simkl", "publicmetadb", "letterboxd", "stremio")
@@ -506,11 +509,118 @@ async def process_outbox_once(limit: int = 50) -> int:
             return 0
         logger.info("Processing %s outbox job(s)", len(jobs))
         batch_groups, remaining = _group_batchable_jobs(jobs)
-        for group in batch_groups:
+        for index, group in enumerate(batch_groups):
+            if shutdown_requested():
+                unprocessed = [job for batch in batch_groups[index:] for job in batch] + remaining
+                await _release_claimed_jobs(db, unprocessed)
+                return len(jobs)
             await _process_job_batch(db, group)
-        for job in remaining:
+        for index, job in enumerate(remaining):
+            if shutdown_requested():
+                await _release_claimed_jobs(db, remaining[index:])
+                return len(jobs)
             await _process_job(db, job)
         return len(jobs)
+
+
+async def _has_waiting_successor(db: AsyncSession, job: OutboxJob) -> bool:
+    if not job.dedupe_key:
+        return False
+    result = await db.execute(
+        select(OutboxJob.id)
+        .where(
+            OutboxJob.dedupe_key == job.dedupe_key,
+            OutboxJob.id != job.id,
+            OutboxJob.status.in_(RETRYABLE_STATUSES),
+        )
+        .limit(1)
+    )
+    return result.first() is not None
+
+
+async def _requeue_job(
+    db: AsyncSession,
+    job: OutboxJob,
+    now: datetime,
+    *,
+    run_after: datetime | None,
+    last_error: str | None,
+) -> bool:
+    """Return a claimed job to the queue, or retire it if a newer job already waits.
+
+    Only waiting jobs are unique on dedupe_key, so a job leaving in_progress must
+    yield to a successor queued while it was in flight. Returns False when superseded.
+    """
+    if await _has_waiting_successor(db, job):
+        job.status = SUPERSEDED_STATUS
+        job.dedupe_key = None
+        job.run_after = None
+        job.last_error = "Superseded by a newer queued job"
+        job.updated_at = now
+        return False
+    job.status = "pending"
+    job.run_after = run_after
+    job.last_error = last_error
+    job.updated_at = now
+    return True
+
+
+async def _finalize_job(
+    db: AsyncSession,
+    job: OutboxJob,
+    status: str,
+    error_message: str | None,
+    now: datetime,
+) -> tuple[str, str | None]:
+    if status == "failed_retryable" and job.attempts >= settings.outbox_max_attempts:
+        status = "failed_permanent"
+        error_message = f"Gave up after {job.attempts} attempts: {error_message or 'unknown error'}"
+    if status == "failed_retryable" and await _has_waiting_successor(db, job):
+        status = SUPERSEDED_STATUS
+        error_message = "Superseded by a newer queued job"
+    job.status = status
+    job.last_error = error_message
+    if status == "failed_retryable":
+        job.run_after = now + _next_retry_delay(job.attempts)
+    else:
+        job.run_after = None
+        job.dedupe_key = None
+    job.updated_at = now
+    return status, error_message
+
+
+async def _release_claimed_jobs(db: AsyncSession, jobs: list[OutboxJob]) -> None:
+    """Hand unprocessed claimed jobs back to the queue during shutdown."""
+    if not jobs:
+        return
+    now = datetime.now(timezone.utc)
+    for job in jobs:
+        await _requeue_job(db, job, now, run_after=None, last_error=job.last_error)
+    await db.commit()
+    logger.info("Released %s claimed outbox job(s) for shutdown", len(jobs))
+
+
+async def _recover_stale_jobs(db: AsyncSession, now: datetime, limit: int) -> int:
+    """Requeue jobs stranded in_progress by a worker that died mid-batch."""
+    stale_before = now - timedelta(minutes=settings.outbox_stale_minutes)
+    result = await db.execute(
+        select(OutboxJob)
+        .where(OutboxJob.status == "in_progress", OutboxJob.updated_at < stale_before)
+        .order_by(OutboxJob.updated_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    stale = result.scalars().all()
+    for job in stale:
+        requeued = await _requeue_job(
+            db, job, now, run_after=None, last_error="Recovered after worker interruption"
+        )
+        if requeued:
+            await _update_watch_sync(db, job, "pending", job.last_error, None, now)
+    if stale:
+        await db.flush()
+        logger.warning("Recovered %s stale in-progress outbox job(s)", len(stale))
+    return len(stale)
 
 
 def _group_batchable_jobs(jobs: list[OutboxJob]) -> tuple[list[list[OutboxJob]], list[OutboxJob]]:
@@ -616,38 +726,33 @@ async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
         status = "failed_retryable"
 
     for job in jobs:
-        job.status = status
-        job.last_error = error_message
-        if status == "failed_retryable":
-            job.run_after = now + _next_retry_delay(job.attempts)
-        else:
-            job.run_after = None
-        job.updated_at = now
-        await _update_watch_sync(
-            db,
-            job,
-            status,
-            error_message,
-            None,
-            now,
-        )
+        job_status, job_error = await _finalize_job(db, job, status, error_message, now)
+        if job_status != SUPERSEDED_STATUS:
+            await _update_watch_sync(
+                db,
+                job,
+                job_status,
+                job_error,
+                None,
+                now,
+            )
         db.add(
             SyncAttempt(
                 job_id=job.id,
-                status=status,
+                status=job_status,
                 response_code=response_code,
-                error=error_message,
+                error=job_error,
             )
         )
         logger.info(
             "Outbox job %s %s -> %s (attempt %s)",
             job.id,
             f"{job.target_provider}:{job.job_type}",
-            status,
+            job_status,
             job.attempts,
         )
-        if error_message:
-            logger.warning("Outbox job %s error: %s", job.id, error_message)
+        if job_error:
+            logger.warning("Outbox job %s error: %s", job.id, job_error)
     await db.commit()
 
 
@@ -671,10 +776,17 @@ async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
     async with db.begin():
         if limit <= 0:
             return []
+        await _recover_stale_jobs(db, now, limit)
         blocked_users = await load_blocked_outbox_users(db)
+        in_flight = aliased(OutboxJob)
         filters = [
             OutboxJob.status.in_(RETRYABLE_STATUSES),
             or_(OutboxJob.run_after.is_(None), OutboxJob.run_after <= now),
+            # A successor waits until the job delivering the same target finishes.
+            ~exists().where(
+                in_flight.dedupe_key == OutboxJob.dedupe_key,
+                in_flight.status == "in_progress",
+            ),
         ]
         if blocked_users:
             filters.append(~OutboxJob.user_id.in_(blocked_users))
@@ -713,18 +825,18 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
         now=now,
     )
     if rate_decision and not rate_decision.allowed:
-        job.status = "pending"
-        job.last_error = "rate_limited"
-        job.run_after = rate_decision.retry_at
-        job.updated_at = now
-        await _update_watch_sync(
-            db,
-            job,
-            "pending",
-            job.last_error,
-            None,
-            now,
+        requeued = await _requeue_job(
+            db, job, now, run_after=rate_decision.retry_at, last_error="rate_limited"
         )
+        if requeued:
+            await _update_watch_sync(
+                db,
+                job,
+                "pending",
+                job.last_error,
+                None,
+                now,
+            )
         await db.commit()
         logger.info(
             "Outbox job %s %s rate-limited until %s",
@@ -776,25 +888,17 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
         error_message = str(exc)
         status = "failed_retryable"
 
-    job.status = status
-    job.last_error = error_message
-    if status == "failed_retryable":
-        job.run_after = now + _next_retry_delay(job.attempts)
-    else:
-        job.run_after = None
-    if status in {"succeeded", "failed_permanent"}:
-        job.dedupe_key = None
-    job.updated_at = now
-
-    await _update_watch_sync(
-        db,
-        job,
-        status,
-        error_message,
-        external_id,
-        now,
-        resolved_rewatch,
-    )
+    status, error_message = await _finalize_job(db, job, status, error_message, now)
+    if status != SUPERSEDED_STATUS:
+        await _update_watch_sync(
+            db,
+            job,
+            status,
+            error_message,
+            external_id,
+            now,
+            resolved_rewatch,
+        )
     logger.info(
         "Outbox job %s %s -> %s (attempt %s)",
         job.id,

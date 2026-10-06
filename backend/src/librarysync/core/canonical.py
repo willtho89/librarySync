@@ -10,6 +10,7 @@ OutboxStatus = Literal[
     "succeeded",
     "failed_permanent",
     "failed_retryable",
+    "superseded",
 ]
 
 

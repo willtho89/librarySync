@@ -44,6 +44,8 @@ class Settings:
     simkl_max_batch_size: int
     external_catalog_refresh_hours: int
     external_catalog_max_items: int
+    outbox_max_attempts: int
+    outbox_stale_minutes: int
 
 
 def load_settings() -> Settings:
@@ -123,6 +125,8 @@ def load_settings() -> Settings:
         external_catalog_max_items=int(
             _get_env("LIBRARYSYNC_EXTERNAL_CATALOG_MAX_ITEMS", "500") or "500"
         ),
+        outbox_max_attempts=int(_get_env("LIBRARYSYNC_OUTBOX_MAX_ATTEMPTS", "48") or "48"),
+        outbox_stale_minutes=int(_get_env("LIBRARYSYNC_OUTBOX_STALE_MINUTES", "30") or "30"),
     )
 
 

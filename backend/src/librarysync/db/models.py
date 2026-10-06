@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -765,10 +766,21 @@ class WatchStateSnapshot(Base):
     last_pulled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+OUTBOX_WAITING_STATUS_SQL = "status IN ('pending', 'failed_retryable')"
+
+
 class OutboxJob(Base):
     __tablename__ = "outbox"
     __table_args__ = (
-        UniqueConstraint("dedupe_key", name="uq_outbox_dedupe_key"),
+        # Only queued jobs coalesce on dedupe_key; an in-flight job may have one
+        # waiting successor carrying a newer payload for the same target.
+        Index(
+            "uq_outbox_dedupe_key_waiting",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=text(OUTBOX_WAITING_STATUS_SQL),
+            sqlite_where=text(OUTBOX_WAITING_STATUS_SQL),
+        ),
         Index(
             "ix_outbox_user_status_run_after",
             "user_id",

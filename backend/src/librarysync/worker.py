@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import os
+import signal
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from librarysync.config import settings
+from librarysync.core.shutdown import request_shutdown
 from librarysync.jobs.external_catalog_refresh import process_external_catalog_refresh_once
 from librarysync.jobs.imports import process_import_all_once, process_quick_import_once
 from librarysync.jobs.merge_history import (
@@ -71,19 +73,42 @@ def _mode_concurrency(mode_name: str, default: int = 1) -> int:
     return max(1, value)
 
 
-async def _run_mode_loop(mode: ModeConfig, worker_index: int) -> None:
+MAX_FAILURE_BACKOFF_SECONDS = 300.0
+
+
+def _next_delay(mode: ModeConfig, processed: int, consecutive_failures: int) -> float:
+    if consecutive_failures:
+        return min(mode.idle_delay * (2**consecutive_failures), MAX_FAILURE_BACKOFF_SECONDS)
+    return mode.idle_delay if processed == 0 else mode.busy_delay
+
+
+async def _run_mode_loop(mode: ModeConfig, worker_index: int, stop: asyncio.Event) -> None:
     logger.info("Starting %s worker %s", mode.name, worker_index)
-    while True:
+    consecutive_failures = 0
+    while not stop.is_set():
         processed = 0
         try:
             processed = await mode.handler()
+            consecutive_failures = 0
         except asyncio.CancelledError:
             logger.info("Stopping %s worker %s", mode.name, worker_index)
             raise
         except Exception:
+            consecutive_failures += 1
             logger.exception("%s processing failed", mode.name)
-        delay = mode.idle_delay if processed == 0 else mode.busy_delay
-        await asyncio.sleep(delay)
+        delay = _next_delay(mode, processed, consecutive_failures)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=delay)
+        except TimeoutError:
+            pass
+    logger.info("Stopped %s worker %s", mode.name, worker_index)
+
+
+def _request_stop(stop: asyncio.Event) -> None:
+    if not stop.is_set():
+        logger.info("Shutdown requested; finishing in-flight work")
+    request_shutdown()
+    stop.set()
 
 
 async def main() -> None:
@@ -94,11 +119,18 @@ async def main() -> None:
     modes = _parse_modes()
     mode_names = ", ".join(mode.name for mode in modes)
     logger.info("librarysync worker starting (modes: %s)", mode_names)
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(signum, _request_stop, stop)
+        except (NotImplementedError, RuntimeError):  # pragma: no cover - non-POSIX loops
+            pass
     tasks: list[asyncio.Task[None]] = []
     for mode in modes:
         concurrency = _mode_concurrency(mode.name)
         for idx in range(concurrency):
-            tasks.append(asyncio.create_task(_run_mode_loop(mode, idx)))
+            tasks.append(asyncio.create_task(_run_mode_loop(mode, idx, stop)))
     try:
         await asyncio.gather(*tasks)
     finally:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -54,6 +55,27 @@ def is_synced_status(status: str | None) -> bool:
     return status.startswith("synced_from_")
 
 
+# Job types that set provider state from their payload; a newer payload queued while
+# one is in flight must still be delivered. Other job types (plays, deletes, internal
+# fan-out) would only duplicate the in-flight delivery.
+SUCCESSOR_JOB_TYPES = {
+    "push_rating",
+    "remove_rating",
+    "update_history",
+    "update_log_entry",
+    "push_watchlist",
+    "remove_watchlist",
+    "watchlist_update",
+}
+
+
+def _same_payload(left: object, right: object) -> bool:
+    def _normalize(value: object) -> str:
+        return json.dumps(value, sort_keys=True, default=str)
+
+    return _normalize(left) == _normalize(right)
+
+
 def _build_outbox_dedupe_key(
     user_id: str,
     provider: str,
@@ -97,21 +119,26 @@ async def enqueue_outbox_job(
                 OutboxJob.status.in_(ACTIVE_OUTBOX_STATUSES),
             )
         )
-        existing = result.scalars().first()
-        if existing:
-            if existing.status != "in_progress":
-                existing.payload = payload
-                existing.job_type = job_type
-                existing.status = status
-                existing.run_after = None
-                existing.last_error = None
-                existing.updated_at = now
-                return existing
-            if not payload.get("state_entry_id"):
-                return existing
-            # The in-flight operation owns its unique key until delivery finishes.
-            # Its successor must remain durable without overwriting the payload being sent.
-            dedupe_key = None
+        matches = result.scalars().all()
+        waiting = next((job for job in matches if job.status != "in_progress"), None)
+        if waiting:
+            waiting.payload = payload
+            waiting.job_type = job_type
+            waiting.status = status
+            waiting.run_after = None
+            waiting.last_error = None
+            waiting.updated_at = now
+            return waiting
+        in_flight = next((job for job in matches if job.status == "in_progress"), None)
+        if in_flight:
+            if payload.get("state_entry_id"):
+                # The in-flight operation owns its unique key until delivery finishes.
+                # Its successor must remain durable without overwriting the payload being sent.
+                dedupe_key = None
+            elif job_type not in SUCCESSOR_JOB_TYPES or _same_payload(in_flight.payload, payload):
+                return in_flight
+            # Otherwise the in-flight job is delivering stale state: queue a successor that
+            # keeps the key (only waiting jobs are unique) and runs once the current one ends.
     if status not in ACTIVE_OUTBOX_STATUSES:
         dedupe_key = None
     job = OutboxJob(
