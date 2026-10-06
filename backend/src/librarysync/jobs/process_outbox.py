@@ -1604,9 +1604,37 @@ async def _deliver_simkl_watchlist_remove(
         watchlist_payload = _build_simkl_drop_watchlist_payload(payload)
         _, response_code = await client.add_to_list(watchlist_payload, access_token)
     else:
+        media_item_id = _coerce_str(payload.get("media_item_id"))
+        if media_item_id and await _has_local_watch_history(db, job.user_id, media_item_id):
+            # SIMKL has no list-only removal: /sync/history/remove deletes the title
+            # together with its watch history and ratings. A title with history is in
+            # watching/completed on SIMKL rather than plan-to-watch, so leave it alone.
+            logger.info(
+                "Skipping SIMKL watchlist removal for media item %s: user %s has watch history",
+                media_item_id,
+                job.user_id,
+            )
+            return None, None
         remove_payload = _build_simkl_watchlist_remove_payload(payload)
         _, response_code = await client.remove_history(remove_payload, access_token)
     return response_code, None
+
+
+async def _has_local_watch_history(db: AsyncSession, user_id: str, media_item_id: str) -> bool:
+    movie_watch = await db.execute(
+        select(WatchedItem.id)
+        .where(WatchedItem.user_id == user_id, WatchedItem.media_item_id == media_item_id)
+        .limit(1)
+    )
+    if movie_watch.first() is not None:
+        return True
+    episode_watch = await db.execute(
+        select(WatchedItem.id)
+        .join(EpisodeItem, EpisodeItem.id == WatchedItem.episode_item_id)
+        .where(WatchedItem.user_id == user_id, EpisodeItem.show_media_item_id == media_item_id)
+        .limit(1)
+    )
+    return episode_watch.first() is not None
 
 
 async def _deliver_simkl_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:

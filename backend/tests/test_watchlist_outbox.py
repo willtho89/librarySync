@@ -627,7 +627,7 @@ def test_simkl_client_add_to_watchlist_uses_sync_add_to_list_endpoint() -> None:
     )
 
 
-def test_simkl_client_remove_from_watchlist_uses_sync_history_remove_endpoint() -> None:
+def test_simkl_client_remove_history_uses_sync_history_remove_endpoint() -> None:
     payload = {
         "shows": [{"ids": {"tvdb": "121361", "simkl": "1"}}],
     }
@@ -637,7 +637,7 @@ def test_simkl_client_remove_from_watchlist_uses_sync_history_remove_endpoint() 
         "_request",
         new=AsyncMock(return_value=httpx.Response(201, json={})),
     ) as request:
-        asyncio.run(client.remove_from_watchlist(payload, access_token="token"))
+        asyncio.run(client.remove_history(payload, access_token="token"))
 
     request.assert_awaited_once_with(
         "POST",
@@ -645,3 +645,52 @@ def test_simkl_client_remove_from_watchlist_uses_sync_history_remove_endpoint() 
         access_token="token",
         json_body=payload,
     )
+
+
+def _run_simkl_remove(job, client, has_history: bool):
+    integration = SimpleNamespace(id="integration-1")
+    settings = SimpleNamespace(simkl_client_id="simkl-client", simkl_client_secret="secret")
+    with (
+        patch(
+            "librarysync.jobs.process_outbox.load_integration_with_secrets",
+            new=AsyncMock(return_value=(integration, {"access_token": "token"})),
+        ),
+        patch("librarysync.jobs.process_outbox.settings", settings),
+        patch("librarysync.jobs.process_outbox.SimklClient", return_value=client),
+        patch(
+            "librarysync.jobs.process_outbox._ensure_simkl_access_token",
+            new=AsyncMock(return_value="token"),
+        ),
+        patch(
+            "librarysync.jobs.process_outbox._has_local_watch_history",
+            new=AsyncMock(return_value=has_history),
+        ),
+    ):
+        return asyncio.run(process_outbox._deliver_simkl_watchlist_remove(None, job))
+
+
+def test_simkl_watchlist_remove_skips_titles_with_watch_history() -> None:
+    # SIMKL's only removal endpoint also deletes watch history and ratings.
+    job = SimpleNamespace(
+        user_id="user-1",
+        payload={"media_type": "tv", "media_item_id": "show-1", "show_ids": {"tmdb": "1399"}},
+    )
+    client = SimpleNamespace(remove_history=AsyncMock(return_value=({}, 200)))
+
+    response_code, external_id = _run_simkl_remove(job, client, has_history=True)
+
+    assert (response_code, external_id) == (None, None)
+    client.remove_history.assert_not_awaited()
+
+
+def test_simkl_watchlist_remove_unwatched_title_still_removed() -> None:
+    job = SimpleNamespace(
+        user_id="user-1",
+        payload={"media_type": "movie", "media_item_id": "movie-1", "movie_ids": {"tmdb": "550"}},
+    )
+    client = SimpleNamespace(remove_history=AsyncMock(return_value=({}, 200)))
+
+    response_code, _ = _run_simkl_remove(job, client, has_history=False)
+
+    assert response_code == 200
+    client.remove_history.assert_awaited_once()
