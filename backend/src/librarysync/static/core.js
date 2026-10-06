@@ -2,6 +2,7 @@ const authState = {
   user: null,
   loaded: false,
   promise: null,
+  redirecting: false,
 };
 const themeState = {
   mode: "system",
@@ -382,27 +383,145 @@ function activateFocusTrap(container, options = {}) {
   };
 }
 
+const REQUEST_LOCATION_PREFIXES = new Set(["body", "query", "path", "header", "cookie"]);
+
+// Turns a FastAPI/Pydantic `detail` (string, object or list of validation errors)
+// into a readable message, e.g. "rating: Input should be less than or equal to 5".
+function formatErrorDetail(detail) {
+  if (detail === null || detail === undefined || detail === "") {
+    return "";
+  }
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    return detail
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return entry === null || entry === undefined ? "" : String(entry);
+        }
+        const loc = Array.isArray(entry.loc)
+          ? entry.loc
+              .filter((part, index) => !(index === 0 && REQUEST_LOCATION_PREFIXES.has(part)))
+              .join(".")
+          : "";
+        const msg = entry.msg || entry.message || "";
+        if (loc && msg) {
+          return `${loc}: ${msg}`;
+        }
+        return msg || loc;
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  if (typeof detail === "object") {
+    if (typeof detail.message === "string") {
+      return detail.message;
+    }
+    if (typeof detail.msg === "string") {
+      return detail.msg;
+    }
+    try {
+      return JSON.stringify(detail);
+    } catch (error) {
+      return "";
+    }
+  }
+  return String(detail);
+}
+
+function isSafeRedirectPath(value) {
+  return (
+    typeof value === "string" &&
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.startsWith("/\\")
+  );
+}
+
+function buildLoginUrl() {
+  const { pathname, search, hash } = window.location;
+  if (!pathname || pathname === "/" || pathname.startsWith("/login")) {
+    return "/login";
+  }
+  return `/login?next=${encodeURIComponent(`${pathname}${search}${hash}`)}`;
+}
+
+function getPostLoginPath() {
+  try {
+    const next = new URLSearchParams(window.location.search).get("next");
+    if (isSafeRedirectPath(next)) {
+      const url = new URL(next, window.location.origin);
+      if (url.origin === window.location.origin && !url.pathname.startsWith("/login")) {
+        return `${url.pathname}${url.search}${url.hash}`;
+      }
+    }
+  } catch (error) {
+    // fall through to the default
+  }
+  return "/";
+}
+
+function redirectToLogin() {
+  if (authState.redirecting) {
+    return;
+  }
+  authState.redirecting = true;
+  clearOfflineCaches().finally(() => {
+    window.location.href = buildLoginUrl();
+  });
+}
+
+// A 401 from an API call made on behalf of a signed-in session means the session
+// expired; auth endpoints report bad credentials with 401 and are handled by callers.
+function shouldRedirectOnUnauthorized(path) {
+  let pathname = "";
+  try {
+    pathname = new URL(path, window.location.href).pathname;
+  } catch (error) {
+    return false;
+  }
+  if (!pathname.startsWith("/api/") || pathname.startsWith("/api/auth/")) {
+    return false;
+  }
+  const body = document.body;
+  return Boolean(authState.user) || Boolean(body && body.dataset.requiresAuth === "true");
+}
+
 async function requestJSON(path, options = {}) {
+  const { skipAuthRedirect = false, ...fetchOptions } = options;
   const headers = Object.assign(
     {},
-    options.headers || {},
-    options.body ? { "Content-Type": "application/json" } : {}
+    fetchOptions.headers || {},
+    fetchOptions.body ? { "Content-Type": "application/json" } : {}
   );
   const response = await fetch(path, {
     credentials: "include",
-    ...options,
+    ...fetchOptions,
     headers,
   });
   const contentType = response.headers.get("content-type") || "";
-  const data = contentType.includes("application/json")
-    ? await response.json()
-    : null;
+  let data = null;
+  if (contentType.includes("application/json")) {
+    try {
+      data = await response.json();
+    } catch (error) {
+      if (isAbortError(error) || response.ok) {
+        throw error;
+      }
+      data = null;
+    }
+  }
   if (!response.ok) {
     const message =
-      (data && (data.detail || data.message)) ||
+      formatErrorDetail(data && (data.detail || data.message)) ||
       `Request failed (${response.status})`;
     const error = new Error(message);
     error.status = response.status;
+    error.detail = data ? data.detail : undefined;
+    if (response.status === 401 && !skipAuthRedirect && shouldRedirectOnUnauthorized(path)) {
+      redirectToLogin();
+    }
     throw error;
   }
   return data;
@@ -543,7 +662,7 @@ async function handleLogin(data) {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    window.location.href = "/";
+    window.location.href = getPostLoginPath();
   } catch (error) {
     setMessage("login-message", error.message, true);
   }
@@ -561,7 +680,7 @@ async function handleRegister(data) {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    window.location.href = "/";
+    window.location.href = getPostLoginPath();
   } catch (error) {
     setMessage("register-message", error.message, true);
   }
@@ -633,12 +752,12 @@ async function initBase() {
   applyAuthVisibility(user);
 
   if (requiresAuth && !user) {
-    window.location.href = "/login";
+    window.location.href = buildLoginUrl();
     return;
   }
 
   if (guestOnly && user) {
-    window.location.href = "/";
+    window.location.href = getPostLoginPath();
     return;
   }
 
