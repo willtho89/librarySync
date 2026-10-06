@@ -2,13 +2,25 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Supersede outdated PR runs, but let every main commit finish so release.py can rely on its result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint-test:
+    name: Lint & test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.13", "3.14"]
     steps:
@@ -22,11 +34,10 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv sync --group dev
+        run: uv sync --locked --group dev
 
       - name: Ruff
-        run: uv run ruff check backend/src backend/tests
+        run: uv run ruff check backend/src backend/tests scripts
 
       - name: Pytest
-        run: uv run python -m pytest backend/tests
+        run: uv run python -m pytest backend/tests -ra
