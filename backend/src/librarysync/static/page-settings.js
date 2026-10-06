@@ -3016,13 +3016,34 @@ function bindMaintenanceControls() {
   }
 }
 
-function startMaintenanceAutoRefresh() {
+const STATUS_REFRESH_INTERVAL_MS = 30000;
+
+function stopMaintenanceAutoRefresh() {
   if (settingsState.timer) {
+    window.clearInterval(settingsState.timer);
+    settingsState.timer = null;
+  }
+}
+
+function startMaintenanceAutoRefresh() {
+  if (!settingsState.visibilityBound) {
+    settingsState.visibilityBound = true;
+    // Don't poll from a background tab; refresh as soon as the tab is visible again.
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopMaintenanceAutoRefresh();
+        return;
+      }
+      loadStatusData();
+      startMaintenanceAutoRefresh();
+    });
+  }
+  if (settingsState.timer || document.hidden) {
     return;
   }
   settingsState.timer = window.setInterval(() => {
     loadStatusData();
-  }, 30000);
+  }, STATUS_REFRESH_INTERVAL_MS);
 }
 
 // Blacklist Logic
