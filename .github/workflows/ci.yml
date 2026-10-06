@@ -105,3 +105,33 @@ jobs:
 
       - name: Upgrade to head again
         run: uv run alembic upgrade head
+
+  frontend:
+    name: Frontend CSS
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build CSS
+        working-directory: frontend
+        run: npm run build:css
+
+      - name: Check committed CSS is up to date
+        run: |
+          if ! git diff --exit-code -- backend/src/librarysync/static/styles.css; then
+            echo "::error::styles.css is stale; run 'npm run build:css' in frontend/ and commit the result."
+            exit 1
+          fi
