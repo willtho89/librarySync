@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import MediaCandidate
 from librarysync.core.metadata_lookup_engine import LookupRequest, MetadataLookupEngine
 from librarysync.core.metadata_providers import MetadataProviderService
+from librarysync.core.shutdown import shutdown_requested
 from librarysync.db.models import (
     MediaItem,
     MetadataLookupCandidate,
@@ -20,6 +21,7 @@ from librarysync.db.session import SessionLocal, init_session_factory
 DETAILS_ENRICH_LIMIT = 5
 LOCAL_SEARCH_LIMIT = 10
 LOCAL_PROVIDER = "local"
+STALE_LOOKUP_AFTER = timedelta(minutes=5)
 LOOKUP_ENGINE = MetadataLookupEngine(detail_limit=DETAILS_ENRICH_LIMIT)
 
 
@@ -35,7 +37,12 @@ async def process_metadata_lookups_once(limit: int = 5) -> int:
         requests = await _claim_pending_requests(db, limit)
         if not requests:
             return 0
-        for request in requests:
+        for index, request in enumerate(requests):
+            if shutdown_requested():
+                for unprocessed in requests[index:]:
+                    unprocessed.status = "pending"
+                await db.commit()
+                break
             await _process_request(db, request)
         return len(requests)
 
@@ -43,16 +50,25 @@ async def process_metadata_lookups_once(limit: int = 5) -> int:
 async def _claim_pending_requests(
     db: AsyncSession, limit: int
 ) -> list[MetadataLookupRequest]:
+    now = datetime.now(timezone.utc)
     async with db.begin():
         result = await db.execute(
             select(MetadataLookupRequest)
-            .where(MetadataLookupRequest.status == "pending")
+            .where(
+                or_(
+                    MetadataLookupRequest.status == "pending",
+                    # Reclaim lookups stranded by a worker that stopped mid-request.
+                    and_(
+                        MetadataLookupRequest.status == "in_progress",
+                        MetadataLookupRequest.updated_at < now - STALE_LOOKUP_AFTER,
+                    ),
+                )
+            )
             .order_by(MetadataLookupRequest.created_at)
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
         requests = result.scalars().all()
-        now = datetime.now(timezone.utc)
         for request in requests:
             request.status = "in_progress"
             request.updated_at = now
