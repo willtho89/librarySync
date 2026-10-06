@@ -41,3 +41,15 @@ librarysync = [
 
 [dependency-groups]
 dev = ["ruff>=0.16.10", "pytest>=9.1.1", "pytest-asyncio>=1.4.0", "aiosqlite>=0.22.1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Make `librarysync` importable from src/ without per-test sys.path tweaks.
+pythonpath = ["src"]
+# Async tests and fixtures are marked explicitly (pytest.mark.asyncio / pytest_asyncio.fixture).
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+  # Starlette's TestClient asks for httpx2; drop once the dev dependencies switch to it.
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
+]
