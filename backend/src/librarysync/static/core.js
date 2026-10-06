@@ -374,12 +374,28 @@ async function handleRegister(data) {
   }
 }
 
+async function clearOfflineCaches() {
+  // Cached pages can contain user data, so drop them whenever the session ends.
+  if (!("caches" in window)) {
+    return;
+  }
+  try {
+    const keys = await caches.keys();
+    await Promise.all(
+      keys.filter((key) => key.startsWith("librarysync")).map((key) => caches.delete(key))
+    );
+  } catch (error) {
+    console.warn("failed to clear offline caches", error);
+  }
+}
+
 async function handleLogout() {
   try {
     await requestJSON("/api/auth/logout", { method: "POST" });
   } catch (error) {
     console.error("logout failed", error);
   }
+  await clearOfflineCaches();
   window.location.href = "/login";
 }
 
@@ -387,9 +403,28 @@ function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) {
     return;
   }
-  navigator.serviceWorker.register("/static/service-worker.js").catch((error) => {
+  const version = document.documentElement.dataset.appVersion || "";
+  const scriptUrl = version
+    ? `/service-worker.js?v=${encodeURIComponent(version)}`
+    : "/service-worker.js";
+  navigator.serviceWorker.register(scriptUrl, { scope: "/" }).catch((error) => {
     console.warn("service worker registration failed", error);
   });
+  // Older releases registered the worker under /static/, where it could never control pages.
+  if (typeof navigator.serviceWorker.getRegistrations === "function") {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((registrations) => {
+        registrations.forEach((registration) => {
+          const worker =
+            registration.active || registration.waiting || registration.installing;
+          if (worker && new URL(worker.scriptURL).pathname === "/static/service-worker.js") {
+            registration.unregister();
+          }
+        });
+      })
+      .catch(() => {});
+  }
 }
 
 async function initBase() {
