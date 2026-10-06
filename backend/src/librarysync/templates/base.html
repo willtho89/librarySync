@@ -3,6 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script>
+      // Apply the saved theme before first paint so dark/light mode never flashes.
+      // Must read the same key as getStoredTheme() in core.js.
+      (function () {
+        try {
+          var theme = window.localStorage.getItem("librarysync_theme");
+          if (theme === "light" || theme === "dark") {
+            document.documentElement.setAttribute("data-theme", theme);
+          }
+        } catch (error) {
+          // Storage unavailable (e.g. privacy mode): fall back to the system theme.
+        }
+      })();
+    </script>
     <title>{{ page_title }} - librarySync</title>
     <meta name="description" content="librarySync keeps your watch history and ratings aligned across providers." />
     <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
@@ -47,13 +61,7 @@
       type="font/woff2"
       crossorigin
     />
-    <link
-      rel="preload"
-      href="{{ static_url('/static/styles.css') }}"
-      as="style"
-      onload="this.onload=null;this.rel='stylesheet'"
-    />
-    <noscript><link rel="stylesheet" href="{{ static_url('/static/styles.css') }}" /></noscript>
+    <link rel="stylesheet" href="{{ static_url('/static/styles.css') }}" />
     <script src="{{ static_url('/static/core.js') }}" defer></script>
     {% block scripts %}{% endblock %}
   </head>

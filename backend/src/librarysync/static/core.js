@@ -767,6 +767,9 @@ async function initBase() {
   initThemeToggle();
   initMobileMenu();
   initTabsets();
+  document.querySelectorAll("[data-reload]").forEach((button) => {
+    button.addEventListener("click", () => window.location.reload());
+  });
 
   const user = await loadCurrentUser();
   applyAuthVisibility(user);
