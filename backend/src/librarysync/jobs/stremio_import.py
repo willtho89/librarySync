@@ -617,7 +617,12 @@ async def _import_series_bitfield(
         if not entry_key:
             continue
 
-        async def _build_items(_: AsyncSession) -> ImportItems:
+        # Bind per-iteration values: candidates are resolved after the loop finishes.
+        async def _build_items(
+            _: AsyncSession,
+            episode_item: EpisodeItem = episode_item,
+            show_item: MediaItem = show_item,
+        ) -> ImportItems:
             return ImportItems(
                 media_item=None,
                 episode_item=episode_item,
