@@ -56,6 +56,9 @@ jobs:
       - name: Ruff
         run: uv run ruff check backend/src backend/tests scripts
 
+      - name: Ruff format
+        run: uv run ruff format --check backend/src backend/tests scripts
+
       - name: Pytest
         run: uv run python -m pytest backend/tests -ra
 
