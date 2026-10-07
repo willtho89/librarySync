@@ -220,7 +220,7 @@ class MediaItem(Base):
     tvmaze_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     myanimelist_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     anilist_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
-    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True)  # unique constraint indexes it
     poster_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     release_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
     first_air_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
@@ -258,17 +258,16 @@ class EpisodeItem(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    show_media_item_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("media_items.id", ondelete="CASCADE"), index=True
-    )
+    # Covered by the (show_media_item_id, season_number, episode_number) unique constraint.
+    show_media_item_id: Mapped[str] = mapped_column(String(36), ForeignKey("media_items.id", ondelete="CASCADE"))
     season_number: Mapped[int] = mapped_column(Integer)
     episode_number: Mapped[int] = mapped_column(Integer)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     air_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
-    tmdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
-    tvdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
-    tvmaze_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
-    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    tmdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tvdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tvmaze_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    imdb_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -292,12 +291,14 @@ class WatchedItem(Base):
             "rating IS NULL OR (rating >= 0.5 AND rating <= 5.0)",
             name="ck_watched_items_rating_range",
         ),
+        # History pages and imports filter by user first; these also cover user_id alone.
+        Index("ix_watched_items_user_watched_at", "user_id", "watched_at"),
+        Index("ix_watched_items_user_media", "user_id", "media_item_id"),
+        Index("ix_watched_items_user_episode", "user_id", "episode_item_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"))
     media_item_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("media_items.id", ondelete="CASCADE"),
