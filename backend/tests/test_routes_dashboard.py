@@ -69,8 +69,7 @@ def test_get_dashboard_stats_returns_empty_defaults(monkeypatch) -> None:
         FakeResult(row=None),
         FakeResult(scalar_value=0),
         FakeResult(scalar_value=0),
-        FakeResult(rows=[]),
-        FakeResult(rows=[]),
+        FakeResult(scalar_value=0),
     )
 
     payload = asyncio.run(routes_dashboard.get_dashboard_stats(current_user=_current_user(), db=db))
@@ -107,7 +106,7 @@ def test_get_dashboard_stats_returns_empty_defaults(monkeypatch) -> None:
     }
     assert payload["overall_daily_activity"] == []
     assert payload["overall_rating_distribution"] == []
-    assert len(db.calls) == 9
+    assert len(db.calls) == 8
 
 
 def test_get_dashboard_stats_serializes_populated_rows(monkeypatch) -> None:
@@ -159,6 +158,7 @@ def test_get_dashboard_stats_serializes_populated_rows(monkeypatch) -> None:
         ),
         FakeResult(scalar_value=6),
         FakeResult(scalar_value=15),
+        FakeResult(scalar_value=3),
         FakeResult(
             rows=[
                 SimpleNamespace(
@@ -192,3 +192,28 @@ def test_get_dashboard_stats_serializes_populated_rows(monkeypatch) -> None:
         {"date": "2024-03-02", "movies": 1, "episodes": 4}
     ]
     assert payload["overall_rating_distribution"] == [{"rating": 3.5, "count": 9}]
+
+
+def test_get_dashboard_stats_hides_comparison_with_too_few_other_users(monkeypatch) -> None:
+    monkeypatch.setattr(
+        routes_dashboard,
+        "settings",
+        replace(routes_dashboard.settings, enable_dashboard_stats=True),
+    )
+    # On a two-person instance the "overall" series would be the other person's data.
+    db = FakeDB(
+        FakeResult(row=None),
+        FakeResult(rows=[]),
+        FakeResult(rows=[]),
+        FakeResult(row=None),
+        FakeResult(row=None),
+        FakeResult(scalar_value=0),
+        FakeResult(scalar_value=0),
+        FakeResult(scalar_value=1),
+    )
+
+    payload = asyncio.run(routes_dashboard.get_dashboard_stats(current_user=_current_user(), db=db))
+
+    assert payload["overall_daily_activity"] == []
+    assert payload["overall_rating_distribution"] == []
+    assert len(db.calls) == 8
