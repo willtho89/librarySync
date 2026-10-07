@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 from librarysync.connectors.metadata.base import (
     EpisodeMetadataProvider,
     EpisodeSummary,
@@ -11,7 +13,7 @@ from librarysync.connectors.metadata.base import (
     ProviderContext,
     SeasonSummary,
 )
-from librarysync.core.http_client import get_http_client
+from librarysync.core.http_client import get_http_client, redact_secrets
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w185"
@@ -235,10 +237,21 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         filtered = {key: value for key, value in params.items() if value is not None}
-        filtered["api_key"] = self._api_key
-        async with get_http_client(base_url=TMDB_API_BASE, timeout=15.0) as client:
+        headers: dict[str, str] = {}
+        if _is_read_access_token(self._api_key):
+            # v4 read access tokens go in a header and never appear in URLs.
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        else:
+            filtered["api_key"] = self._api_key
+        async with get_http_client(base_url=TMDB_API_BASE, timeout=15.0, headers=headers) as client:
             response = await client.get(path, params=filtered)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # The message embeds the request URL, which carries a v3 api_key.
+                raise httpx.HTTPStatusError(
+                    redact_secrets(str(exc)), request=exc.request, response=exc.response
+                ) from None
             return response.json()
 
     async def _search_movie(self, query: str) -> list[MediaCandidate]:
@@ -374,3 +387,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             overview=overview,
             raw=raw,
         )
+
+
+def _is_read_access_token(value: str) -> bool:
+    return value.startswith("eyJ") and value.count(".") == 2

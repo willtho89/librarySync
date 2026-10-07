@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from librarysync.config import settings
+from librarysync.core.http_client import quiet_http_request_logging
 from librarysync.core.security import validate_security_settings
 from librarysync.core.shutdown import request_shutdown
 from librarysync.jobs.external_catalog_refresh import process_external_catalog_refresh_once
@@ -117,6 +118,7 @@ async def main() -> None:
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    quiet_http_request_logging()
     validate_security_settings()
     modes = _parse_modes()
     mode_names = ", ".join(mode.name for mode in modes)

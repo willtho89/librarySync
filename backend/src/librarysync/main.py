@@ -29,6 +29,7 @@ from librarysync.api import (
 )
 from librarysync.api.deps import get_db, get_optional_user
 from librarysync.config import settings
+from librarysync.core.http_client import quiet_http_request_logging
 from librarysync.core.integrations import reencrypt_integration_secrets
 from librarysync.core.security import validate_security_settings
 from librarysync.db.migrate import run_migrations
@@ -220,6 +221,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        quiet_http_request_logging()
         validate_security_settings()
         run_migrations()
         init_session_factory()

@@ -19,10 +19,14 @@ def test_get_app_version_returns_version():
 
 def test_get_app_version_handles_missing_package():
     """Test that get_app_version returns 'unknown' when package is not found."""
-    with patch("librarysync.core.http_client.metadata.version") as mock_version:
-        mock_version.side_effect = metadata.PackageNotFoundError
-        version = get_app_version()
-        assert version == "unknown"
+    get_app_version.cache_clear()
+    try:
+        with patch("librarysync.core.http_client.metadata.version") as mock_version:
+            mock_version.side_effect = metadata.PackageNotFoundError
+            version = get_app_version()
+            assert version == "unknown"
+    finally:
+        get_app_version.cache_clear()
 
 
 def test_get_http_client_sets_user_agent() -> None:
@@ -105,3 +109,39 @@ def test_get_http_client_user_agent_format() -> None:
             assert version_part == "unknown" or re.match(r"\d+\.\d+\.\d+", version_part)
 
     asyncio.run(run_test())
+
+
+def test_redact_secrets_masks_query_credentials():
+    from librarysync.core.http_client import redact_secrets
+
+    message = "Client error '401' for url 'https://api.themoviedb.org/3/movie/1?language=en&api_key=abc123'"
+    redacted = redact_secrets(message)
+    assert "abc123" not in redacted
+    assert "api_key=REDACTED" in redacted
+    assert "language=en" in redacted
+
+
+def test_tmdb_errors_do_not_leak_the_api_key():
+    import asyncio
+
+    import httpx
+    import pytest
+    from librarysync.connectors.metadata.tmdb import TmdbMetadataProvider
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"status_message": "Invalid API key"}, request=request)
+
+    provider = TmdbMetadataProvider.__new__(TmdbMetadataProvider)
+    provider._api_key = "secret-v3-key"
+    transport = httpx.MockTransport(_handler)
+    original = httpx.AsyncClient.__init__
+
+    def _init(self, *args, **kwargs):
+        kwargs["transport"] = transport
+        original(self, *args, **kwargs)
+
+    with patch.object(httpx.AsyncClient, "__init__", _init):
+        with pytest.raises(httpx.HTTPStatusError) as excinfo:
+            asyncio.run(provider._get("/movie/1", {}))
+    assert "secret-v3-key" not in str(excinfo.value)
+    assert excinfo.value.response.status_code == 401
