@@ -89,6 +89,7 @@ from librarysync.core.publicmetadb import (
     set_publicmetadb_sync_enabled,
 )
 from librarysync.core.security import decrypt_value, encrypt_value
+from librarysync.core.url_safety import UnsafeUrlError, ensure_public_url
 from librarysync.core.watchlist import WATCHLIST_IMPORT_KEY, parse_watchlist_import_config
 from librarysync.db.models import Integration, IntegrationSecret, User
 
@@ -469,6 +470,7 @@ async def save_letterboxd(
         existing_base = integration.config.get("api_base_url")
     if not api_base_url:
         api_base_url = existing_base or DEFAULT_LETTERBOXD_API_BASE_URL
+    await _ensure_safe_api_base_url(api_base_url, DEFAULT_LETTERBOXD_API_BASE_URL, "Letterboxd API URL")
 
     config = dict(integration.config or {})
     config["api_base_url"] = api_base_url
@@ -1190,6 +1192,7 @@ async def stremio_login(
         existing_base = integration.config.get("api_base_url")
     if not api_base_url:
         api_base_url = existing_base or DEFAULT_STREMIO_API_BASE_URL
+    await _ensure_safe_api_base_url(api_base_url, DEFAULT_STREMIO_API_BASE_URL, "Stremio API URL")
 
     client = StremioClient(api_base_url=api_base_url)
     try:
@@ -1253,6 +1256,16 @@ def _extract_simkl_username(payload: object) -> str | None:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return None
+
+
+async def _ensure_safe_api_base_url(api_base_url: str, default: str, label: str) -> None:
+    """Custom provider base URLs are fetched server-side; keep them off internal networks."""
+    if api_base_url.rstrip("/") == default.rstrip("/"):
+        return
+    try:
+        await ensure_public_url(api_base_url, label=label, schemes=("https",))
+    except UnsafeUrlError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 def _format_simkl_error(error: SimklError) -> str:

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import socket
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,6 +24,7 @@ from librarysync.core.http_client import get_http_client
 from librarysync.core.integration_tokens import ensure_letterboxd_access_token
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_providers import MetadataProviderService
+from librarysync.core.url_safety import ensure_public_host
 from librarysync.core.watchlist_links import (
     parse_imdb_chart_urls,
     parse_letterboxd_list_urls,
@@ -74,46 +73,8 @@ class ExternalCatalogProviderError(Exception):
     pass
 
 
-def _is_disallowed_host_address(value: str) -> bool:
-    ip = ipaddress.ip_address(value)
-    return (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
-
-
 async def _validate_external_manifest_host(hostname: str | None) -> None:
-    if not hostname:
-        raise ValueError("Manifest URL host is required")
-    if hostname.lower() == "localhost":
-        raise ValueError("Manifest URL host is not allowed")
-
-    try:
-        if _is_disallowed_host_address(hostname):
-            raise ValueError("Manifest URL host is not allowed")
-        return
-    except ValueError as exc:
-        if str(exc) == "Manifest URL host is not allowed":
-            raise
-        pass
-
-    try:
-        resolved = await asyncio.get_running_loop().getaddrinfo(
-            hostname,
-            None,
-            proto=socket.IPPROTO_TCP,
-        )
-    except socket.gaierror:
-        return
-
-    for entry in resolved:
-        address = entry[4][0]
-        if _is_disallowed_host_address(address):
-            raise ValueError("Manifest URL host is not allowed")
+    await ensure_public_host(hostname, label="Manifest URL")
 
 
 def _decode_external_json(response: httpx.Response, context: str) -> dict[str, Any]:

@@ -46,6 +46,7 @@ class Settings:
     external_catalog_max_items: int
     outbox_max_attempts: int
     outbox_stale_minutes: int
+    allow_private_urls: bool
 
 
 def load_settings() -> Settings:
@@ -127,6 +128,7 @@ def load_settings() -> Settings:
         ),
         outbox_max_attempts=int(_get_env("LIBRARYSYNC_OUTBOX_MAX_ATTEMPTS", "48") or "48"),
         outbox_stale_minutes=int(_get_env("LIBRARYSYNC_OUTBOX_STALE_MINUTES", "30") or "30"),
+        allow_private_urls=(_get_env("LIBRARYSYNC_ALLOW_PRIVATE_URLS", "false") or "false").lower() == "true",
     )
 
 

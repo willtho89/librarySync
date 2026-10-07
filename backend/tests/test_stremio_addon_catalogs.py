@@ -275,10 +275,10 @@ class TestStremioAddonCatalogs(unittest.TestCase):
         self.assertEqual([item.title for item in deduped], ["First", "Second"])
 
     def test_normalize_external_manifest_url_preserves_query(self) -> None:
-        self.assertEqual(
-            asyncio.run(normalize_external_manifest_url("https://addon.example/path?foo=bar")),
-            "https://addon.example/path/manifest.json?foo=bar",
-        )
+        # Host safety is covered in test_url_safety; addon.example does not resolve.
+        with patch("librarysync.core.external_catalog._validate_external_manifest_host", new=AsyncMock()):
+            normalized = asyncio.run(normalize_external_manifest_url("https://addon.example/path?foo=bar"))
+        self.assertEqual(normalized, "https://addon.example/path/manifest.json?foo=bar")
 
     def test_normalize_external_manifest_url_rejects_disallowed_host(self) -> None:
         with self.assertRaises(ValueError):
