@@ -12,7 +12,7 @@ from librarysync.core.http_client import get_http_client
 
 DEFAULT_ANILIST_API_URL = "https://graphql.anilist.co"
 ANILIST_OAUTH_AUTHORIZE_URL = "https://anilist.co/api/v2/oauth/authorize"
-ANILIST_OAUTH_TOKEN_URL = "https://anilist.co/api/v2/oauth/token"
+ANILIST_OAUTH_TOKEN_URL = "https://anilist.co/api/v2/oauth/token"  # noqa: S105 - endpoint URL, not a secret
 ANILIST_REQUIRED_FIELDS = ("access_token",)
 
 

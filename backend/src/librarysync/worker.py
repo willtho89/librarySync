@@ -2,8 +2,8 @@ import asyncio
 import logging
 import os
 import signal
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Awaitable, Callable
 
 from librarysync.config import settings
 from librarysync.core.http_client import quiet_http_request_logging

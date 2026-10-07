@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date, datetime
+from datetime import date
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -601,7 +601,7 @@ async def refresh_episode_metadata(
     """Force-refresh a single episode's metadata, overwriting title/air_date if provider returns them.
 
     Returns True if any update was made.
-    """  # noqa: E501
+    """
     if media_item.media_type != "tv" or not media_item.tmdb_id:
         return False
     overrides = provider_overrides or {}
@@ -901,6 +901,6 @@ def _parse_date(value: str | None) -> date | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
+        return date.fromisoformat(value)
     except ValueError:
         return None

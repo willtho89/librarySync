@@ -27,7 +27,7 @@ class RateLimiter:
         self._configs = configs
 
     @classmethod
-    def from_settings(cls) -> "RateLimiter":
+    def from_settings(cls) -> RateLimiter:
         return cls(_build_rate_limit_configs())
 
     async def try_acquire(

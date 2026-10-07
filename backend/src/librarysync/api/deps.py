@@ -1,5 +1,5 @@
 import secrets
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from fastapi import Depends, Header, HTTPException, Security, status
 from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer

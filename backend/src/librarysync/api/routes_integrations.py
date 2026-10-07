@@ -1,7 +1,8 @@
 import json
 import secrets
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse

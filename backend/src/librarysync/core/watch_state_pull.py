@@ -287,7 +287,7 @@ async def build_watch_state(
         items.pop(video_id, None)
         if body["event"] in {"start", "unplayed"}:
             continue
-        played = body["event"] == "played" or body["event"] == "stop" and body.get("played", False)
+        played = body["event"] == "played" or (body["event"] == "stop" and body.get("played", False))
         position = body.get("positionMs")
         if not played and not position:
             continue

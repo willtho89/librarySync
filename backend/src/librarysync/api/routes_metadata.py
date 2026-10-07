@@ -1,7 +1,8 @@
 import logging
 import re
-from datetime import date, datetime
-from typing import Awaitable, Callable, Literal
+from collections.abc import Awaitable, Callable
+from datetime import date
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
@@ -282,7 +283,7 @@ def _extract_ids_from_raw_dict(raw: dict) -> dict[str, str]:
         ("tmdbId", "tmdb_id"),
         ("tmdbID", "tmdb_id"),
     ]:
-        if key in raw and raw[key]:
+        if raw.get(key):
             ids.setdefault(id_key, str(raw[key]))
     nested = raw.get("ids")
     if isinstance(nested, dict):
@@ -294,7 +295,7 @@ def _extract_ids_from_raw_dict(raw: dict) -> dict[str, str]:
             "anilist_id",
             "tmdb_id",
         ]:
-            if id_key in nested and nested[id_key]:
+            if nested.get(id_key):
                 ids.setdefault(id_key, str(nested[id_key]))
     return ids
 
@@ -1128,7 +1129,7 @@ def _parse_air_date(value: str | None) -> date | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
+        return date.fromisoformat(value)
     except ValueError:
         return None
 

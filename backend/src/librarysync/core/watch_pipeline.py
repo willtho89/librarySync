@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, ClassVar
+from typing import Any, ClassVar
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -835,7 +836,7 @@ class TraktSyncStrategy(HistorySyncStrategy):
                 has_required_fields=has_required_trakt_fields,
                 build_payload=build_trakt_payload,
                 client_id_attr="trakt_client_id",
-                client_secret_attr="trakt_client_secret",
+                client_secret_attr="trakt_client_secret",  # noqa: S106 - settings attribute name
                 include_history_id_on_delete=True,
             )
         )
@@ -849,7 +850,7 @@ class SimklSyncStrategy(HistorySyncStrategy):
                 has_required_fields=has_required_simkl_fields,
                 build_payload=build_simkl_payload,
                 client_id_attr="simkl_client_id",
-                client_secret_attr="simkl_client_secret",
+                client_secret_attr="simkl_client_secret",  # noqa: S106 - settings attribute name
             )
         )
 

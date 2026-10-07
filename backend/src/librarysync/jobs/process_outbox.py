@@ -644,7 +644,7 @@ def _group_batchable_jobs(jobs: list[OutboxJob]) -> tuple[list[list[OutboxJob]],
         else:
             remaining.append(job)
     batch_groups: list[list[OutboxJob]] = []
-    for (user_id, provider, job_type), group in grouped.items():
+    for (_user_id, provider, _job_type), group in grouped.items():
         if len(group) < 2:
             remaining.extend(group)
             continue
@@ -1088,7 +1088,7 @@ async def _deliver_letterboxd_log_update(
         cookies=_safe_cookies(secret_data.get("cookies")),
     )
     access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
-    response, response_code = await client.update_log_entry(
+    _response, response_code = await client.update_log_entry(
         str(entry_id),
         watched_at=watched_at,
         rating=rating,
@@ -1750,7 +1750,7 @@ def _normalize_publicmetadb_rating(value: object) -> int:
     rating = coerce_star_rating(value)
     if rating is None:
         raise ValueError("PublicMetaDB rating must be between 0.5 and 5.0 stars")
-    normalized = int(round(rating * 20))
+    normalized = round(rating * 20)
     if normalized < 0:
         return 0
     if normalized > 100:
@@ -3027,7 +3027,7 @@ def _normalize_trakt_rating(value: object) -> int:
     rating = coerce_star_rating(value)
     if rating is None:
         raise ValueError("Trakt rating must be between 0.5 and 5.0 stars")
-    normalized = int(round(rating * 2))
+    normalized = round(rating * 2)
     if normalized < 1 or normalized > 10:
         raise ValueError("Trakt rating must be between 1 and 10")
     return normalized
@@ -3037,7 +3037,7 @@ def _normalize_simkl_rating(value: object) -> int:
     rating = coerce_star_rating(value)
     if rating is None:
         raise ValueError("SIMKL rating must be between 0.5 and 5.0 stars")
-    normalized = int(round(rating * 2))
+    normalized = round(rating * 2)
     if normalized < 1 or normalized > 10:
         raise ValueError("SIMKL rating must be between 1 and 10")
     return normalized

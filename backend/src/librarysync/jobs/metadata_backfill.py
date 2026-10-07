@@ -304,4 +304,4 @@ def _should_sample_media_item(
         over_delta = age - refresh_delta if age > refresh_delta else timedelta(0)
         weight = 1.0 + (over_delta.total_seconds() / refresh_delta.total_seconds())
     probability = min(1.0, sample_rate * weight)
-    return random.random() < probability
+    return random.random() < probability  # noqa: S311 - sampling, not security

@@ -67,7 +67,7 @@ def install_watch_state_triggers(connection: Connection) -> None:
             if table == "watch_state_entries":
                 condition = f" WHEN {refs[-1]}.category <> 'playback'"
             statements = " ".join(
-                "INSERT INTO watch_state_revisions(user_id, revision) "
+                "INSERT INTO watch_state_revisions(user_id, revision) "  # noqa: S608 - fixed identifiers only
                 f"SELECT {ref}.user_id, 1 WHERE EXISTS(SELECT 1 FROM users WHERE id = {ref}.user_id) "
                 "ON CONFLICT(user_id) DO UPDATE SET revision = revision + 1;"
                 for ref in refs

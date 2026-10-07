@@ -756,7 +756,7 @@ async def clear_watched_items(
     now = datetime.now(timezone.utc)
     events: list[WatchEvent] = []
     watchlist_media_ids: set[str] = set()
-    for watched, media_item, episode_item, show in rows:
+    for watched, media_item, _episode_item, show in rows:
         events.append(
             WatchEvent(
                 user_id=current_user.id,

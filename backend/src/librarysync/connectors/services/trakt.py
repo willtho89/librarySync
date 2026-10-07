@@ -16,7 +16,7 @@ from librarysync.core.http_client import get_http_client
 
 DEFAULT_TRAKT_API_BASE_URL = "https://api.trakt.tv"
 TRAKT_OAUTH_AUTHORIZE_URL = "https://api.trakt.tv/oauth/authorize"
-TRAKT_OAUTH_TOKEN_URL = "https://api.trakt.tv/oauth/token"
+TRAKT_OAUTH_TOKEN_URL = "https://api.trakt.tv/oauth/token"  # noqa: S105 - endpoint URL, not a secret
 TRAKT_REQUIRED_FIELDS = ("access_token", "refresh_token")
 
 

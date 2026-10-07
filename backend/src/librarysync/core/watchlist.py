@@ -216,8 +216,8 @@ def determine_show_watchlist_status(
 ) -> str:
     if total_released <= 0:
         if (
-            first_air_date is None
-            and earliest_air_date is None
+            (first_air_date is None
+            and earliest_air_date is None)
             or _is_future_date(first_air_date, now_date)
             or _is_future_date(earliest_air_date, now_date)
         ):
@@ -253,7 +253,7 @@ def _parse_air_date(value: str | None) -> date | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
+        return date.fromisoformat(value)
     except ValueError:
         return None
 

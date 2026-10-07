@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import random
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, fields
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
@@ -478,7 +479,7 @@ async def load_random_provider(
         candidates.append(integration.user_id)
     if not candidates:
         return None
-    user_id = random.choice(candidates)
+    user_id = random.choice(candidates)  # noqa: S311 - load spreading, not security
     integration, secret_data = await load_integration_with_secrets(db, user_id, provider)
     if not integration or not integration.config:
         return None

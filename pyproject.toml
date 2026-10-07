@@ -6,4 +6,19 @@ line-length = 120
 extend-exclude = ["**/db/migrations/**"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "DTZ", "RUF", "S"]
+ignore = [
+  "RUF001", "RUF002", "RUF003", # intentional typographic characters in user-facing text
+  "RUF012",                     # mutable class attributes on dataclasses/pydantic models are fine here
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency markers are evaluated once by design.
+extend-immutable-calls = [
+  "fastapi.Body", "fastapi.Cookie", "fastapi.Depends", "fastapi.File", "fastapi.Form",
+  "fastapi.Header", "fastapi.Path", "fastapi.Query", "fastapi.Security",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/**" = ["S101", "S105", "S106", "S107", "S108", "S311", "DTZ", "ASYNC", "RUF", "B011", "B017", "B905"]
+"scripts/**" = ["S603", "S607"]

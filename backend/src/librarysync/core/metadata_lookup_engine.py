@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -8,6 +9,8 @@ from librarysync.connectors.metadata.base import (
     MediaCandidate,
     MetadataProvider,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SCOPE_ORDER = ("movie", "tv", "anime")
 
@@ -136,6 +139,9 @@ class MetadataLookupEngine:
                         enriched.append(detail)
                         continue
                 except Exception:
-                    pass
+                    # Detail enrichment is best effort; keep the search candidate.
+                    logger.debug(
+                        "Detail lookup failed for %s %s", candidate.provider, candidate.provider_id, exc_info=True
+                    )
             enriched.append(candidate)
         return enriched

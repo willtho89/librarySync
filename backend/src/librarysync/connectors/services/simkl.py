@@ -15,7 +15,7 @@ from librarysync.core.http_client import get_http_client
 
 DEFAULT_SIMKL_API_BASE_URL = "https://api.simkl.com"
 SIMKL_OAUTH_AUTHORIZE_URL = "https://simkl.com/oauth/authorize"
-SIMKL_OAUTH_TOKEN_URL = "https://api.simkl.com/oauth/token"
+SIMKL_OAUTH_TOKEN_URL = "https://api.simkl.com/oauth/token"  # noqa: S105 - endpoint URL, not a secret
 SIMKL_REQUIRED_FIELDS = ("access_token",)
 
 
