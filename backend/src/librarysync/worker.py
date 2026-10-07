@@ -19,6 +19,7 @@ from librarysync.jobs.metadata_backfill import process_metadata_backfill_once
 from librarysync.jobs.metadata_cache import process_metadata_cache_refresh_once
 from librarysync.jobs.metadata_lookup import process_metadata_lookups_once
 from librarysync.jobs.process_outbox import process_outbox_once
+from librarysync.jobs.retention import process_retention_once
 from librarysync.jobs.watch_state import process_watch_state_once
 from librarysync.jobs.watchlist_refresh import process_watchlist_refresh_once
 
@@ -49,6 +50,8 @@ MODE_CONFIGS: dict[str, ModeConfig] = {
     "merge_all_history": ModeConfig(
         "merge_all_history", process_merge_all_history_once, 86400.0, 3600.0
     ),  # daily
+    # Scheduled daily via a lease; polling hourly just checks whether it is due.
+    "retention": ModeConfig("retention", process_retention_once, 3600.0, 3600.0),
 }
 
 

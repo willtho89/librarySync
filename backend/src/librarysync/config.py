@@ -49,6 +49,8 @@ class Settings:
     allow_private_urls: bool
     secret_key_previous: tuple[str, ...]
     allow_insecure_secret_key: bool
+    outbox_retention_days: int
+    lookup_retention_days: int
 
 
 def load_settings() -> Settings:
@@ -137,6 +139,8 @@ def load_settings() -> Settings:
         allow_insecure_secret_key=(
             (_get_env("LIBRARYSYNC_ALLOW_INSECURE_SECRET_KEY", "false") or "false").lower() == "true"
         ),
+        outbox_retention_days=int(_get_env("LIBRARYSYNC_OUTBOX_RETENTION_DAYS", "90") or "90"),
+        lookup_retention_days=int(_get_env("LIBRARYSYNC_LOOKUP_RETENTION_DAYS", "30") or "30"),
     )
 
 
