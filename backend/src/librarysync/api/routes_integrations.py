@@ -271,7 +271,7 @@ def _validate_oauth_state(
 ) -> None:
     stored_state = config.get("oauth_state")
     stored_expires = parse_expires(config.get("oauth_state_expires_at"))
-    if stored_state is None or stored_state != state:
+    if not isinstance(stored_state, str) or not secrets.compare_digest(stored_state, state):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid OAuth state",

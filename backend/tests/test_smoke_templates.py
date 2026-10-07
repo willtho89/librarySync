@@ -14,6 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 def mock_lifespan():
     with (
         patch("librarysync.main.run_migrations"),
+        patch("librarysync.main.validate_security_settings"),
         patch("librarysync.main.init_session_factory"),
     ):
         yield

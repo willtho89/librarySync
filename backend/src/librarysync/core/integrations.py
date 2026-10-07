@@ -3,7 +3,7 @@ import json
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.core.security import decrypt_value
+from librarysync.core.security import decrypt_value, rotate_encrypted_value
 from librarysync.db.models import Integration, IntegrationSecret
 
 
@@ -33,3 +33,19 @@ async def load_integration_with_secrets(
     if not isinstance(data, dict):
         return integration, None
     return integration, {str(key): value for key, value in data.items()}
+
+
+async def reencrypt_integration_secrets(db: AsyncSession) -> int:
+    """Re-encrypt stored credentials under the current key after a key rotation."""
+    result = await db.execute(select(IntegrationSecret))
+    rotated = 0
+    for secret in result.scalars().all():
+        try:
+            updated = rotate_encrypted_value(secret.secret_data)
+        except ValueError:
+            continue
+        if updated is not None:
+            secret.secret_data = updated
+            rotated += 1
+    await db.commit()
+    return rotated

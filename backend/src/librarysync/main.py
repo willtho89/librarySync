@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from importlib import metadata
 from pathlib import Path
@@ -28,10 +29,13 @@ from librarysync.api import (
 )
 from librarysync.api.deps import get_db, get_optional_user
 from librarysync.config import settings
+from librarysync.core.integrations import reencrypt_integration_secrets
+from librarysync.core.security import validate_security_settings
 from librarysync.db.migrate import run_migrations
 from librarysync.db.models import User
-from librarysync.db.session import init_session_factory
+from librarysync.db.session import SessionLocal, init_session_factory
 
+logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_CACHE_LONG = 60 * 60 * 24 * 30
@@ -80,11 +84,14 @@ def create_app() -> FastAPI:
         openapi_tags=OPENAPI_TAGS,
     )
 
-    # CORS configuration
+    # The Stremio addon and Watch State endpoints are fetched cross-origin by
+    # Stremio/AIOStreams clients and authenticate via the URL, never cookies.
+    # Credentialed cross-origin access would let any site the user visits drive
+    # the cookie-authenticated API, so credentials are never allowed.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -213,8 +220,14 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        validate_security_settings()
         run_migrations()
         init_session_factory()
+        if settings.secret_key_previous:
+            async with SessionLocal() as db:
+                rotated = await reencrypt_integration_secrets(db)
+            if rotated:
+                logger.info("Re-encrypted %s integration secret(s) under the current key", rotated)
         yield
 
     app.router.lifespan_context = lifespan

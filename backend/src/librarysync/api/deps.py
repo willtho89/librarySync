@@ -1,3 +1,4 @@
+import secrets
 from typing import AsyncIterator
 
 from fastapi import Depends, Header, HTTPException, Security, status
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.config import settings
 from librarysync.core.auth import decode_access_token
+from librarysync.core.security import is_placeholder_admin_key
 from librarysync.db.models import User
 from librarysync.db.session import get_session
 
@@ -76,10 +78,12 @@ async def get_optional_user(
 async def get_admin_api_key(
     admin_api_key: str = Header(alias="X-API-Key", examples=["your-admin-api-key"]),
 ) -> str:
-    if not settings.admin_api_key:
+    if not settings.admin_api_key or is_placeholder_admin_key(settings.admin_api_key):
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="API key not configured"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key not configured"
         )
-    if not admin_api_key or admin_api_key != settings.admin_api_key:
+    if not admin_api_key or not secrets.compare_digest(
+        admin_api_key.encode("utf-8"), settings.admin_api_key.encode("utf-8")
+    ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
     return admin_api_key

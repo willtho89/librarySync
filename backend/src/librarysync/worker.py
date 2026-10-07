@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from librarysync.config import settings
+from librarysync.core.security import validate_security_settings
 from librarysync.core.shutdown import request_shutdown
 from librarysync.jobs.external_catalog_refresh import process_external_catalog_refresh_once
 from librarysync.jobs.imports import process_import_all_once, process_quick_import_once
@@ -116,6 +117,7 @@ async def main() -> None:
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    validate_security_settings()
     modes = _parse_modes()
     mode_names = ", ".join(mode.name for mode in modes)
     logger.info("librarysync worker starting (modes: %s)", mode_names)

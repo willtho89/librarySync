@@ -47,6 +47,8 @@ class Settings:
     outbox_max_attempts: int
     outbox_stale_minutes: int
     allow_private_urls: bool
+    secret_key_previous: tuple[str, ...]
+    allow_insecure_secret_key: bool
 
 
 def load_settings() -> Settings:
@@ -129,6 +131,12 @@ def load_settings() -> Settings:
         outbox_max_attempts=int(_get_env("LIBRARYSYNC_OUTBOX_MAX_ATTEMPTS", "48") or "48"),
         outbox_stale_minutes=int(_get_env("LIBRARYSYNC_OUTBOX_STALE_MINUTES", "30") or "30"),
         allow_private_urls=(_get_env("LIBRARYSYNC_ALLOW_PRIVATE_URLS", "false") or "false").lower() == "true",
+        secret_key_previous=tuple(
+            key.strip() for key in (_get_env("LIBRARYSYNC_SECRET_KEY_PREVIOUS", "") or "").split(",") if key.strip()
+        ),
+        allow_insecure_secret_key=(
+            (_get_env("LIBRARYSYNC_ALLOW_INSECURE_SECRET_KEY", "false") or "false").lower() == "true"
+        ),
     )
 
 

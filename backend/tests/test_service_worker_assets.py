@@ -40,6 +40,7 @@ ROUTED_ASSETS = [path for path in CORE_ASSETS if not path.startswith("/static/")
 def mock_lifespan():
     with (
         patch("librarysync.main.run_migrations"),
+        patch("librarysync.main.validate_security_settings"),
         patch("librarysync.main.init_session_factory"),
     ):
         yield
