@@ -6,8 +6,10 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
+import httpx
 from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -562,7 +564,13 @@ async def _finalize_job(
     error_message: str | None,
     now: datetime,
     response_code: int | None = None,
+    retry_after: float | None = None,
 ) -> tuple[str, str | None]:
+    if response_code == 429:
+        # Provider throttling is not a delivery failure: retry when the provider
+        # allows it without consuming one of the job's attempts.
+        job.attempts = max(job.attempts - 1, 0)
+        status = "failed_retryable"
     if (
         status == "failed_permanent"
         and response_code == 401
@@ -580,7 +588,9 @@ async def _finalize_job(
         error_message = "Superseded by a newer queued job"
     job.status = status
     job.last_error = error_message
-    if status == "failed_retryable":
+    if status == "failed_retryable" and response_code == 429:
+        job.run_after = now + _throttle_delay(retry_after)
+    elif status == "failed_retryable":
         job.run_after = now + _next_retry_delay(job.attempts)
     else:
         job.run_after = None
@@ -684,49 +694,40 @@ async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
     if not jobs:
         return
     now = datetime.now(timezone.utc)
+    # A batch is one provider request, so it costs one rate-limit token.
+    rate_decision = await RATE_LIMITER.try_acquire(db, jobs[0].user_id, jobs[0].target_provider, now=now)
+    if rate_decision and not rate_decision.allowed:
+        for job in jobs:
+            if await _requeue_job(db, job, now, run_after=rate_decision.retry_at, last_error="rate_limited"):
+                await _update_watch_sync(db, job, "pending", job.last_error, None, now)
+        await db.commit()
+        logger.info(
+            "Outbox batch of %s %s job(s) rate-limited until %s",
+            len(jobs),
+            f"{jobs[0].target_provider}:{jobs[0].job_type}",
+            rate_decision.retry_at.isoformat() if rate_decision.retry_at else "unknown",
+        )
+        return
     for job in jobs:
         job.attempts += 1
     status = "succeeded"
     response_code: int | None = None
     error_message: str | None = None
+    retry_after: float | None = None
 
     try:
         deliveries = [job for job in jobs if not await _superseded_history_rating(db, job)]
         if deliveries:
             response_code = await _deliver_batch(db, deliveries)
-    except LetterboxdError as exc:
-        response_code = exc.status_code
-        error_message = _format_letterboxd_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except TraktError as exc:
-        response_code = exc.status_code
-        error_message = _format_trakt_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except SimklError as exc:
-        response_code = exc.status_code
-        error_message = _format_simkl_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except PublicMetaDbError as exc:
-        response_code = exc.status_code
-        error_message = _format_publicmetadb_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except StremioError as exc:
-        response_code = exc.status_code
-        error_message = _format_stremio_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except AniListError as exc:
-        response_code = exc.status_code
-        error_message = _format_anilist_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except ValueError as exc:
-        error_message = str(exc)
-        status = "failed_permanent"
     except Exception as exc:
-        error_message = str(exc)
-        status = "failed_retryable"
+        failure = _describe_failure(exc)
+        status, error_message, response_code = failure.status, failure.error, failure.response_code
+        retry_after = failure.retry_after
 
     for job in jobs:
-        job_status, job_error = await _finalize_job(db, job, status, error_message, now, response_code)
+        job_status, job_error = await _finalize_job(
+            db, job, status, error_message, now, response_code, retry_after
+        )
         if job_status != SUPERSEDED_STATUS:
             await _update_watch_sync(
                 db,
@@ -851,44 +852,21 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     error_message: str | None = None
     external_id: str | None = None
     resolved_rewatch: bool | None = None
+    retry_after: float | None = None
 
     try:
         result = await OUTBOX_DISPATCHER.deliver(db, job)
         response_code = result.response_code
         external_id = result.external_id
         resolved_rewatch = result.resolved_rewatch
-    except LetterboxdError as exc:
-        response_code = exc.status_code
-        error_message = _format_letterboxd_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except TraktError as exc:
-        response_code = exc.status_code
-        error_message = _format_trakt_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except SimklError as exc:
-        response_code = exc.status_code
-        error_message = _format_simkl_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except PublicMetaDbError as exc:
-        response_code = exc.status_code
-        error_message = _format_publicmetadb_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except StremioError as exc:
-        response_code = exc.status_code
-        error_message = _format_stremio_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except AniListError as exc:
-        response_code = exc.status_code
-        error_message = _format_anilist_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except ValueError as exc:
-        error_message = str(exc)
-        status = "failed_permanent"
     except Exception as exc:
-        error_message = str(exc)
-        status = "failed_retryable"
+        failure = _describe_failure(exc)
+        status, error_message, response_code = failure.status, failure.error, failure.response_code
+        retry_after = failure.retry_after
 
-    status, error_message = await _finalize_job(db, job, status, error_message, now, response_code)
+    status, error_message = await _finalize_job(
+        db, job, status, error_message, now, response_code, retry_after
+    )
     if status != SUPERSEDED_STATUS:
         await _update_watch_sync(
             db,
@@ -3306,6 +3284,67 @@ async def _update_watch_sync(
         if external_id:
             watch_sync.external_id = external_id
     watch_sync.updated_at = now
+
+
+@dataclass(frozen=True)
+class DeliveryFailure:
+    status: str
+    error: str
+    response_code: int | None
+    retry_after: float | None
+
+
+def _provider_error_formatters() -> tuple[tuple[type[Exception], Any], ...]:
+    return (
+        (LetterboxdError, _format_letterboxd_error),
+        (TraktError, _format_trakt_error),
+        (SimklError, _format_simkl_error),
+        (PublicMetaDbError, _format_publicmetadb_error),
+        (StremioError, _format_stremio_error),
+        (AniListError, _format_anilist_error),
+    )
+
+
+def _describe_failure(exc: Exception) -> DeliveryFailure:
+    for error_type, formatter in _provider_error_formatters():
+        if isinstance(exc, error_type):
+            status_code = getattr(exc, "status_code", None)
+            message = formatter(exc)
+            return DeliveryFailure(
+                status=_classify_failure(status_code, message),
+                error=message,
+                response_code=status_code,
+                retry_after=_retry_after_seconds(exc),
+            )
+    if isinstance(exc, ValueError):
+        return DeliveryFailure("failed_permanent", str(exc), None, None)
+    return DeliveryFailure("failed_retryable", str(exc), None, None)
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """Read Retry-After from the HTTP response that caused a provider error, if any."""
+    cause = exc.__cause__
+    if not isinstance(cause, httpx.HTTPStatusError):
+        return None
+    value = cause.response.headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        return max(float(value), 0.0)
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0.0)
+
+
+def _throttle_delay(retry_after: float | None) -> timedelta:
+    seconds = retry_after if retry_after is not None else 60.0
+    return timedelta(seconds=min(max(seconds, 1.0), 3600.0))
 
 
 def _classify_failure(status_code: int | None, message: str | None) -> str:
