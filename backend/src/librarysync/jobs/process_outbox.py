@@ -10,7 +10,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -791,30 +791,45 @@ async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
         ]
         if blocked_users:
             filters.append(~OutboxJob.user_id.in_(blocked_users))
-        base_query = (
-            select(OutboxJob)
-            .where(*filters)
-            .order_by(OutboxJob.user_id, OutboxJob.created_at)
-            .with_for_update(skip_locked=True)
-        )
         jobs: list[OutboxJob] = []
         for provider, provider_limit in _mixed_provider_limits(limit, MIXED_PROVIDER_ORDER).items():
-            result = await db.execute(
-                base_query.where(OutboxJob.target_provider == provider).limit(provider_limit)
+            jobs.extend(
+                await _lock_fair_batch(db, [*filters, OutboxJob.target_provider == provider], provider_limit)
             )
-            jobs.extend(result.scalars().all())
         remaining_limit = limit - len(jobs)
         if remaining_limit > 0:
             claimed_ids = [job.id for job in jobs]
-            remainder_filters = []
-            if claimed_ids:
-                remainder_filters.append(~OutboxJob.id.in_(claimed_ids))
-            result = await db.execute(base_query.where(*remainder_filters).limit(remaining_limit))
-            jobs.extend(result.scalars().all())
+            remainder_filters = [~OutboxJob.id.in_(claimed_ids)] if claimed_ids else []
+            jobs.extend(await _lock_fair_batch(db, [*filters, *remainder_filters], remaining_limit))
         for job in jobs:
             job.status = "in_progress"
             job.updated_at = now
     return jobs
+
+
+async def _lock_fair_batch(db: AsyncSession, filters: list[Any], limit: int) -> list[OutboxJob]:
+    """Lock up to `limit` waiting jobs, taking users round-robin (each user's oldest first)
+    so one user's large backlog cannot hold back everyone else's syncs.
+
+    Ranking and locking are separate statements because PostgreSQL does not allow
+    FOR UPDATE together with window functions.
+    """
+    if limit <= 0:
+        return []
+    user_rank = func.row_number().over(partition_by=OutboxJob.user_id, order_by=OutboxJob.created_at)
+    ranked = await db.execute(
+        select(OutboxJob.id, user_rank.label("user_rank"))
+        .where(*filters)
+        .order_by(user_rank, OutboxJob.created_at)
+        .limit(limit * 2)
+    )
+    order = {job_id: index for index, (job_id, _rank) in enumerate(ranked.all())}
+    if not order:
+        return []
+    locked = await db.execute(
+        select(OutboxJob).where(OutboxJob.id.in_(list(order)), *filters).with_for_update(skip_locked=True)
+    )
+    return sorted(locked.scalars().all(), key=lambda job: order[job.id])[:limit]
 
 
 async def _process_job(db: AsyncSession, job: OutboxJob) -> None:

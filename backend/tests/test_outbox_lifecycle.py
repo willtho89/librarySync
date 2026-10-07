@@ -330,3 +330,41 @@ async def test_deleting_a_watch_cancels_its_queued_pushes(factory):
         "remove-w1": "pending",
         "push-w2": "pending",
     }
+
+
+@pytest.mark.asyncio
+async def test_claims_interleave_users_instead_of_draining_one_backlog(factory):
+    base = datetime.now(timezone.utc) - timedelta(hours=1)
+    async with factory() as db:
+        db.add(User(id="user-2", username="two", password_hash="unused"))
+        for index in range(10):
+            db.add(
+                OutboxJob(
+                    id=f"a{index}",
+                    user_id=USER,
+                    target_provider="letterboxd",
+                    job_type="push_watched",
+                    payload={},
+                    status="pending",
+                    created_at=base + timedelta(seconds=index),
+                )
+            )
+        db.add(
+            OutboxJob(
+                id="b0",
+                user_id="user-2",
+                target_provider="letterboxd",
+                job_type="push_watched",
+                payload={},
+                status="pending",
+                created_at=base + timedelta(minutes=30),
+            )
+        )
+        await db.commit()
+
+    with patch.object(process_outbox, "load_blocked_outbox_users", AsyncMock(return_value=set())):
+        async with factory() as db:
+            claimed = await process_outbox._claim_jobs(db, 4)
+
+    assert "b0" in {job.id for job in claimed}
+    assert len(claimed) == 4
