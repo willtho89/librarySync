@@ -32,6 +32,7 @@ from librarysync.config import settings
 from librarysync.core.http_client import quiet_http_request_logging
 from librarysync.core.integrations import reencrypt_integration_secrets
 from librarysync.core.security import validate_security_settings
+from librarysync.core.security_headers import install_security_headers
 from librarysync.db.migrate import run_migrations
 from librarysync.db.models import User
 from librarysync.db.session import SessionLocal, init_session_factory
@@ -99,6 +100,8 @@ def create_app() -> FastAPI:
 
     if settings.gzip_enabled:
         app.add_middleware(GZipMiddleware, minimum_size=settings.gzip_min_size)
+
+    install_security_headers(app, sorted(TEMPLATES_DIR.rglob("*.html")))
 
     app.include_router(routes_auth.router)
     app.include_router(routes_integrations.router)

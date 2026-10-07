@@ -134,3 +134,27 @@ class TestStaticAssets:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestSecurityHeaders:
+    def test_pages_send_csp_that_allows_their_inline_scripts(self, client):
+        import base64
+        import hashlib
+        import re
+
+        response = client.get("/login")
+        assert response.status_code == 200
+        csp = response.headers["content-security-policy"]
+        assert "frame-ancestors 'none'" in csp
+        assert "'unsafe-inline'" not in csp.split("script-src", 1)[1].split(";", 1)[0]
+        inline_scripts = re.findall(r"<script>(.*?)</script>", response.text, re.DOTALL)
+        assert inline_scripts, "expected the pre-paint theme script"
+        for body in inline_scripts:
+            digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
+            assert f"'sha256-{digest}'" in csp
+
+    def test_common_headers_on_api_responses(self, client):
+        response = client.get("/health")
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["x-frame-options"] == "DENY"
+        assert "content-security-policy" not in response.headers
