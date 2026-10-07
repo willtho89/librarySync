@@ -8,6 +8,7 @@ Covers the worker outages caused by unguarded ID stamping:
 
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from librarysync.core.scheduler import fail_scheduled_job
@@ -276,7 +277,9 @@ async def test_fail_scheduled_job_recovers_from_poisoned_session() -> None:
         with pytest.raises(Exception):
             await db.flush()
 
-        await fail_scheduled_job(db, job_name, timedelta(minutes=10), NOW)
+        # This worker owns the lease it is releasing.
+        with patch("librarysync.core.scheduler.worker_instance_id", return_value="worker-1"):
+            await fail_scheduled_job(db, job_name, timedelta(minutes=10), NOW)
 
         refreshed = await db.get(ScheduledJob, job_name)
         assert refreshed is not None
