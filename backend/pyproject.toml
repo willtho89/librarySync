@@ -17,8 +17,9 @@ dependencies = [
   "pydantic>=2.13.5",
   "python-dotenv>=1.2.4",
   "httpx>=0.28.1",
-  "passlib[bcrypt]>=1.7.4",
-  "python-jose[cryptography]>=3.5.0",
+  "bcrypt>=5.0.0",
+  "cryptography>=50.0.2",
+  "pyjwt>=2.15.1",
   "greenlet>=3.5.6",
   "parsett>=1.8.5",
 ]
