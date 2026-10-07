@@ -284,8 +284,42 @@ class SyncCoordinator:
         media_item: MediaItem | None,
         episode_item: EpisodeItem | None,
     ) -> None:
+        await cancel_queued_pushes(db, watched.user_id, [watched.id])
         for strategy in self._registry.list():
             await strategy.enqueue_delete(db, watched, media_item, episode_item)
+
+
+# Queued jobs that would (re)create a watch at a provider.
+WATCH_PUSH_JOB_TYPES = ("new_item_added", "push_watched", "push_rating", "update_history", "update_log_entry")
+
+
+async def cancel_queued_pushes(
+    db: AsyncSession, user_id: str, watched_item_ids: list[str] | None = None
+) -> int:
+    """Cancel queued pushes for watches being deleted (all of the user's when ids is None).
+
+    A push still waiting for a retry would otherwise recreate the deleted watch at the
+    provider, possibly after the provider deletion already ran.
+    """
+    if watched_item_ids is not None and not watched_item_ids:
+        return 0
+    conditions = [
+        OutboxJob.user_id == user_id,
+        OutboxJob.status.in_(("pending", "failed_retryable")),
+        OutboxJob.job_type.in_(WATCH_PUSH_JOB_TYPES),
+    ]
+    if watched_item_ids is not None:
+        conditions.append(OutboxJob.payload["watched_item_id"].as_string().in_(watched_item_ids))
+    result = await db.execute(select(OutboxJob).where(*conditions))
+    jobs = result.scalars().all()
+    now = datetime.now(timezone.utc)
+    for job in jobs:
+        job.status = "superseded"
+        job.dedupe_key = None
+        job.run_after = None
+        job.last_error = "Cancelled because the watch was deleted"
+        job.updated_at = now
+    return len(jobs)
 
 
 async def enqueue_new_item_job(

@@ -36,9 +36,7 @@ def _outbox_patches(factory, deliver=None, deliver_batch=None):
     stack = ExitStack()
     stack.enter_context(patch.object(process_outbox, "SessionLocal", factory))
     stack.enter_context(patch.object(process_outbox, "init_session_factory", lambda: None))
-    stack.enter_context(
-        patch.object(process_outbox, "load_blocked_outbox_users", AsyncMock(return_value=set()))
-    )
+    stack.enter_context(patch.object(process_outbox, "load_blocked_outbox_users", AsyncMock(return_value=set())))
     stack.enter_context(patch.object(process_outbox.RATE_LIMITER, "try_acquire", AsyncMock(return_value=None)))
     if deliver is not None:
         stack.enter_context(patch.object(process_outbox.OUTBOX_DISPATCHER, "deliver", deliver))
@@ -55,9 +53,7 @@ async def _jobs(factory) -> list[OutboxJob]:
 
 async def _enqueue(factory, job_type: str, payload: dict) -> str:
     async with factory() as db:
-        job = await enqueue_outbox_job(
-            db, user_id=USER, target_provider="trakt", job_type=job_type, payload=payload
-        )
+        job = await enqueue_outbox_job(db, user_id=USER, target_provider="trakt", job_type=job_type, payload=payload)
         await db.commit()
         return job.id
 
@@ -165,9 +161,16 @@ async def test_stale_in_progress_jobs_are_recovered(factory):
 
 @pytest.mark.asyncio
 async def test_retryable_failures_give_up_after_max_attempts(factory, monkeypatch):
-    monkeypatch.setattr(process_outbox, "settings", SimpleNamespace(**{
-        **vars(process_outbox.settings), "outbox_max_attempts": 2,
-    }))
+    monkeypatch.setattr(
+        process_outbox,
+        "settings",
+        SimpleNamespace(
+            **{
+                **vars(process_outbox.settings),
+                "outbox_max_attempts": 2,
+            }
+        ),
+    )
     await _enqueue(factory, "push_watched", {"watched_item_id": "w1"})
     deliver = AsyncMock(side_effect=TraktError("unavailable", status_code=503))
 
@@ -271,3 +274,59 @@ async def test_rate_limited_batch_is_requeued_without_delivery(factory):
     jobs = await _jobs(factory)
     assert {job.status for job in jobs} == {"pending"}
     assert all(job.attempts == 0 for job in jobs)
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_watch_cancels_its_queued_pushes(factory):
+    from librarysync.core.watch_pipeline import cancel_queued_pushes
+
+    async with factory() as db:
+        db.add_all(
+            [
+                OutboxJob(
+                    id="push-w1",
+                    user_id=USER,
+                    target_provider="trakt",
+                    job_type="push_watched",
+                    payload={"watched_item_id": "w1"},
+                    status="pending",
+                ),
+                OutboxJob(
+                    id="rating-w1",
+                    user_id=USER,
+                    target_provider="simkl",
+                    job_type="push_rating",
+                    payload={"watched_item_id": "w1"},
+                    status="failed_retryable",
+                ),
+                OutboxJob(
+                    id="remove-w1",
+                    user_id=USER,
+                    target_provider="trakt",
+                    job_type="remove_history",
+                    payload={"watched_item_id": "w1"},
+                    status="pending",
+                ),
+                OutboxJob(
+                    id="push-w2",
+                    user_id=USER,
+                    target_provider="trakt",
+                    job_type="push_watched",
+                    payload={"watched_item_id": "w2"},
+                    status="pending",
+                ),
+            ]
+        )
+        await db.commit()
+
+    async with factory() as db:
+        assert await cancel_queued_pushes(db, USER, ["w1"]) == 2
+        await db.commit()
+
+    statuses = {job.id: job.status for job in await _jobs(factory)}
+    assert statuses == {
+        "push-w1": "superseded",
+        "rating-w1": "superseded",
+        "remove-w1": "pending",
+        "push-w2": "pending",
+    }

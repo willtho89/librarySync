@@ -25,6 +25,7 @@ from librarysync.core.ratings import normalize_star_rating
 from librarysync.core.watch_pipeline import (
     SYNC_COORDINATOR,
     SYNC_STRATEGY_REGISTRY,
+    cancel_queued_pushes,
     enqueue_new_item_job,
     enqueue_watchlist_update_job,
 )
@@ -781,6 +782,7 @@ async def clear_watched_items(
                 target_media.id,
             )
     db.add_all(events)
+    await cancel_queued_pushes(db, current_user.id)
     await db.execute(delete(WatchedItem).where(WatchedItem.user_id == current_user.id))
     await db.execute(
         delete(WatchEvent).where(
@@ -996,6 +998,7 @@ async def delete_watched_item(
             current_user.id,
             target_media.id,
         )
+    await cancel_queued_pushes(db, current_user.id, [watched.id])
     await db.delete(watched)
     await db.commit()
     return {"status": "deleted"}
@@ -1075,6 +1078,7 @@ async def bulk_delete_watched_items(
             )
 
     db.add_all(events)
+    await cancel_queued_pushes(db, current_user.id, list(delete_ids))
     await db.flush()
     await db.execute(
         delete(WatchedItem).where(
