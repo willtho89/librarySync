@@ -106,8 +106,7 @@ def normalize_token_payload(payload: Mapping[str, Any]) -> AniListToken:
     if not access_token:
         available = ", ".join(sorted(str(key) for key in payload.keys()))
         raise AniListError(
-            "AniList token response missing access_token"
-            + (f" (keys={available})" if available else "")
+            "AniList token response missing access_token" + (f" (keys={available})" if available else "")
         )
 
     refresh_token = str(payload.get("refresh_token") or "").strip() or None

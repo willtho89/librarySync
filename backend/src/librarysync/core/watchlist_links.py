@@ -144,11 +144,7 @@ def parse_tmdb_list_urls(urls: Iterable[str]) -> list[TmdbListRef]:
             continue
         path = parsed.path.strip("/")
         segments = [segment for segment in path.split("/") if segment]
-        match = (
-            TMDB_LIST_ID_RE.match(segments[1])
-            if len(segments) >= 2 and segments[0] == "list"
-            else None
-        )
+        match = TMDB_LIST_ID_RE.match(segments[1]) if len(segments) >= 2 and segments[0] == "list" else None
         if match:
             list_id = match.group(1)
             refs.append(

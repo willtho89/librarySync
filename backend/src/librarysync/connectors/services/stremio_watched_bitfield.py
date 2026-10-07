@@ -120,9 +120,7 @@ class WatchedField:
         try:
             anchor_length = int(components[-2])
         except ValueError as exc:
-            raise WatchedBitFieldError(
-                "invalid_format", "Cannot obtain the length field", exc
-            ) from exc
+            raise WatchedBitFieldError("invalid_format", "Cannot obtain the length field", exc) from exc
         anchor_video_id = ":".join(components[:-2])
         bitfield = BitField8(Length=0, values=bytearray())
         bitfield.unmarshal_text(bitfield_buf.encode("utf-8"))

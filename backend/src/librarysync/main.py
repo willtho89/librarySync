@@ -80,8 +80,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="librarySync",
         description=(
-            "Authenticate with `Authorization: Bearer <token>` or the "
-            "`access_token` cookie set by `/api/auth/login`."
+            "Authenticate with `Authorization: Bearer <token>` or the `access_token` cookie set by `/api/auth/login`."
         ),
         openapi_tags=OPENAPI_TAGS,
     )

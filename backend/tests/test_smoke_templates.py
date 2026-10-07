@@ -115,9 +115,7 @@ class TestTemplateResponseSignature:
 
         assert isinstance(request, Request), f"First arg should be Request, got {type(request)}"
         assert isinstance(name, str), f"Second arg should be template name (str), got {type(name)}"
-        assert isinstance(context, dict) or context is None, (
-            f"Third arg should be context (dict), got {type(context)}"
-        )
+        assert isinstance(context, dict) or context is None, f"Third arg should be context (dict), got {type(context)}"
 
     def test_no_type_error_from_dict_key(self, client):
         response = client.get("/")

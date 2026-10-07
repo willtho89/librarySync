@@ -29,6 +29,7 @@ def resolve_meta_id(media_item: MediaItem) -> str | None:
             return f"{prefix}:{value}"
     return None
 
+
 DEFAULT_CATALOGS: list[dict[str, Any]] = [
     {
         "id": "watchlist_movies",
@@ -111,9 +112,7 @@ async def get_addon_config_by_user(
     db: AsyncSession,
     user_id: str,
 ) -> StremioAddonConfig | None:
-    result = await db.execute(
-        select(StremioAddonConfig).where(StremioAddonConfig.user_id == user_id)
-    )
+    result = await db.execute(select(StremioAddonConfig).where(StremioAddonConfig.user_id == user_id))
     return result.scalars().first()
 
 

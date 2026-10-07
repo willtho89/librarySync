@@ -124,9 +124,7 @@ def _event_source(event_type: str) -> str | None:
     return None
 
 
-async def _load_watched_map(
-    db: AsyncSession, user_id: str, watched_ids: list[str]
-) -> dict[str, dict]:
+async def _load_watched_map(db: AsyncSession, user_id: str, watched_ids: list[str]) -> dict[str, dict]:
     if not watched_ids:
         return {}
     show_item = aliased(MediaItem)
@@ -163,9 +161,7 @@ async def events(
         )
     )
     system_integration = system_result.scalars().first()
-    import_history = parse_import_history(
-        system_integration.config if system_integration else None
-    )
+    import_history = parse_import_history(system_integration.config if system_integration else None)
     watch_limit = min(limit + len(import_history), 200)
 
     show_item = aliased(MediaItem)
@@ -194,12 +190,7 @@ async def events(
 
     now = datetime.now(timezone.utc)
     for entry in import_history:
-        occurred_at = (
-            entry.get("completed_at")
-            or entry.get("started_at")
-            or entry.get("requested_at")
-            or now
-        )
+        occurred_at = entry.get("completed_at") or entry.get("started_at") or entry.get("requested_at") or now
         merge_payload = {
             "required_at": entry.get("merge_required_at"),
             "completed_at": entry.get("merge_completed_at"),
@@ -271,9 +262,7 @@ async def outbox(
     job_ids = [job.id for job in jobs]
     if job_ids:
         attempts_result = await db.execute(
-            select(SyncAttempt)
-            .where(SyncAttempt.job_id.in_(job_ids))
-            .order_by(SyncAttempt.attempted_at.desc())
+            select(SyncAttempt).where(SyncAttempt.job_id.in_(job_ids)).order_by(SyncAttempt.attempted_at.desc())
         )
         for attempt in attempts_result.scalars().all():
             bucket = attempt_map.setdefault(attempt.job_id, [])
@@ -369,16 +358,13 @@ async def status(
 
     outbox_counts: dict[str, int] = {}
     outbox_result = await db.execute(
-        select(OutboxJob.status, func.count())
-        .where(OutboxJob.user_id == current_user.id)
-        .group_by(OutboxJob.status)
+        select(OutboxJob.status, func.count()).where(OutboxJob.user_id == current_user.id).group_by(OutboxJob.status)
     )
     for status, count in outbox_result.all():
         outbox_counts[str(status)] = int(count)
 
     pending_ready = await db.execute(
-        select(func.count())
-        .where(
+        select(func.count()).where(
             OutboxJob.user_id == current_user.id,
             OutboxJob.status.in_(("pending", "failed_retryable")),
             OutboxJob.run_after.is_(None),

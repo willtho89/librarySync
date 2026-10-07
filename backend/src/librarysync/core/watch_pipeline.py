@@ -216,9 +216,7 @@ class SyncCoordinator:
         force: bool = False,
     ) -> None:
         for strategy in self._registry.list():
-            await strategy.enqueue_new(
-                db, watched, media_item, episode_item, is_rewatch, force=force
-            )
+            await strategy.enqueue_new(db, watched, media_item, episode_item, is_rewatch, force=force)
 
     async def enqueue_update(
         self,
@@ -294,9 +292,7 @@ class SyncCoordinator:
 WATCH_PUSH_JOB_TYPES = ("new_item_added", "push_watched", "push_rating", "update_history", "update_log_entry")
 
 
-async def cancel_queued_pushes(
-    db: AsyncSession, user_id: str, watched_item_ids: list[str] | None = None
-) -> int:
+async def cancel_queued_pushes(db: AsyncSession, user_id: str, watched_item_ids: list[str] | None = None) -> int:
     """Cancel queued pushes for watches being deleted (all of the user's when ids is None).
 
     A push still waiting for a retry would otherwise recreate the deleted watch at the
@@ -442,9 +438,7 @@ class LetterboxdSyncStrategy(SyncStrategy):
             return
         if not media_item.imdb_id and not media_item.tmdb_id:
             return
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "letterboxd"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "letterboxd")
         if not integration or not secret_data:
             return
         if not has_required_letterboxd_fields(secret_data):
@@ -503,9 +497,7 @@ class LetterboxdSyncStrategy(SyncStrategy):
         # Support movies and anime movies for Letterboxd
         if not media_item or media_item.media_type not in ("movie", "anime"):
             return
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "letterboxd"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "letterboxd")
         if not integration or not secret_data:
             return
         if not has_required_letterboxd_fields(secret_data):
@@ -554,9 +546,7 @@ class LetterboxdSyncStrategy(SyncStrategy):
         # Support movies and anime movies for Letterboxd
         if not media_item or media_item.media_type not in ("movie", "anime"):
             return
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "letterboxd"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "letterboxd")
         if not integration or not secret_data:
             return
         if not has_required_letterboxd_fields(secret_data):
@@ -588,9 +578,7 @@ class LetterboxdSyncStrategy(SyncStrategy):
 class HistorySyncConfig:
     provider: str
     has_required_fields: Callable[[dict[str, Any]], bool]
-    build_payload: Callable[
-        [MediaItem, EpisodeItem | None, datetime, float | None], dict[str, object] | None
-    ]
+    build_payload: Callable[[MediaItem, EpisodeItem | None, datetime, float | None], dict[str, object] | None]
     client_id_attr: str | None = None
     client_secret_attr: str | None = None
     settings_required: bool = True
@@ -615,9 +603,7 @@ class HistorySyncStrategy(SyncStrategy):
         integration, secret_data = await load_integration_with_secrets(db, user_id, self.provider)
         if not integration or not secret_data:
             return False
-        if self.provider == "publicmetadb" and not is_publicmetadb_sync_enabled(
-            dict(integration.config or {})
-        ):
+        if self.provider == "publicmetadb" and not is_publicmetadb_sync_enabled(dict(integration.config or {})):
             return False
         return self._config.has_required_fields(secret_data)
 
@@ -739,9 +725,7 @@ class HistorySyncStrategy(SyncStrategy):
         if not await self._has_integration(db, watched.user_id):
             return
         result = await db.execute(
-            select(WatchSync).where(
-                WatchSync.watched_item_id == watched.id, WatchSync.provider == self.provider
-            )
+            select(WatchSync).where(WatchSync.watched_item_id == watched.id, WatchSync.provider == self.provider)
         )
         watch_sync = result.scalars().first()
         if not watch_sync:
@@ -882,9 +866,7 @@ class StremioSyncStrategy(SyncStrategy):
     ) -> None:
         if not media_item:
             return
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "stremio"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "stremio")
         if not integration or not secret_data:
             return
         if not has_required_stremio_fields(secret_data):
@@ -933,9 +915,7 @@ class StremioSyncStrategy(SyncStrategy):
     ) -> None:
         if not media_item:
             return
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "stremio"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "stremio")
         if not integration or not secret_data:
             return
         if not has_required_stremio_fields(secret_data):
@@ -1025,9 +1005,7 @@ async def _mark_sync_failed(
     db.add(watch_sync)
 
 
-def collect_external_ids(
-    imdb_id: str | None, tmdb_id: str | None, tvdb_id: str | None
-) -> dict[str, object]:
+def collect_external_ids(imdb_id: str | None, tmdb_id: str | None, tvdb_id: str | None) -> dict[str, object]:
     ids: dict[str, object] = {}
     if imdb_id:
         ids["imdb"] = imdb_id.lower()
@@ -1158,9 +1136,7 @@ class AniListSyncStrategy(SyncStrategy):
         if not media_item.anilist_id:
             return
 
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "anilist"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "anilist")
         if not integration or not secret_data:
             return
         if not has_required_anilist_fields(secret_data):
@@ -1228,9 +1204,7 @@ class AniListSyncStrategy(SyncStrategy):
         if not media_item.anilist_id:
             return
 
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "anilist"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "anilist")
         if not integration or not secret_data:
             return
         if not has_required_anilist_fields(secret_data):
@@ -1280,9 +1254,7 @@ class AniListSyncStrategy(SyncStrategy):
         if not media_item or not is_anime(media_item):
             return
 
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "anilist"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "anilist")
         if not integration or not secret_data:
             return
         if not has_required_anilist_fields(secret_data):
@@ -1397,9 +1369,7 @@ def _extract_stremio_video_id(media_item: MediaItem, episode_item: EpisodeItem) 
     if not stremio_video_id:
         stremio_payload = raw.get("stremio")
         if isinstance(stremio_payload, dict):
-            stremio_video_id = _coerce_str(
-                stremio_payload.get("video_id") or stremio_payload.get("videoId")
-            )
+            stremio_video_id = _coerce_str(stremio_payload.get("video_id") or stremio_payload.get("videoId"))
             if not stremio_video_id:
                 state = stremio_payload.get("state")
                 if isinstance(state, dict):
@@ -1413,9 +1383,7 @@ def _extract_stremio_video_id(media_item: MediaItem, episode_item: EpisodeItem) 
     return None
 
 
-def _extract_stremio_state(
-    media_item: MediaItem, episode_item: EpisodeItem | None
-) -> dict[str, object]:
+def _extract_stremio_state(media_item: MediaItem, episode_item: EpisodeItem | None) -> dict[str, object]:
     raw = episode_item.raw if episode_item and isinstance(episode_item.raw, dict) else {}
     if not raw and isinstance(media_item.raw, dict):
         raw = media_item.raw

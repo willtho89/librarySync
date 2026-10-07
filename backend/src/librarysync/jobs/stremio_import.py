@@ -124,9 +124,7 @@ async def _import_for_integration(
     batch_size: int,
     now: datetime,
 ) -> ImportResult:
-    integration, secret_data = await load_integration_with_secrets(
-        db, integration.user_id, "stremio"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, integration.user_id, "stremio")
     if not integration or not secret_data:
         return ImportResult(imported=0, attempted=False)
     if not has_required_stremio_fields(secret_data):
@@ -410,9 +408,7 @@ async def _import_library_item(
     return False
 
 
-def _build_movie_summary(
-    item_id: str, item: dict[str, Any], state: dict[str, Any]
-) -> MovieSummary | None:
+def _build_movie_summary(item_id: str, item: dict[str, Any], state: dict[str, Any]) -> MovieSummary | None:
     hint = _extract_behavior_hint_id(item)
     imdb_id = _extract_first_imdb_id(
         item_id,
@@ -450,9 +446,7 @@ def _build_movie_summary(
     )
 
 
-def _build_show_summary(
-    item_id: str, item: dict[str, Any], state: dict[str, Any]
-) -> ShowSummary | None:
+def _build_show_summary(item_id: str, item: dict[str, Any], state: dict[str, Any]) -> ShowSummary | None:
     hint = _extract_behavior_hint_id(item)
     imdb_id = _extract_first_imdb_id(
         item_id,
@@ -490,9 +484,7 @@ def _build_show_summary(
     )
 
 
-def _build_episode_summary(
-    state: dict[str, Any], fallback_video_id: str | None = None
-) -> EpisodeSummary | None:
+def _build_episode_summary(state: dict[str, Any], fallback_video_id: str | None = None) -> EpisodeSummary | None:
     season_number = _coerce_int(state.get("season"))
     episode_number = _coerce_int(state.get("episode"))
     video_id = _coerce_str(state.get("video_id") or state.get("videoId"))
@@ -702,9 +694,7 @@ def _build_episode_summary_from_video_id(
     )
 
 
-def _infer_bitfield_watched_at(
-    item: dict[str, Any], state: dict[str, Any], now: datetime
-) -> datetime:
+def _infer_bitfield_watched_at(item: dict[str, Any], state: dict[str, Any], now: datetime) -> datetime:
     watched_at = _parse_state_watched_at(state)
     if not watched_at:
         watched_at = _parse_item_timestamp(item)
@@ -838,9 +828,7 @@ async def _find_media_item(
     return item
 
 
-async def _load_existing_stremio_sync_ids(
-    db: AsyncSession, user_id: str, external_ids: list[str]
-) -> set[str]:
+async def _load_existing_stremio_sync_ids(db: AsyncSession, user_id: str, external_ids: list[str]) -> set[str]:
     if not external_ids:
         return set()
     existing: set[str] = set()
@@ -858,9 +846,7 @@ async def _load_existing_stremio_sync_ids(
     return existing
 
 
-async def _load_latest_movie_watch(
-    db: AsyncSession, user_id: str, media_item_id: str
-) -> WatchedItem | None:
+async def _load_latest_movie_watch(db: AsyncSession, user_id: str, media_item_id: str) -> WatchedItem | None:
     result = await db.execute(
         select(WatchedItem)
         .where(
@@ -873,9 +859,7 @@ async def _load_latest_movie_watch(
     return result.scalars().first()
 
 
-async def _load_latest_episode_watch(
-    db: AsyncSession, user_id: str, episode_item_id: str
-) -> WatchedItem | None:
+async def _load_latest_episode_watch(db: AsyncSession, user_id: str, episode_item_id: str) -> WatchedItem | None:
     result = await db.execute(
         select(WatchedItem)
         .where(
@@ -1018,9 +1002,7 @@ def _parse_library_timestamp(entry: Any) -> tuple[str, datetime] | None:
         modified_at = _parse_datetime(entry[1])
     elif isinstance(entry, dict):
         item_id = _coerce_str(entry.get("_id") or entry.get("id"))
-        modified_at = _parse_datetime(
-            entry.get("mtime") or entry.get("modified_at") or entry.get("lastModified")
-        )
+        modified_at = _parse_datetime(entry.get("mtime") or entry.get("modified_at") or entry.get("lastModified"))
     else:
         return None
     if not item_id or not modified_at:
@@ -1085,9 +1067,7 @@ def _build_episode_raw(stremio_video_id: str | None, payload: dict[str, Any]) ->
     return raw
 
 
-def _apply_media_updates(
-    item: MediaItem, title: str, year: int | None, poster_url: str | None
-) -> None:
+def _apply_media_updates(item: MediaItem, title: str, year: int | None, poster_url: str | None) -> None:
     if title and (not item.title or item.title.startswith("Stremio ")):
         item.title = title
     if year is not None and item.year is None:
@@ -1096,9 +1076,7 @@ def _apply_media_updates(
         item.poster_url = poster_url
 
 
-def _apply_media_raw(
-    item: MediaItem, stremio_id: str | None, payload: dict[str, Any], label: str
-) -> None:
+def _apply_media_raw(item: MediaItem, stremio_id: str | None, payload: dict[str, Any], label: str) -> None:
     if not payload and not stremio_id:
         return
     raw = dict(item.raw or {})
@@ -1113,9 +1091,7 @@ def _apply_media_raw(
     item.raw = raw
 
 
-def _apply_episode_raw(
-    item: EpisodeItem, stremio_video_id: str | None, payload: dict[str, Any]
-) -> None:
+def _apply_episode_raw(item: EpisodeItem, stremio_video_id: str | None, payload: dict[str, Any]) -> None:
     if not payload and not stremio_video_id:
         return
     raw = dict(item.raw or {})

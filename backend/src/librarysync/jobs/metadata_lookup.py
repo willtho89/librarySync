@@ -47,9 +47,7 @@ async def process_metadata_lookups_once(limit: int = 5) -> int:
         return len(requests)
 
 
-async def _claim_pending_requests(
-    db: AsyncSession, limit: int
-) -> list[MetadataLookupRequest]:
+async def _claim_pending_requests(db: AsyncSession, limit: int) -> list[MetadataLookupRequest]:
     now = datetime.now(timezone.utc)
     async with db.begin():
         result = await db.execute(
@@ -102,11 +100,7 @@ async def _process_request(db: AsyncSession, request: MetadataLookupRequest) -> 
             provider_names.append(LOCAL_PROVIDER)
         request.providers = provider_names
 
-        await db.execute(
-            delete(MetadataLookupCandidate).where(
-                MetadataLookupCandidate.lookup_request_id == request.id
-            )
-        )
+        await db.execute(delete(MetadataLookupCandidate).where(MetadataLookupCandidate.lookup_request_id == request.id))
 
         if local_candidates:
             for local_rank, candidate in enumerate(local_candidates, start=1):
@@ -149,9 +143,7 @@ async def _process_request(db: AsyncSession, request: MetadataLookupRequest) -> 
         await _mark_failed(db, request, f"Lookup failed: {exc}")
 
 
-def _candidate_to_model(
-    request_id: str, candidate: MediaCandidate, rank: int
-) -> MetadataLookupCandidate:
+def _candidate_to_model(request_id: str, candidate: MediaCandidate, rank: int) -> MetadataLookupCandidate:
     return MetadataLookupCandidate(
         lookup_request_id=request_id,
         provider=candidate.provider,
@@ -172,9 +164,7 @@ def _normalize_scope(value: str | None) -> str:
     return "all"
 
 
-async def _lookup_local_candidates(
-    db: AsyncSession, request: MetadataLookupRequest
-) -> list[MediaCandidate]:
+async def _lookup_local_candidates(db: AsyncSession, request: MetadataLookupRequest) -> list[MediaCandidate]:
     scope = _normalize_scope(request.search_scope)
     query = request.query
     criteria = []
@@ -188,10 +178,7 @@ async def _lookup_local_candidates(
         criteria.append(MediaItem.title.ilike(f"%{query}%"))
 
     result = await db.execute(
-        select(MediaItem)
-        .where(*criteria)
-        .order_by(MediaItem.year.desc(), MediaItem.title)
-        .limit(LOCAL_SEARCH_LIMIT)
+        select(MediaItem).where(*criteria).order_by(MediaItem.year.desc(), MediaItem.title).limit(LOCAL_SEARCH_LIMIT)
     )
     items = result.scalars().all()
     return [_media_item_to_candidate(item) for item in items]
@@ -221,11 +208,7 @@ def _media_item_to_candidate(item: MediaItem) -> MediaCandidate:
     )
 
 
-
-
-async def _mark_failed(
-    db: AsyncSession, request: MetadataLookupRequest, message: str
-) -> None:
+async def _mark_failed(db: AsyncSession, request: MetadataLookupRequest, message: str) -> None:
     now = datetime.now(timezone.utc)
     request.status = "failed"
     request.error = message[:500]

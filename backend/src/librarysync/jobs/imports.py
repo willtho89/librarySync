@@ -231,9 +231,7 @@ async def _claim_import_all_runs(db: AsyncSession, limit: int) -> list[Integrati
         )
         now = datetime.now(timezone.utc)
         # Single-flight across workers: skip runs another live worker is importing.
-        runs = [
-            run for run in result.scalars().all() if not import_all_lease_blocked(run.config, now, owner)
-        ][:limit]
+        runs = [run for run in result.scalars().all() if not import_all_lease_blocked(run.config, now, owner)][:limit]
         if not runs:
             return []
         for run in runs:
@@ -447,8 +445,4 @@ def _already_recorded_import(
         return False
     last_completed = last.get("completed_at")
     current_completed = completed_at.isoformat() if completed_at else None
-    return (
-        last.get("event_type") == event_type
-        and last.get("status") == status
-        and last_completed == current_completed
-    )
+    return last.get("event_type") == event_type and last.get("status") == status and last_completed == current_completed

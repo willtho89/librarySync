@@ -32,9 +32,7 @@ async def claim_scheduled_job(
     if now is None:
         now = datetime.now(timezone.utc)
     async with db.begin():
-        result = await db.execute(
-            select(ScheduledJob).where(ScheduledJob.name == name).with_for_update()
-        )
+        result = await db.execute(select(ScheduledJob).where(ScheduledJob.name == name).with_for_update())
         job = result.scalars().first()
         if not job:
             job = ScheduledJob(name=name, next_run_at=now)

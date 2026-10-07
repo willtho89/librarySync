@@ -95,9 +95,7 @@ class TestClaimQuickImportRuns(unittest.TestCase):
         db = _mock_db([integration])
         with (
             patch.object(imports, "worker_instance_id", return_value=WORKER_A),
-            patch.object(
-                imports, "build_import_all_queue", new=AsyncMock(return_value=["trakt"])
-            ),
+            patch.object(imports, "build_import_all_queue", new=AsyncMock(return_value=["trakt"])),
         ):
             return asyncio.run(imports._claim_quick_import_runs(db, 1))
 
@@ -143,9 +141,7 @@ class TestClaimQuickImportRuns(unittest.TestCase):
             config={
                 "quick_import_status": "completed",
                 "quick_import_interval_seconds": 1800,
-                "quick_import_last_run_at": (
-                    datetime.now(timezone.utc) - timedelta(hours=1)
-                ).isoformat(),
+                "quick_import_last_run_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
             },
         )
         runs = self._claim(integration)

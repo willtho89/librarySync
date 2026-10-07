@@ -132,9 +132,7 @@ async def _import_for_integration(
 ) -> ImportResult:
     if not settings.trakt_client_id or not settings.trakt_client_secret:
         return ImportResult(imported=0, attempted=False)
-    integration, secret_data = await load_integration_with_secrets(
-        db, integration.user_id, "trakt"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, integration.user_id, "trakt")
     if not integration or not secret_data:
         return ImportResult(imported=0, attempted=False)
     if not has_required_trakt_fields(secret_data):
@@ -144,9 +142,7 @@ async def _import_for_integration(
         client_secret=settings.trakt_client_secret,
     )
     try:
-        access_token = await _ensure_trakt_access_token(
-            db, integration.id, secret_data, client
-        )
+        access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
     except TraktError as exc:
         logger.warning(
             "Trakt token refresh failed for user %s: %s",
@@ -432,9 +428,7 @@ async def import_watchlist_source(
         raise ValueError("Watchlist source is not a Trakt list")
     if not settings.trakt_client_id or not settings.trakt_client_secret:
         raise ValueError("Trakt credentials are not configured")
-    integration, secret_data = await load_integration_with_secrets(
-        db, source.user_id, "trakt"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, source.user_id, "trakt")
     if not integration or integration.status == "disconnected":
         raise ValueError("Trakt integration is not connected")
     if not secret_data or not has_required_trakt_fields(secret_data):
@@ -446,9 +440,7 @@ async def import_watchlist_source(
         client_id=settings.trakt_client_id,
         client_secret=settings.trakt_client_secret,
     )
-    access_token = await _ensure_trakt_access_token(
-        db, integration.id, secret_data, client
-    )
+    access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
     return await _import_watchlist_for_integration(
         db,
         integration,
@@ -511,9 +503,7 @@ def _build_trakt_rating_lookup(
     return lookup
 
 
-def _insert_rating_lookup(
-    lookup: dict[str, float], label: str, value: str | None, rating: float
-) -> None:
+def _insert_rating_lookup(lookup: dict[str, float], label: str, value: str | None, rating: float) -> None:
     if value:
         lookup[f"{label}:{value}"] = rating
 
@@ -555,12 +545,8 @@ def _build_movie_candidate(
     movie = _extract_movie_summary(entry)
     if not movie:
         return None
-    rating = _extract_entry_rating(
-        entry, rating_lookup, movie.imdb_id, movie.tmdb_id, movie.trakt_id
-    )
-    entry_key = _build_entry_key(
-        history_id, movie.imdb_id, movie.tmdb_id, watched_at, "movie"
-    )
+    rating = _extract_entry_rating(entry, rating_lookup, movie.imdb_id, movie.tmdb_id, movie.trakt_id)
+    entry_key = _build_entry_key(history_id, movie.imdb_id, movie.tmdb_id, watched_at, "movie")
     if not entry_key:
         return None
 
@@ -593,9 +579,7 @@ def _build_episode_candidate(
     episode = _extract_episode_summary(entry)
     if not show or not episode:
         return None
-    rating = _extract_entry_rating(
-        entry, rating_lookup, episode.imdb_id, episode.tmdb_id, episode.trakt_id
-    )
+    rating = _extract_entry_rating(entry, rating_lookup, episode.imdb_id, episode.tmdb_id, episode.trakt_id)
     entry_key = _build_entry_key(
         history_id,
         episode.imdb_id or show.imdb_id,
@@ -707,12 +691,8 @@ def _build_watchlist_show_candidate(
     )
 
 
-async def _get_or_create_movie_item(
-    db: AsyncSession, movie: MovieSummary
-) -> MediaItem | None:
-    item = await _find_media_item(
-        db, movie.imdb_id, movie.tmdb_id, movie.trakt_id, "movie"
-    )
+async def _get_or_create_movie_item(db: AsyncSession, movie: MovieSummary) -> MediaItem | None:
+    item = await _find_media_item(db, movie.imdb_id, movie.tmdb_id, movie.trakt_id, "movie")
     if item:
         await _apply_movie_updates(db, item, movie)
         return item
@@ -732,12 +712,8 @@ async def _get_or_create_movie_item(
     return item
 
 
-async def _get_or_create_show_item(
-    db: AsyncSession, show: ShowSummary
-) -> MediaItem | None:
-    item = await _find_media_item(
-        db, show.imdb_id, show.tmdb_id, show.trakt_id, "tv"
-    )
+async def _get_or_create_show_item(db: AsyncSession, show: ShowSummary) -> MediaItem | None:
+    item = await _find_media_item(db, show.imdb_id, show.tmdb_id, show.trakt_id, "tv")
     if item:
         await _apply_show_updates(db, item, show)
         return item
@@ -789,15 +765,11 @@ async def _find_media_item(
 ) -> MediaItem | None:
     item: MediaItem | None = None
     if imdb_id:
-        result = await db.execute(
-            select(MediaItem).where(MediaItem.imdb_id == imdb_id)
-        )
+        result = await db.execute(select(MediaItem).where(MediaItem.imdb_id == imdb_id))
         item = result.scalars().first()
     if tmdb_id:
         result = await db.execute(
-            select(MediaItem).where(
-                MediaItem.tmdb_id == tmdb_id, MediaItem.media_type == media_type
-            )
+            select(MediaItem).where(MediaItem.tmdb_id == tmdb_id, MediaItem.media_type == media_type)
         )
         tmdb_item = result.scalars().first()
         if item and tmdb_item and item.id != tmdb_item.id:
@@ -820,23 +792,17 @@ async def _find_episode_item(
 ) -> EpisodeItem | None:
     item: EpisodeItem | None = None
     if episode.imdb_id:
-        result = await db.execute(
-            select(EpisodeItem).where(EpisodeItem.imdb_id == episode.imdb_id)
-        )
+        result = await db.execute(select(EpisodeItem).where(EpisodeItem.imdb_id == episode.imdb_id))
         item = result.scalars().first()
     if episode.tmdb_id:
-        result = await db.execute(
-            select(EpisodeItem).where(EpisodeItem.tmdb_id == episode.tmdb_id)
-        )
+        result = await db.execute(select(EpisodeItem).where(EpisodeItem.tmdb_id == episode.tmdb_id))
         tmdb_item = result.scalars().first()
         if item and tmdb_item and item.id != tmdb_item.id:
             return item
         if not item:
             item = tmdb_item
     if episode.tvdb_id:
-        result = await db.execute(
-            select(EpisodeItem).where(EpisodeItem.tvdb_id == episode.tvdb_id)
-        )
+        result = await db.execute(select(EpisodeItem).where(EpisodeItem.tvdb_id == episode.tvdb_id))
         tvdb_item = result.scalars().first()
         if item and tvdb_item and item.id != tvdb_item.id:
             return item
@@ -844,9 +810,7 @@ async def _find_episode_item(
             item = tvdb_item
     if not item and episode.trakt_id:
         result = await db.execute(
-            select(EpisodeItem).where(
-                EpisodeItem.raw["trakt_id"].as_string() == episode.trakt_id
-            )
+            select(EpisodeItem).where(EpisodeItem.raw["trakt_id"].as_string() == episode.trakt_id)
         )
         item = result.scalars().first()
     if not item and show_media_item_id:
@@ -903,9 +867,7 @@ async def _apply_episode_updates(
     item.raw = _merge_episode_raw(item.raw, episode.trakt_id, episode.raw)
 
 
-def _build_media_raw(
-    trakt_id: str | None, raw_payload: dict[str, Any], label: str
-) -> dict[str, Any]:
+def _build_media_raw(trakt_id: str | None, raw_payload: dict[str, Any], label: str) -> dict[str, Any]:
     raw = {"source": "trakt", "type": label}
     if trakt_id:
         raw["trakt_id"] = trakt_id
@@ -914,9 +876,7 @@ def _build_media_raw(
     return raw
 
 
-def _merge_media_raw(
-    existing: dict | None, trakt_id: str | None, raw_payload: dict[str, Any]
-) -> dict:
+def _merge_media_raw(existing: dict | None, trakt_id: str | None, raw_payload: dict[str, Any]) -> dict:
     raw = existing if isinstance(existing, dict) else {}
     if trakt_id and not raw.get("trakt_id"):
         raw["trakt_id"] = trakt_id
@@ -970,9 +930,7 @@ async def _can_assign_media_id(
     value: str,
 ) -> bool:
     if field == "imdb_id":
-        result = await db.execute(
-            select(MediaItem.id).where(MediaItem.imdb_id == value)
-        )
+        result = await db.execute(select(MediaItem.id).where(MediaItem.imdb_id == value))
     elif field == "tmdb_id":
         result = await db.execute(
             select(MediaItem.id).where(
@@ -1000,17 +958,11 @@ async def _can_assign_episode_id(
     value: str,
 ) -> bool:
     if field == "imdb_id":
-        result = await db.execute(
-            select(EpisodeItem.id).where(EpisodeItem.imdb_id == value)
-        )
+        result = await db.execute(select(EpisodeItem.id).where(EpisodeItem.imdb_id == value))
     elif field == "tmdb_id":
-        result = await db.execute(
-            select(EpisodeItem.id).where(EpisodeItem.tmdb_id == value)
-        )
+        result = await db.execute(select(EpisodeItem.id).where(EpisodeItem.tmdb_id == value))
     elif field == "tvdb_id":
-        result = await db.execute(
-            select(EpisodeItem.id).where(EpisodeItem.tvdb_id == value)
-        )
+        result = await db.execute(select(EpisodeItem.id).where(EpisodeItem.tvdb_id == value))
     else:
         return False
     existing = result.scalars().first()
@@ -1026,9 +978,7 @@ def _build_episode_raw(trakt_id: str | None, raw_payload: dict[str, Any]) -> dic
     return raw
 
 
-def _merge_episode_raw(
-    existing: dict | None, trakt_id: str | None, raw_payload: dict[str, Any]
-) -> dict:
+def _merge_episode_raw(existing: dict | None, trakt_id: str | None, raw_payload: dict[str, Any]) -> dict:
     raw = existing if isinstance(existing, dict) else {}
     if trakt_id and not raw.get("trakt_id"):
         raw["trakt_id"] = trakt_id
@@ -1216,11 +1166,7 @@ def _sanitize_trakt_payload(payload: dict[str, Any]) -> dict[str, Any]:
             keep[key] = payload[key]
     ids = payload.get("ids")
     if isinstance(ids, dict):
-        keep["ids"] = {
-            key: value
-            for key, value in ids.items()
-            if isinstance(value, (str, int))
-        }
+        keep["ids"] = {key: value for key, value in ids.items() if isinstance(value, (str, int))}
     return keep
 
 
@@ -1279,5 +1225,3 @@ def _parse_datetime(value: object) -> datetime | None:
             return parsed.replace(tzinfo=timezone.utc)
         return parsed
     return None
-
-

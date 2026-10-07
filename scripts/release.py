@@ -52,9 +52,7 @@ def set_version(path: Path, new_version: str) -> None:
 def bump_version(version: str, part: str) -> str:
     match = SEMVER.match(version)
     if not match:
-        raise SystemExit(
-            f'Current version "{version}" is not semver; pass an explicit version instead.'
-        )
+        raise SystemExit(f'Current version "{version}" is not semver; pass an explicit version instead.')
     major = int(match.group("major"))
     minor = int(match.group("minor"))
     patch = int(match.group("patch"))

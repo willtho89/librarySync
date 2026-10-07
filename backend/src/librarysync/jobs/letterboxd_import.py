@@ -111,17 +111,13 @@ async def _import_for_integration(
     max_pages: int,
     now: datetime,
 ) -> ImportResult:
-    integration, secret_data = await load_integration_with_secrets(
-        db, integration.user_id, "letterboxd"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, integration.user_id, "letterboxd")
     if not integration or not secret_data:
         return ImportResult(imported=0, attempted=False)
     if not has_required_letterboxd_fields(secret_data):
         return ImportResult(imported=0, attempted=False)
     try:
-        client, access_token, member_id = await _build_letterboxd_context(
-            db, integration, secret_data
-        )
+        client, access_token, member_id = await _build_letterboxd_context(db, integration, secret_data)
         full_history = lookback_days < 0
         since = _select_letterboxd_since(now, lookback_days)
         entries = await client.get_history(
@@ -134,9 +130,7 @@ async def _import_for_integration(
             stop_after_empty_months=FULL_HISTORY_EMPTY_MONTHS if full_history else None,
         )
     except LetterboxdError as exc:
-        logger.warning(
-            "Letterboxd import failed for user %s: %s", integration.user_id, exc
-        )
+        logger.warning("Letterboxd import failed for user %s: %s", integration.user_id, exc)
         return ImportResult(imported=0, attempted=True)
 
     imported = 0
@@ -148,9 +142,7 @@ async def _import_for_integration(
                 if candidate:
                     candidates.append(candidate)
             except Exception:
-                logger.exception(
-                    "Letterboxd entry import failed for user %s", integration.user_id
-                )
+                logger.exception("Letterboxd entry import failed for user %s", integration.user_id)
         if not candidates:
             continue
         imported += await process_import_candidates(
@@ -199,9 +191,7 @@ async def _import_watchlist_for_integration(
         name="Letterboxd watchlist",
     )
     if sources is None:
-        sources = await list_watchlist_sources(
-            db, integration.user_id, provider="letterboxd"
-        )
+        sources = await list_watchlist_sources(db, integration.user_id, provider="letterboxd")
     if not sources:
         return 0
     imported = 0
@@ -307,18 +297,14 @@ async def import_watchlist_source(
 ) -> int:
     if source.provider != "letterboxd":
         raise ValueError("Watchlist source is not a Letterboxd list")
-    integration, secret_data = await load_integration_with_secrets(
-        db, source.user_id, "letterboxd"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, source.user_id, "letterboxd")
     if not integration or integration.status == "disconnected":
         raise ValueError("Letterboxd integration is not connected")
     if not secret_data or not has_required_letterboxd_fields(secret_data):
         raise ValueError("Letterboxd credentials are incomplete")
     if now is None:
         now = datetime.now(timezone.utc)
-    client, access_token, member_id = await _build_letterboxd_context(
-        db, integration, secret_data
-    )
+    client, access_token, member_id = await _build_letterboxd_context(db, integration, secret_data)
     return await _import_watchlist_for_integration(
         db,
         integration,
@@ -351,9 +337,7 @@ async def _build_letterboxd_context(
         refresh_token=str(secret_data.get("refresh_token")),
         cookies=cookies,
     )
-    access_token = await _ensure_letterboxd_access_token(
-        db, integration.id, secret_data, client
-    )
+    access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     if not member_id:
         try:
             me_payload = await client.fetch_me(access_token=access_token)
@@ -458,9 +442,7 @@ def build_letterboxd_list_candidate(
     return _build_watchlist_candidate(entry, list_context=list_context)
 
 
-async def _get_or_create_media_item(
-    db: AsyncSession, film: FilmSummary
-) -> MediaItem | None:
+async def _get_or_create_media_item(db: AsyncSession, film: FilmSummary) -> MediaItem | None:
     item = await _find_media_item(db, film)
     if item:
         await _apply_media_updates(db, item, film)
@@ -484,15 +466,11 @@ async def _get_or_create_media_item(
 async def _find_media_item(db: AsyncSession, film: FilmSummary) -> MediaItem | None:
     item: MediaItem | None = None
     if film.imdb_id:
-        result = await db.execute(
-            select(MediaItem).where(MediaItem.imdb_id == film.imdb_id)
-        )
+        result = await db.execute(select(MediaItem).where(MediaItem.imdb_id == film.imdb_id))
         item = result.scalars().first()
     if film.tmdb_id:
         result = await db.execute(
-            select(MediaItem).where(
-                MediaItem.tmdb_id == film.tmdb_id, MediaItem.media_type == "movie"
-            )
+            select(MediaItem).where(MediaItem.tmdb_id == film.tmdb_id, MediaItem.media_type == "movie")
         )
         tmdb_item = result.scalars().first()
         if item and tmdb_item and item.id != tmdb_item.id:
@@ -566,9 +544,7 @@ async def _can_assign_media_id(
     value: str,
 ) -> bool:
     if field == "imdb_id":
-        result = await db.execute(
-            select(MediaItem.id).where(MediaItem.imdb_id == value)
-        )
+        result = await db.execute(select(MediaItem.id).where(MediaItem.imdb_id == value))
     elif field == "tmdb_id":
         result = await db.execute(
             select(MediaItem.id).where(
@@ -591,9 +567,7 @@ def _build_media_raw(film: FilmSummary) -> dict:
     return raw
 
 
-def _build_entry_key(
-    entry_id: str | None, film_id: str | None, watched_at: datetime
-) -> str | None:
+def _build_entry_key(entry_id: str | None, film_id: str | None, watched_at: datetime) -> str | None:
     if entry_id:
         return f"entry:{entry_id}"
     if film_id:
@@ -709,8 +683,7 @@ def _extract_entry_watched_at(entry: dict[str, Any]) -> datetime | None:
 def _extract_film_summary(entry: dict[str, Any]) -> FilmSummary | None:
     film_payload = _extract_film_payload(entry)
     film_id = _coerce_str(
-        _first_match(film_payload, ("id", "filmId", "film_id"))
-        or _first_match(entry, ("filmId", "film_id"))
+        _first_match(film_payload, ("id", "filmId", "film_id")) or _first_match(entry, ("filmId", "film_id"))
     )
     title = _coerce_str(_first_match(film_payload, ("name", "title", "filmName")))
     imdb_id = _extract_imdb_id(film_payload) or _extract_imdb_id(entry)
@@ -884,11 +857,7 @@ def _sanitize_film_payload(payload: dict[str, Any]) -> dict[str, Any]:
             keep[key] = payload[key]
     links = payload.get("links")
     if isinstance(links, dict):
-        keep["links"] = {
-            key: value
-            for key, value in links.items()
-            if isinstance(value, (str, int))
-        }
+        keep["links"] = {key: value for key, value in links.items() if isinstance(value, (str, int))}
     return keep
 
 

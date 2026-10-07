@@ -103,9 +103,7 @@ class TestTraktUpdateHistoryFallback:
         mock_trakt_client.remove_history.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_trakt_update_uses_existing_when_found(
-        self, mock_trakt_client, base_payload, mock_settings
-    ):
+    async def test_trakt_update_uses_existing_when_found(self, mock_trakt_client, base_payload, mock_settings):
         """When prior history entry exists, should remove and re-add."""
         mock_job = SimpleNamespace(id="job-1", user_id="user-1", attempts=1, payload=base_payload)
 
@@ -150,13 +148,9 @@ class TestTraktUpdateHistoryFallback:
     async def test_trakt_update_falls_back_when_update_history_fails_with_404(
         self, mock_trakt_client, payload_for_update_history, mock_settings
     ):
-        mock_job = SimpleNamespace(
-            id="job-1", user_id="user-1", attempts=1, payload=payload_for_update_history
-        )
+        mock_job = SimpleNamespace(id="job-1", user_id="user-1", attempts=1, payload=payload_for_update_history)
 
-        mock_trakt_client.update_history = AsyncMock(
-            side_effect=TraktError("Not found", status_code=404)
-        )
+        mock_trakt_client.update_history = AsyncMock(side_effect=TraktError("Not found", status_code=404))
 
         with (
             patch(
@@ -189,13 +183,9 @@ class TestTraktUpdateHistoryFallback:
     async def test_trakt_update_falls_back_when_update_history_fails_with_400(
         self, mock_trakt_client, payload_for_update_history, mock_settings
     ):
-        mock_job = SimpleNamespace(
-            id="job-1", user_id="user-1", attempts=1, payload=payload_for_update_history
-        )
+        mock_job = SimpleNamespace(id="job-1", user_id="user-1", attempts=1, payload=payload_for_update_history)
 
-        mock_trakt_client.update_history = AsyncMock(
-            side_effect=TraktError("Bad Request", status_code=400)
-        )
+        mock_trakt_client.update_history = AsyncMock(side_effect=TraktError("Bad Request", status_code=400))
 
         with (
             patch(
@@ -228,13 +218,9 @@ class TestTraktUpdateHistoryFallback:
     async def test_trakt_update_does_not_fallback_on_unexpected_trakt_error(
         self, mock_trakt_client, payload_for_update_history, mock_settings
     ):
-        mock_job = SimpleNamespace(
-            id="job-1", user_id="user-1", attempts=1, payload=payload_for_update_history
-        )
+        mock_job = SimpleNamespace(id="job-1", user_id="user-1", attempts=1, payload=payload_for_update_history)
 
-        mock_trakt_client.update_history = AsyncMock(
-            side_effect=TraktError("Internal Server Error", status_code=500)
-        )
+        mock_trakt_client.update_history = AsyncMock(side_effect=TraktError("Internal Server Error", status_code=500))
 
         with (
             patch(
@@ -344,18 +330,14 @@ class TestPublicMetaDBRatingDuplicate:
                 new=AsyncMock(return_value=(mock_client_movie, "api-key")),
             ),
         ):
-            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(
-                None, movie_job
-            )
+            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(None, movie_job)
 
         assert response_code == 201
         mock_client_movie.delete_rating.assert_awaited_once_with("api-key", "rating-42")
         mock_client_movie.create_rating.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_publicmetadb_rating_creates_new_when_no_existing(
-        self, mock_client_movie, movie_job
-    ):
+    async def test_publicmetadb_rating_creates_new_when_no_existing(self, mock_client_movie, movie_job):
         """When no existing rating, should create directly without deleting."""
         mock_client_movie.list_ratings = AsyncMock(return_value=({"items": []}, 200))
 
@@ -365,9 +347,7 @@ class TestPublicMetaDBRatingDuplicate:
                 new=AsyncMock(return_value=(mock_client_movie, "api-key")),
             ),
         ):
-            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(
-                None, movie_job
-            )
+            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(None, movie_job)
 
         assert response_code == 201
         mock_client_movie.delete_rating.assert_not_awaited()
@@ -388,9 +368,7 @@ class TestPublicMetaDBRatingDuplicate:
                 new=AsyncMock(return_value=(mock_client_movie, "api-key")),
             ),
         ):
-            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(
-                None, movie_job
-            )
+            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(None, movie_job)
 
         assert response_code == 201
         assert mock_client_movie.delete_rating.call_count == 2
@@ -398,14 +376,10 @@ class TestPublicMetaDBRatingDuplicate:
         assert mock_client_movie.create_rating.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_publicmetadb_rating_409_safety_net_raises_when_no_existing_id(
-        self, mock_client_movie, movie_job
-    ):
+    async def test_publicmetadb_rating_409_safety_net_raises_when_no_existing_id(self, mock_client_movie, movie_job):
         """When create_rating raises 409 but no existing_id was found, should re-raise."""
         mock_client_movie.list_ratings = AsyncMock(return_value=({"items": []}, 200))
-        mock_client_movie.create_rating = AsyncMock(
-            side_effect=PublicMetaDbError("Conflict", status_code=409)
-        )
+        mock_client_movie.create_rating = AsyncMock(side_effect=PublicMetaDbError("Conflict", status_code=409))
 
         with (
             patch(
@@ -420,9 +394,7 @@ class TestPublicMetaDBRatingDuplicate:
         # No existing ID to delete, so we can't retry - must re-raise
 
     @pytest.mark.asyncio
-    async def test_publicmetadb_episode_rating_handles_existing_rating(
-        self, mock_client_episode, episode_job
-    ):
+    async def test_publicmetadb_episode_rating_handles_existing_rating(self, mock_client_episode, episode_job):
         """When episode rating exists, should delete old and create new."""
         with (
             patch(
@@ -430,20 +402,14 @@ class TestPublicMetaDBRatingDuplicate:
                 new=AsyncMock(return_value=(mock_client_episode, "api-key")),
             ),
         ):
-            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(
-                None, episode_job
-            )
+            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(None, episode_job)
 
         assert response_code == 201
-        mock_client_episode.delete_episode_rating.assert_awaited_once_with(
-            "api-key", "episode-rating-99"
-        )
+        mock_client_episode.delete_episode_rating.assert_awaited_once_with("api-key", "episode-rating-99")
         mock_client_episode.create_episode_rating.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_publicmetadb_episode_rating_creates_new_when_no_existing(
-        self, mock_client_episode, episode_job
-    ):
+    async def test_publicmetadb_episode_rating_creates_new_when_no_existing(self, mock_client_episode, episode_job):
         """When no existing episode rating, should create directly."""
         mock_client_episode.list_episode_ratings = AsyncMock(return_value=({"items": []}, 200))
 
@@ -453,18 +419,14 @@ class TestPublicMetaDBRatingDuplicate:
                 new=AsyncMock(return_value=(mock_client_episode, "api-key")),
             ),
         ):
-            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(
-                None, episode_job
-            )
+            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(None, episode_job)
 
         assert response_code == 201
         mock_client_episode.delete_episode_rating.assert_not_awaited()
         mock_client_episode.create_episode_rating.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_publicmetadb_episode_rating_409_safety_net_retry(
-        self, mock_client_episode, episode_job
-    ):
+    async def test_publicmetadb_episode_rating_409_safety_net_retry(self, mock_client_episode, episode_job):
         mock_client_episode.create_episode_rating = AsyncMock(
             side_effect=[
                 PublicMetaDbError("Conflict", status_code=409),
@@ -478,21 +440,15 @@ class TestPublicMetaDBRatingDuplicate:
                 new=AsyncMock(return_value=(mock_client_episode, "api-key")),
             ),
         ):
-            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(
-                None, episode_job
-            )
+            response_code, external_id = await process_outbox._deliver_publicmetadb_rating(None, episode_job)
 
         assert response_code == 201
         assert mock_client_episode.delete_episode_rating.call_count == 2
-        mock_client_episode.delete_episode_rating.assert_awaited_with(
-            "api-key", "episode-rating-99"
-        )
+        mock_client_episode.delete_episode_rating.assert_awaited_with("api-key", "episode-rating-99")
         assert mock_client_episode.create_episode_rating.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_publicmetadb_episode_rating_409_raises_when_no_existing_id(
-        self, mock_client_episode, episode_job
-    ):
+    async def test_publicmetadb_episode_rating_409_raises_when_no_existing_id(self, mock_client_episode, episode_job):
         """When create_episode_rating raises 409 but no existing_id, should re-raise."""
         mock_client_episode.list_episode_ratings = AsyncMock(return_value=({"items": []}, 200))
         mock_client_episode.create_episode_rating = AsyncMock(
@@ -549,21 +505,15 @@ class TestPublicMetaDBWatch409:
                 new=AsyncMock(return_value=(mock_client, "api-key")),
             ),
         ):
-            response_code, external_id = await process_outbox._deliver_publicmetadb_watch(
-                None, episode_job
-            )
+            response_code, external_id = await process_outbox._deliver_publicmetadb_watch(None, episode_job)
 
         assert response_code == 201
         mock_client.mark_watched.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_publicmetadb_watch_raises_when_409_but_no_existing_id(
-        self, mock_client, episode_job
-    ):
+    async def test_publicmetadb_watch_raises_when_409_but_no_existing_id(self, mock_client, episode_job):
         mock_client.list_watched = AsyncMock(return_value=({"items": []}, 200))
-        mock_client.mark_watched = AsyncMock(
-            side_effect=PublicMetaDbError("Conflict", status_code=409)
-        )
+        mock_client.mark_watched = AsyncMock(side_effect=PublicMetaDbError("Conflict", status_code=409))
 
         with (
             patch(

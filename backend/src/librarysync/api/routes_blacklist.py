@@ -62,9 +62,7 @@ async def list_blacklist(
     db: AsyncSession = Depends(get_db),
 ) -> BlacklistListOut:
     result = await db.execute(
-        select(BlacklistItem)
-        .where(BlacklistItem.user_id == current_user.id)
-        .order_by(BlacklistItem.created_at.desc())
+        select(BlacklistItem).where(BlacklistItem.user_id == current_user.id).order_by(BlacklistItem.created_at.desc())
     )
     items = result.scalars().all()
     return BlacklistListOut(

@@ -79,9 +79,7 @@ async def get_admin_api_key(
     admin_api_key: str = Header(alias="X-API-Key", examples=["your-admin-api-key"]),
 ) -> str:
     if not settings.admin_api_key or is_placeholder_admin_key(settings.admin_api_key):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key not configured"
-        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key not configured")
     if not admin_api_key or not secrets.compare_digest(
         admin_api_key.encode("utf-8"), settings.admin_api_key.encode("utf-8")
     ):

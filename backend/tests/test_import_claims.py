@@ -31,9 +31,7 @@ async def _add_run(factory, user_id: str, config: dict, updated_at: datetime) ->
     async with factory() as db:
         db.add(User(id=user_id, username=user_id, password_hash="x"))
         db.add(
-            Integration(
-                id=f"run-{user_id}", user_id=user_id, provider="system", config=config, updated_at=updated_at
-            )
+            Integration(id=f"run-{user_id}", user_id=user_id, provider="system", config=config, updated_at=updated_at)
         )
         await db.commit()
 

@@ -56,9 +56,7 @@ MERGE_PENDING_RETRY_DELAY = timedelta(minutes=10)
 async def enqueue_merge_history(db: AsyncSession, now: datetime | None = None) -> None:
     if now is None:
         now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(ScheduledJob).where(ScheduledJob.name == MERGE_PENDING_JOB).with_for_update()
-    )
+    result = await db.execute(select(ScheduledJob).where(ScheduledJob.name == MERGE_PENDING_JOB).with_for_update())
     job = result.scalars().first()
     if not job:
         job = ScheduledJob(name=MERGE_PENDING_JOB, next_run_at=now)
@@ -347,9 +345,7 @@ async def _load_syncs(db: AsyncSession, watched_ids: list[str]) -> list[WatchSyn
     return result.scalars().all()
 
 
-def _select_syncs(
-    syncs: list[WatchSync], primary_watched_id: str
-) -> tuple[dict[str, str], list[WatchSync]]:
+def _select_syncs(syncs: list[WatchSync], primary_watched_id: str) -> tuple[dict[str, str], list[WatchSync]]:
     by_provider: dict[str, list[WatchSync]] = {}
     for sync in syncs:
         by_provider.setdefault(sync.provider, []).append(sync)
@@ -474,9 +470,7 @@ async def process_merge_history_once() -> int:
 
 async def run_merge_history(db: AsyncSession, job: ScheduledJob) -> int:
     logger.info("Starting merge history")
-    result = await db.execute(
-        select(Integration).where(Integration.provider == IMPORT_ALL_PROVIDER)
-    )
+    result = await db.execute(select(Integration).where(Integration.provider == IMPORT_ALL_PROVIDER))
     integrations = result.scalars().all()
     total = 0
     now = datetime.now(timezone.utc)

@@ -108,8 +108,10 @@ def _has_unexpired_token(
     is_expired: Callable[[datetime | None], bool],
 ) -> bool:
     access_token = data.get("access_token")
-    return isinstance(access_token, str) and bool(access_token) and not is_expired(
-        parse_expires_at(data.get("expires_at"))
+    return (
+        isinstance(access_token, str)
+        and bool(access_token)
+        and not is_expired(parse_expires_at(data.get("expires_at")))
     )
 
 

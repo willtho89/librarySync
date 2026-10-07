@@ -11,18 +11,12 @@ async def load_integration_with_secrets(
     db: AsyncSession, user_id: str, provider: str
 ) -> tuple[Integration | None, dict[str, object] | None]:
     result = await db.execute(
-        select(Integration).where(
-            Integration.user_id == user_id, Integration.provider == provider
-        )
+        select(Integration).where(Integration.user_id == user_id, Integration.provider == provider)
     )
     integration = result.scalars().first()
     if not integration:
         return None, None
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
+    result = await db.execute(select(IntegrationSecret).where(IntegrationSecret.integration_id == integration.id))
     secret = result.scalars().first()
     if not secret:
         return integration, None

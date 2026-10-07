@@ -212,14 +212,18 @@ async def test_persist_episode_list_insert_skips_conflicting_tmdb_id() -> None:
         await db.commit()
 
         new_ep = (
-            await db.execute(
-                select(EpisodeItem).where(
-                    EpisodeItem.show_media_item_id == "show-1",
-                    EpisodeItem.season_number == 7,
-                    EpisodeItem.episode_number == 1,
+            (
+                await db.execute(
+                    select(EpisodeItem).where(
+                        EpisodeItem.show_media_item_id == "show-1",
+                        EpisodeItem.season_number == 7,
+                        EpisodeItem.episode_number == 1,
+                    )
                 )
             )
-        ).scalars().one()
+            .scalars()
+            .one()
+        )
         assert new_ep.title == "One for the Road"
         assert new_ep.tmdb_id is None
     await engine.dispose()

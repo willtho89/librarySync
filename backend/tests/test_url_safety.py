@@ -42,9 +42,7 @@ def test_private_urls_can_be_allowed_explicitly(monkeypatch) -> None:
     asyncio.run(ensure_public_host("192.168.1.10"))
 
 
-@pytest.mark.parametrize(
-    "url", ["ftp://93.184.216.34/x", "https://user:pass@93.184.216.34/", "http://93.184.216.34/"]
-)
+@pytest.mark.parametrize("url", ["ftp://93.184.216.34/x", "https://user:pass@93.184.216.34/", "http://93.184.216.34/"])
 def test_url_scheme_and_credentials_are_checked(url: str) -> None:
     with pytest.raises(UnsafeUrlError):
         asyncio.run(ensure_public_url(url, schemes=("https",)))

@@ -49,16 +49,12 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
         result = await db.execute(select(func.count(User.id)))
         user_count = result.scalar_one()
         if user_count >= settings.max_users:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="User limit reached"
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User limit reached")
     username = _normalize_username(payload.username)
     result = await db.execute(select(User).where(User.username == username))
     existing = result.scalar_one_or_none()
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Username already registered"
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already registered")
 
     try:
         password_hash = await hash_password_async(payload.password)
@@ -71,9 +67,7 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Username already registered"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already registered") from exc
     await db.refresh(user)
     return UserOut(id=user.id, username=user.username)
 
@@ -86,9 +80,7 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
         "`access_token` HttpOnly cookie for browser sessions."
     ),
 )
-async def login(
-    payload: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)
-) -> JSONResponse:
+async def login(payload: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)) -> JSONResponse:
     username = _normalize_username(payload.username)
     address = request.client.host if request.client else None
     retry_after = LOGIN_THROTTLE.retry_after(username, address)

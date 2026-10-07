@@ -79,11 +79,7 @@ async def enrich_watched_metadata(
         if candidate:
             candidate_map[candidate.provider] = candidate
             await _apply_candidate_to_media_item(db, media_item, candidate, update_poster=True)
-            if (
-                episode_item
-                and candidate.provider == "tmdb"
-                and isinstance(tmdb, EpisodeMetadataProvider)
-            ):
+            if episode_item and candidate.provider == "tmdb" and isinstance(tmdb, EpisodeMetadataProvider):
                 await _apply_episode_metadata(tmdb, media_item, episode_item)
 
     if tmdb:
@@ -221,9 +217,7 @@ def _select_title_candidate(
     if not title_key:
         return None
     title_matches = [
-        candidate
-        for candidate in candidates
-        if candidate.title and _normalize_title_key(candidate.title) == title_key
+        candidate for candidate in candidates if candidate.title and _normalize_title_key(candidate.title) == title_key
     ]
     if year is not None:
         year_matches = [candidate for candidate in title_matches if candidate.year == year]
@@ -293,15 +287,11 @@ def _anime_id_present(media_item: MediaItem, provider: str) -> bool:
     return False
 
 
-async def _find_anime_candidate(
-    provider: MetadataProvider, media_item: MediaItem
-) -> MediaCandidate | None:
+async def _find_anime_candidate(provider: MetadataProvider, media_item: MediaItem) -> MediaCandidate | None:
     scope = "anime"
     if provider.provider == "anilist" and media_item.myanimelist_id:
         try:
-            candidates = await provider.find_by_external_id(
-                f"mal:{media_item.myanimelist_id}", scope
-            )
+            candidates = await provider.find_by_external_id(f"mal:{media_item.myanimelist_id}", scope)
         except Exception as exc:
             logger.warning(
                 "%s anime MAL lookup failed for %s: %s",
@@ -317,9 +307,7 @@ async def _find_anime_candidate(
         try:
             candidates = await provider.find_by_external_id(imdb_id, scope)
         except Exception as exc:
-            logger.warning(
-                "%s anime lookup failed for %s: %s", provider.provider, media_item.id, exc
-            )
+            logger.warning("%s anime lookup failed for %s: %s", provider.provider, media_item.id, exc)
         else:
             selected = _select_anime_candidate(candidates, media_item)
             if selected:
@@ -332,18 +320,14 @@ async def _find_anime_candidate(
     return _select_anime_candidate(candidates, media_item)
 
 
-def _select_anime_candidate(
-    candidates: list[MediaCandidate], media_item: MediaItem
-) -> MediaCandidate | None:
+def _select_anime_candidate(candidates: list[MediaCandidate], media_item: MediaItem) -> MediaCandidate | None:
     if not candidates:
         return None
     target_key = _normalize_title_key(media_item.title)
     if not target_key:
         return None
     matches = [
-        candidate
-        for candidate in candidates
-        if candidate.title and _normalize_title_key(candidate.title) == target_key
+        candidate for candidate in candidates if candidate.title and _normalize_title_key(candidate.title) == target_key
     ]
     if not matches:
         return None
@@ -392,9 +376,7 @@ async def _apply_local_metadata(db: AsyncSession, media_item: MediaItem) -> bool
     return updated
 
 
-async def _find_local_metadata_candidate(
-    db: AsyncSession, media_item: MediaItem
-) -> MediaItem | None:
+async def _find_local_metadata_candidate(db: AsyncSession, media_item: MediaItem) -> MediaItem | None:
     if media_item.imdb_id:
         result = await db.execute(
             select(MediaItem).where(
@@ -502,17 +484,9 @@ async def _apply_candidate_to_media_item(
     ids = _extract_candidate_ids(candidate)
     await _apply_candidate_ids(db, media_item, ids)
     raw = media_item.raw if isinstance(media_item.raw, dict) else {}
-    if (
-        candidate.title
-        and raw.get("source") == "aiostreams_watch_state"
-        and media_item.title == raw.get("stremio_id")
-    ):
+    if candidate.title and raw.get("source") == "aiostreams_watch_state" and media_item.title == raw.get("stremio_id"):
         media_item.title = candidate.title
-    if (
-        update_poster
-        and candidate.poster_url
-        and _should_update_poster(media_item.poster_url, candidate.provider)
-    ):
+    if update_poster and candidate.poster_url and _should_update_poster(media_item.poster_url, candidate.provider):
         media_item.poster_url = candidate.poster_url
     if media_item.year is None and candidate.year is not None:
         media_item.year = candidate.year
@@ -617,9 +591,7 @@ async def refresh_episode_metadata(
     return episode_item.title != title_before or episode_item.air_date != air_date_before
 
 
-async def _apply_anime_candidate(
-    db: AsyncSession, media_item: MediaItem, candidate: MediaCandidate
-) -> None:
+async def _apply_anime_candidate(db: AsyncSession, media_item: MediaItem, candidate: MediaCandidate) -> None:
     ids = _extract_anime_candidate_ids(candidate)
     await _apply_candidate_ids(db, media_item, ids)
     if candidate.poster_url and not media_item.poster_url:
@@ -713,27 +685,19 @@ async def _can_assign_id(
         result = await db.execute(select(MediaItem.id).where(MediaItem.imdb_id == value))
     elif field == "tmdb_id":
         result = await db.execute(
-            select(MediaItem.id).where(
-                MediaItem.tmdb_id == value, MediaItem.media_type == media_item.media_type
-            )
+            select(MediaItem.id).where(MediaItem.tmdb_id == value, MediaItem.media_type == media_item.media_type)
         )
     elif field == "tvdb_id":
         result = await db.execute(
-            select(MediaItem.id).where(
-                MediaItem.tvdb_id == value, MediaItem.media_type == media_item.media_type
-            )
+            select(MediaItem.id).where(MediaItem.tvdb_id == value, MediaItem.media_type == media_item.media_type)
         )
     elif field == "tvmaze_id":
         result = await db.execute(
-            select(MediaItem.id).where(
-                MediaItem.tvmaze_id == value, MediaItem.media_type == media_item.media_type
-            )
+            select(MediaItem.id).where(MediaItem.tvmaze_id == value, MediaItem.media_type == media_item.media_type)
         )
     elif field == "kitsu_id":
         result = await db.execute(
-            select(MediaItem.id).where(
-                MediaItem.kitsu_id == value, MediaItem.media_type == media_item.media_type
-            )
+            select(MediaItem.id).where(MediaItem.kitsu_id == value, MediaItem.media_type == media_item.media_type)
         )
     elif field == "myanimelist_id":
         result = await db.execute(
@@ -744,9 +708,7 @@ async def _can_assign_id(
         )
     elif field == "anilist_id":
         result = await db.execute(
-            select(MediaItem.id).where(
-                MediaItem.anilist_id == value, MediaItem.media_type == media_item.media_type
-            )
+            select(MediaItem.id).where(MediaItem.anilist_id == value, MediaItem.media_type == media_item.media_type)
         )
     else:
         return True

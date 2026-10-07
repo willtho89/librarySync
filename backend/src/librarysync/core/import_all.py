@@ -159,9 +159,7 @@ def import_all_active(config: dict | None) -> bool:
     return bool(state.status in IMPORT_ALL_ACTIVE_STATUSES)
 
 
-async def get_or_create_system_integration(
-    db: AsyncSession, user_id: str
-) -> Integration:
+async def get_or_create_system_integration(db: AsyncSession, user_id: str) -> Integration:
     result = await db.execute(
         select(Integration).where(
             Integration.user_id == user_id,
@@ -196,9 +194,7 @@ async def load_import_queue_preferences(db: AsyncSession, user_id: str) -> list[
 async def load_import_ready_providers(db: AsyncSession, user_id: str) -> list[str]:
     queue: list[str] = []
     for provider in IMPORT_ALL_PRIORITY:
-        integration, secret_data = await load_integration_with_secrets(
-            db, user_id, provider
-        )
+        integration, secret_data = await load_integration_with_secrets(db, user_id, provider)
         if not integration or not secret_data:
             continue
         if provider == "letterboxd":
@@ -243,9 +239,7 @@ async def build_import_all_queue(db: AsyncSession, user_id: str) -> list[str]:
 
 async def load_active_import_all_users(db: AsyncSession) -> set[str]:
     result = await db.execute(
-        select(Integration.user_id, Integration.config).where(
-            Integration.provider == IMPORT_ALL_PROVIDER
-        )
+        select(Integration.user_id, Integration.config).where(Integration.provider == IMPORT_ALL_PROVIDER)
     )
     active: set[str] = set()
     for user_id, config in result.all():

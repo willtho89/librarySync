@@ -138,9 +138,7 @@ class MetadataProvider(ABC, Generic[ConfigT, SecretsT]):
     async def search(self, query: str, scope: str = MEDIA_SCOPE_ALL) -> list[MediaCandidate]:
         raise NotImplementedError
 
-    async def find_by_external_id(
-        self, external_id: str, scope: str = MEDIA_SCOPE_ALL
-    ) -> list[MediaCandidate]:
+    async def find_by_external_id(self, external_id: str, scope: str = MEDIA_SCOPE_ALL) -> list[MediaCandidate]:
         return []
 
     @abstractmethod

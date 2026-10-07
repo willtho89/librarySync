@@ -59,9 +59,7 @@ async def _enqueue_watchlist_job(
     build_payload: WatchlistPayloadBuilder,
     sync_enabled: Callable[[dict[str, object]], bool] | None = None,
 ) -> None:
-    integration, secret_data = await load_integration_with_secrets(
-        db, watchlist_item.user_id, provider
-    )
+    integration, secret_data = await load_integration_with_secrets(db, watchlist_item.user_id, provider)
     if not integration or integration.status == "disconnected" or not secret_data:
         return
     if not required_fields(secret_data):

@@ -169,9 +169,7 @@ def _normalize_cookies(cookies: dict[str, str] | None) -> dict[str, str] | None:
 
 
 def _publicmetadb_status(config: dict[str, object], has_secrets: bool) -> str:
-    if has_secrets and (
-        is_publicmetadb_sync_enabled(config) or is_publicmetadb_metadata_enabled(config)
-    ):
+    if has_secrets and (is_publicmetadb_sync_enabled(config) or is_publicmetadb_metadata_enabled(config)):
         return "connected"
     if has_secrets:
         return "configured"
@@ -219,28 +217,16 @@ async def _load_integration(
     return await load_integration_with_secrets(db, user_id, provider)
 
 
-async def _delete_integration_secret(
-    db: AsyncSession, integration: Integration
-) -> None:
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
+async def _delete_integration_secret(db: AsyncSession, integration: Integration) -> None:
+    result = await db.execute(select(IntegrationSecret).where(IntegrationSecret.integration_id == integration.id))
     secret = result.scalars().first()
     if secret:
         await db.delete(secret)
 
 
-async def _upsert_integration_secret(
-    db: AsyncSession, integration: Integration, payload: dict[str, object]
-) -> None:
+async def _upsert_integration_secret(db: AsyncSession, integration: Integration, payload: dict[str, object]) -> None:
     encrypted = encrypt_value(json.dumps(payload))
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
+    result = await db.execute(select(IntegrationSecret).where(IntegrationSecret.integration_id == integration.id))
     secret = result.scalars().first()
     if not secret:
         secret = IntegrationSecret(
@@ -393,28 +379,21 @@ async def list_integrations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(Integration.user_id == current_user.id)
-    )
+    result = await db.execute(select(Integration).where(Integration.user_id == current_user.id))
     integrations = [
-        integration
-        for integration in result.scalars().all()
-        if integration.provider != IMPORT_ALL_PROVIDER
+        integration for integration in result.scalars().all() if integration.provider != IMPORT_ALL_PROVIDER
     ]
     integration_ids = [integration.id for integration in integrations]
     if integration_ids:
         result = await db.execute(
-            select(IntegrationSecret.integration_id).where(
-                IntegrationSecret.integration_id.in_(integration_ids)
-            )
+            select(IntegrationSecret.integration_id).where(IntegrationSecret.integration_id.in_(integration_ids))
         )
         secret_ids = set(result.scalars().all())
     else:
         secret_ids = set()
     return {
         "integrations": [
-            _integration_to_out(integration, integration.id in secret_ids).model_dump()
-            for integration in integrations
+            _integration_to_out(integration, integration.id in secret_ids).model_dump() for integration in integrations
         ]
     }
 
@@ -480,11 +459,7 @@ async def save_letterboxd(
     db.add(integration)
     await db.flush()
 
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
+    result = await db.execute(select(IntegrationSecret).where(IntegrationSecret.integration_id == integration.id))
     secret = result.scalars().first()
     secret_data: dict[str, object] = {}
     if secret:
@@ -591,9 +566,7 @@ async def test_letterboxd(
         access_token = await ensure_letterboxd_access_token(db, integration.id, secret_data, client)
         me_payload = await client.fetch_me(access_token)
     except LetterboxdError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     member_id = extract_member_id(me_payload)
     member_name = extract_member_name(me_payload)
@@ -806,9 +779,7 @@ async def trakt_callback(
     try:
         token = await client.exchange_code(code, redirect_uri)
     except TraktError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     secret_payload = token_to_secret_payload(token)
     await _upsert_integration_secret(db, integration, secret_payload)
@@ -900,9 +871,7 @@ async def simkl_callback(
     try:
         token = await client.exchange_code(code, redirect_uri)
     except SimklError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=_format_simkl_error(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_format_simkl_error(exc)) from exc
 
     secret_payload = simkl_token_to_secret_payload(token)
     await _upsert_integration_secret(db, integration, secret_payload)
@@ -1078,9 +1047,7 @@ async def save_publicmetadb_sync(
         )
 
     result = await db.execute(
-        select(IntegrationSecret.integration_id).where(
-            IntegrationSecret.integration_id == integration.id
-        )
+        select(IntegrationSecret.integration_id).where(IntegrationSecret.integration_id == integration.id)
     )
     has_secrets = result.scalar_one_or_none() is not None
     if is_publicmetadb_sync_enabled(config) and not has_secrets:
@@ -1153,9 +1120,7 @@ async def disconnect_publicmetadb_sync(
         has_secrets = False
     else:
         result = await db.execute(
-            select(IntegrationSecret.integration_id).where(
-                IntegrationSecret.integration_id == integration.id
-            )
+            select(IntegrationSecret.integration_id).where(IntegrationSecret.integration_id == integration.id)
         )
         has_secrets = result.scalar_one_or_none() is not None
 
@@ -1178,13 +1143,9 @@ async def stremio_login(
     email = payload.email.strip()
     password = payload.password
     if not email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Email is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is required")
     if not password or not password.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Password is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password is required")
     api_base_url = _normalize_optional(payload.api_base_url)
 
     integration = await _get_integration(db, current_user.id, "stremio")
@@ -1199,9 +1160,7 @@ async def stremio_login(
     try:
         login = await client.login(email, password)
     except StremioError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=_format_stremio_error(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_format_stremio_error(exc)) from exc
 
     if not integration:
         integration = Integration(
@@ -1320,9 +1279,7 @@ def _apply_stremio_profile(
     if isinstance(user_payload, dict):
         user = {str(key): value for key, value in user_payload.items()}
 
-    user_id = _coerce_stremio_field(user.get("_id")) or _coerce_stremio_field(
-        user.get("id")
-    )
+    user_id = _coerce_stremio_field(user.get("_id")) or _coerce_stremio_field(user.get("id"))
     if user_id:
         config["stremio_user_id"] = user_id
 

@@ -235,9 +235,7 @@ def test_simkl_watchlist_remove_delivery_moves_dropped_show_to_dropped_list() ->
             new=AsyncMock(return_value="token"),
         ),
     ):
-        response_code, external_id = asyncio.run(
-            process_outbox._deliver_simkl_watchlist_remove(None, job)
-        )
+        response_code, external_id = asyncio.run(process_outbox._deliver_simkl_watchlist_remove(None, job))
 
     assert response_code == 200
     assert external_id is None
@@ -274,9 +272,7 @@ def test_simkl_watchlist_remove_delivery_without_drop_removes_watchlist() -> Non
             new=AsyncMock(return_value="token"),
         ),
     ):
-        response_code, external_id = asyncio.run(
-            process_outbox._deliver_simkl_watchlist_remove(None, job)
-        )
+        response_code, external_id = asyncio.run(process_outbox._deliver_simkl_watchlist_remove(None, job))
 
     assert response_code == 200
     assert external_id is None
@@ -309,9 +305,7 @@ def test_simkl_watchlist_remove_delivery_removes_movie() -> None:
             new=AsyncMock(return_value="token"),
         ),
     ):
-        response_code, external_id = asyncio.run(
-            process_outbox._deliver_simkl_watchlist_remove(None, job)
-        )
+        response_code, external_id = asyncio.run(process_outbox._deliver_simkl_watchlist_remove(None, job))
 
     assert response_code == 200
     assert external_id is None
@@ -337,9 +331,7 @@ def _run_trakt_delivery(deliver, client, integration, job):
     with (
         patch(
             "librarysync.jobs.process_outbox.load_integration_with_secrets",
-            new=AsyncMock(
-                return_value=(integration, {"access_token": "token", "refresh_token": "refresh"})
-            ),
+            new=AsyncMock(return_value=(integration, {"access_token": "token", "refresh_token": "refresh"})),
         ),
         patch("librarysync.jobs.process_outbox.settings", settings),
         patch("librarysync.jobs.process_outbox.TraktClient", return_value=client),
@@ -384,9 +376,7 @@ def test_trakt_watchlist_remove_delivery_dropped_anime_uses_show_ids() -> None:
         payload={"media_type": "anime", "movie_ids": {"tmdb": "1234"}, "hide_dropped": True},
     )
 
-    response_code, _ = _run_trakt_delivery(
-        process_outbox._deliver_trakt_watchlist_remove, client, integration, job
-    )
+    response_code, _ = _run_trakt_delivery(process_outbox._deliver_trakt_watchlist_remove, client, integration, job)
 
     assert response_code == 200
     client.add_hidden_items.assert_awaited_once_with(
@@ -403,9 +393,7 @@ def test_trakt_watchlist_remove_delivery_without_drop_skips_hidden() -> None:
         payload={"media_type": "tv", "show_ids": {"tmdb": "1399"}},
     )
 
-    response_code, _ = _run_trakt_delivery(
-        process_outbox._deliver_trakt_watchlist_remove, client, integration, job
-    )
+    response_code, _ = _run_trakt_delivery(process_outbox._deliver_trakt_watchlist_remove, client, integration, job)
 
     assert response_code == 200
     client.remove_from_watchlist.assert_awaited_once()
@@ -419,9 +407,7 @@ def test_trakt_watchlist_add_delivery_unhides_show_from_dropped() -> None:
         payload={"media_type": "tv", "show_ids": {"tmdb": "1399"}, "unhide_dropped": True},
     )
 
-    response_code, _ = _run_trakt_delivery(
-        process_outbox._deliver_trakt_watchlist, client, integration, job
-    )
+    response_code, _ = _run_trakt_delivery(process_outbox._deliver_trakt_watchlist, client, integration, job)
 
     assert response_code == 200
     client.add_to_watchlist.assert_awaited_once_with(
@@ -442,9 +428,7 @@ def test_trakt_watchlist_add_delivery_skips_unhide_without_flag() -> None:
         payload={"media_type": "tv", "show_ids": {"tmdb": "1399"}},
     )
 
-    response_code, _ = _run_trakt_delivery(
-        process_outbox._deliver_trakt_watchlist, client, integration, job
-    )
+    response_code, _ = _run_trakt_delivery(process_outbox._deliver_trakt_watchlist, client, integration, job)
 
     assert response_code == 200
     client.add_to_watchlist.assert_awaited_once()
@@ -458,9 +442,7 @@ def test_trakt_watchlist_add_delivery_skips_unhide_for_movies() -> None:
         payload={"media_type": "movie", "movie_ids": {"tmdb": "550"}, "unhide_dropped": True},
     )
 
-    response_code, _ = _run_trakt_delivery(
-        process_outbox._deliver_trakt_watchlist, client, integration, job
-    )
+    response_code, _ = _run_trakt_delivery(process_outbox._deliver_trakt_watchlist, client, integration, job)
 
     assert response_code == 200
     client.add_to_watchlist.assert_awaited_once()

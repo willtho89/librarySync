@@ -177,9 +177,7 @@ def test_get_dashboard_stats_serializes_populated_rows(monkeypatch) -> None:
     assert payload["user_stats"]["avg_rating"] == 4.25
     assert payload["user_stats"]["first_watch_date"] == date(2024, 1, 10)
     assert payload["user_stats"]["last_watch_date"] == date(2024, 3, 5)
-    assert payload["daily_activity"] == [
-        {"date": "2024-03-01", "movies": 2, "episodes": 3}
-    ]
+    assert payload["daily_activity"] == [{"date": "2024-03-01", "movies": 2, "episodes": 3}]
     assert payload["rating_distribution"] == [{"rating": 4.5, "count": 7}]
     assert payload["integration_summary"] == {
         "total_integrations": 4,
@@ -188,9 +186,7 @@ def test_get_dashboard_stats_serializes_populated_rows(monkeypatch) -> None:
     }
     assert payload["system_stats"]["total_media_items"] == 100
     assert payload["activity_summary"] == {"last_7_days": 6, "last_30_days": 15}
-    assert payload["overall_daily_activity"] == [
-        {"date": "2024-03-02", "movies": 1, "episodes": 4}
-    ]
+    assert payload["overall_daily_activity"] == [{"date": "2024-03-02", "movies": 1, "episodes": 4}]
     assert payload["overall_rating_distribution"] == [{"rating": 3.5, "count": 9}]
 
 

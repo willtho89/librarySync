@@ -31,15 +31,11 @@ class TestImportHistoryMerge(unittest.TestCase):
         }
 
         updated = update_import_history_merge(config, required_at, completed_at, "merge failed")
-        target = next(
-            entry for entry in updated["import_history"] if entry.get("id") == "target"
-        )
+        target = next(entry for entry in updated["import_history"] if entry.get("id") == "target")
         self.assertEqual(target["merge_completed_at"], completed_at.isoformat())
         self.assertEqual(target["merge_error"], "merge failed")
 
-        older = next(
-            entry for entry in updated["import_history"] if entry.get("id") == "older"
-        )
+        older = next(entry for entry in updated["import_history"] if entry.get("id") == "older")
         self.assertIsNone(older["merge_completed_at"])
         self.assertIsNone(older["merge_error"])
 

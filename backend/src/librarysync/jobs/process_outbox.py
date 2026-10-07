@@ -137,12 +137,16 @@ class OutboxDispatcher:
             from librarysync.core.watch_state_events import utc
             from librarysync.db.models import WatchStateEntry
 
-            entry = await db.get(WatchStateEntry, payload["state_entry_id"], with_for_update=True,
-                                 populate_existing=True)
-            if (not entry or entry.user_id != job.user_id
-                    or int(utc(entry.occurred_at).timestamp()) != payload.get("protocol_at")
-                    or entry.payload["event"] != payload.get("protocol_event")
-                    or entry.payload.get("rating") != payload.get("protocol_rating")):
+            entry = await db.get(
+                WatchStateEntry, payload["state_entry_id"], with_for_update=True, populate_existing=True
+            )
+            if (
+                not entry
+                or entry.user_id != job.user_id
+                or int(utc(entry.occurred_at).timestamp()) != payload.get("protocol_at")
+                or entry.payload["event"] != payload.get("protocol_event")
+                or entry.payload.get("rating") != payload.get("protocol_rating")
+            ):
                 return DeliveryResult(None, None)
         elif await _superseded_history_rating(db, job):
             return DeliveryResult(None, None)
@@ -157,8 +161,12 @@ async def _superseded_history_rating(db: AsyncSession, job: OutboxJob) -> bool:
     from librarysync.core.watch_state_ratings import RATING_SCOPES
 
     payload = job.payload or {}
-    if (job.job_type != "push_rating" or payload.get("state_entry_id")
-            or job.target_provider not in RATING_SCOPES or not payload.get("watched_item_id")):
+    if (
+        job.job_type != "push_rating"
+        or payload.get("state_entry_id")
+        or job.target_provider not in RATING_SCOPES
+        or not payload.get("watched_item_id")
+    ):
         return False
     watched = await db.get(WatchedItem, payload["watched_item_id"])
     if not watched or watched.user_id != job.user_id:
@@ -172,10 +180,17 @@ async def _superseded_history_rating(db: AsyncSession, job: OutboxJob) -> bool:
         target = WatchStateEntry.media_item_id == watched.media_item_id
     if scope not in RATING_SCOPES[job.target_provider]:
         return False
-    entry = await db.scalar(select(WatchStateEntry).where(
-        WatchStateEntry.user_id == job.user_id, WatchStateEntry.category == "rating",
-        WatchStateEntry.scope == scope, target,
-    ).limit(1).with_for_update())
+    entry = await db.scalar(
+        select(WatchStateEntry)
+        .where(
+            WatchStateEntry.user_id == job.user_id,
+            WatchStateEntry.category == "rating",
+            WatchStateEntry.scope == scope,
+            target,
+        )
+        .limit(1)
+        .with_for_update()
+    )
     return entry is not None
 
 
@@ -396,9 +411,7 @@ async def _deliver_anilist_watch(db: AsyncSession, job: OutboxJob) -> tuple[int 
     return 200, external_id
 
 
-async def _deliver_anilist_rating(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_anilist_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     """Update rating for an existing AniList entry."""
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
@@ -445,9 +458,7 @@ async def _deliver_anilist_rating(
     return 200, str(entry_id)
 
 
-async def _deliver_anilist_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_anilist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     """Remove an entry from AniList."""
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
@@ -622,9 +633,7 @@ async def _recover_stale_jobs(db: AsyncSession, now: datetime, limit: int) -> in
     )
     stale = result.scalars().all()
     for job in stale:
-        requeued = await _requeue_job(
-            db, job, now, run_after=None, last_error="Recovered after worker interruption"
-        )
+        requeued = await _requeue_job(db, job, now, run_after=None, last_error="Recovered after worker interruption")
         if requeued:
             await _update_watch_sync(db, job, "pending", job.last_error, None, now)
     if stale:
@@ -637,8 +646,11 @@ def _group_batchable_jobs(jobs: list[OutboxJob]) -> tuple[list[list[OutboxJob]],
     grouped: dict[tuple[str, str, str], list[OutboxJob]] = {}
     remaining: list[OutboxJob] = []
     for job in jobs:
-        if (job.target_provider in BATCHABLE_PROVIDERS and job.job_type in BATCHABLE_JOB_TYPES
-                and not (job.payload or {}).get("state_entry_id")):
+        if (
+            job.target_provider in BATCHABLE_PROVIDERS
+            and job.job_type in BATCHABLE_JOB_TYPES
+            and not (job.payload or {}).get("state_entry_id")
+        ):
             key = (job.user_id, job.target_provider, job.job_type)
             grouped.setdefault(key, []).append(job)
         else:
@@ -725,9 +737,7 @@ async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
         retry_after = failure.retry_after
 
     for job in jobs:
-        job_status, job_error = await _finalize_job(
-            db, job, status, error_message, now, response_code, retry_after
-        )
+        job_status, job_error = await _finalize_job(db, job, status, error_message, now, response_code, retry_after)
         if job_status != SUPERSEDED_STATUS:
             await _update_watch_sync(
                 db,
@@ -793,9 +803,7 @@ async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
             filters.append(~OutboxJob.user_id.in_(blocked_users))
         jobs: list[OutboxJob] = []
         for provider, provider_limit in _mixed_provider_limits(limit, MIXED_PROVIDER_ORDER).items():
-            jobs.extend(
-                await _lock_fair_batch(db, [*filters, OutboxJob.target_provider == provider], provider_limit)
-            )
+            jobs.extend(await _lock_fair_batch(db, [*filters, OutboxJob.target_provider == provider], provider_limit))
         remaining_limit = limit - len(jobs)
         if remaining_limit > 0:
             claimed_ids = [job.id for job in jobs]
@@ -841,9 +849,7 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
         now=now,
     )
     if rate_decision and not rate_decision.allowed:
-        requeued = await _requeue_job(
-            db, job, now, run_after=rate_decision.retry_at, last_error="rate_limited"
-        )
+        requeued = await _requeue_job(db, job, now, run_after=rate_decision.retry_at, last_error="rate_limited")
         if requeued:
             await _update_watch_sync(
                 db,
@@ -879,9 +885,7 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
         status, error_message, response_code = failure.status, failure.error, failure.response_code
         retry_after = failure.retry_after
 
-    status, error_message = await _finalize_job(
-        db, job, status, error_message, now, response_code, retry_after
-    )
+    status, error_message = await _finalize_job(db, job, status, error_message, now, response_code, retry_after)
     if status != SUPERSEDED_STATUS:
         await _update_watch_sync(
             db,
@@ -950,9 +954,7 @@ async def _deliver_letterboxd_watch(
     )
     access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     if force_update_rating and rating is not None and entry_id:
-        _, response_code = await client.update_log_entry_rating(
-            str(entry_id), rating, access_token=access_token
-        )
+        _, response_code = await client.update_log_entry_rating(str(entry_id), rating, access_token=access_token)
         return response_code, str(entry_id), None
     film_id = await client.resolve_film_id(access_token, imdb_id, tmdb_id)
     member_id = await _ensure_letterboxd_member(
@@ -993,15 +995,11 @@ async def _deliver_letterboxd_watch(
     return response_code, external_id, effective_rewatch
 
 
-async def _deliver_letterboxd_watchlist(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_letterboxd_watchlist(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     return await _deliver_letterboxd_watchlist_change(db, job, in_watchlist=True)
 
 
-async def _deliver_letterboxd_watchlist_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_letterboxd_watchlist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     return await _deliver_letterboxd_watchlist_change(db, job, in_watchlist=False)
 
 
@@ -1054,9 +1052,7 @@ async def _deliver_letterboxd_watchlist_change(
     return response_code, film_id
 
 
-async def _deliver_letterboxd_log_update(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_letterboxd_log_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
     if not entry_id:
@@ -1099,9 +1095,7 @@ async def _deliver_letterboxd_log_update(
     return response_code, str(entry_id)
 
 
-async def _deliver_letterboxd_delete(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_letterboxd_delete(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
     if not entry_id:
@@ -1331,9 +1325,7 @@ async def _deliver_trakt_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
     return response_code, external_id
 
 
-async def _deliver_trakt_watchlist(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_trakt_watchlist(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
     if not integration or not secret_data:
@@ -1359,9 +1351,7 @@ async def _deliver_trakt_watchlist(
     return response_code, None
 
 
-async def _deliver_trakt_watchlist_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_trakt_watchlist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
     if not integration or not secret_data:
@@ -1551,9 +1541,7 @@ async def _deliver_simkl_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
     return response_code, external_id
 
 
-async def _deliver_simkl_watchlist(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_simkl_watchlist(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
     if not integration or not secret_data:
@@ -1573,9 +1561,7 @@ async def _deliver_simkl_watchlist(
     return response_code, None
 
 
-async def _deliver_simkl_watchlist_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_simkl_watchlist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
     if not integration or not secret_data:
@@ -1654,9 +1640,7 @@ async def _deliver_simkl_remove(db: AsyncSession, job: OutboxJob) -> tuple[int |
     return response_code, None
 
 
-async def _load_publicmetadb_client(
-    db: AsyncSession, user_id: str
-) -> tuple[PublicMetaDbClient, str]:
+async def _load_publicmetadb_client(db: AsyncSession, user_id: str) -> tuple[PublicMetaDbClient, str]:
     integration, secret_data = await load_integration_with_secrets(db, user_id, "publicmetadb")
     if not integration or not secret_data:
         raise PublicMetaDbError("PublicMetaDB credentials are missing", status_code=401)
@@ -1858,9 +1842,7 @@ async def _resolve_publicmetadb_watchlist_id(
     return None
 
 
-async def _deliver_publicmetadb_watch(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     tmdb_id = _extract_publicmetadb_tmdb_id(payload)
     if tmdb_id is None:
@@ -1983,9 +1965,7 @@ async def _find_publicmetadb_watched_for_retry(
     return None
 
 
-async def _deliver_publicmetadb_watchlist(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_watchlist(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     tmdb_id = _extract_publicmetadb_tmdb_id(payload)
     if tmdb_id is None:
@@ -2000,9 +1980,7 @@ async def _deliver_publicmetadb_watchlist(
     return response_code, _extract_publicmetadb_watchlist_id(response)
 
 
-async def _deliver_publicmetadb_watchlist_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_watchlist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     client, api_key = await _load_publicmetadb_client(db, job.user_id)
     watchlist_id = _coerce_str(payload.get("watchlist_id") or payload.get("external_id"))
@@ -2026,9 +2004,7 @@ async def _deliver_publicmetadb_watchlist_remove(
     return response_code, None
 
 
-async def _deliver_publicmetadb_update(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     client, api_key = await _load_publicmetadb_client(db, job.user_id)
     history_id = _coerce_str(payload.get("history_id") or payload.get("external_id"))
@@ -2067,9 +2043,7 @@ async def _deliver_publicmetadb_update(
     return response_code, _extract_publicmetadb_entry_id(response)
 
 
-async def _deliver_publicmetadb_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     client, api_key = await _load_publicmetadb_client(db, job.user_id)
     history_id = _coerce_str(payload.get("history_id") or payload.get("external_id"))
@@ -2097,9 +2071,7 @@ async def _deliver_publicmetadb_remove(
     return response_code, None
 
 
-async def _deliver_publicmetadb_rating(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     tmdb_id = _extract_publicmetadb_tmdb_id(payload)
     if tmdb_id is None:
@@ -2113,9 +2085,7 @@ async def _deliver_publicmetadb_rating(
     client, api_key = await _load_publicmetadb_client(db, job.user_id)
     if media_type == "tv" and payload.get("rating_scope", "episode") == "episode":
         if season_number is None or episode_number is None:
-            raise ValueError(
-                "PublicMetaDB TV rating sync requires season_number and episode_number"
-            )
+            raise ValueError("PublicMetaDB TV rating sync requires season_number and episode_number")
         existing_id = await _find_publicmetadb_rating_id(
             client,
             api_key,
@@ -2266,9 +2236,7 @@ async def _deliver_stremio_watch(db: AsyncSession, job: OutboxJob) -> tuple[int 
     return 200, external_id
 
 
-async def _deliver_stremio_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_stremio_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
     if not item_id:
@@ -2317,9 +2285,7 @@ async def _deliver_stremio_remove(
     return 200, external_id
 
 
-def _build_stremio_library_change(
-    payload: dict[str, object], watched_at: datetime
-) -> dict[str, object]:
+def _build_stremio_library_change(payload: dict[str, object], watched_at: datetime) -> dict[str, object]:
     item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
     if not item_id:
         raise ValueError("Stremio sync requires item_id")
@@ -2497,9 +2463,7 @@ def _build_stremio_remove_change(payload: dict[str, object]) -> dict[str, object
     }
 
 
-async def _fetch_stremio_library_item(
-    client: StremioClient, auth_key: str, item_id: str
-) -> dict[str, object] | None:
+async def _fetch_stremio_library_item(client: StremioClient, auth_key: str, item_id: str) -> dict[str, object] | None:
     items = await client.get_library_items(auth_key, ids=[item_id])
     for item in items:
         if _coerce_str(item.get("_id") or item.get("id")) == item_id:
@@ -2561,9 +2525,7 @@ async def _resolve_show_media_item_id(
     media_id = result.scalars().first()
     if media_id:
         return str(media_id)
-    result = await db.execute(
-        select(MediaItem.id).where(MediaItem.raw["stremio_id"].as_string() == item_id).limit(1)
-    )
+    result = await db.execute(select(MediaItem.id).where(MediaItem.raw["stremio_id"].as_string() == item_id).limit(1))
     media_id = result.scalars().first()
     if media_id:
         return str(media_id)
@@ -2622,9 +2584,7 @@ def _select_stremio_ctime(existing_item: dict[str, object] | None, fallback: str
     return fallback
 
 
-def _build_trakt_history_payload(
-    payload: dict[str, object], watched_at: datetime
-) -> dict[str, Any]:
+def _build_trakt_history_payload(payload: dict[str, object], watched_at: datetime) -> dict[str, Any]:
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     watched_at_value = watched_at.isoformat()
     if media_type == "movie":
@@ -2834,9 +2794,7 @@ def _build_trakt_remove_payload_for_id(history_id: str) -> dict[str, Any]:
     return {"ids": [cleaned]}
 
 
-def _build_simkl_history_payload(
-    payload: dict[str, object], watched_at: datetime
-) -> dict[str, Any]:
+def _build_simkl_history_payload(payload: dict[str, object], watched_at: datetime) -> dict[str, Any]:
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     watched_at_value = watched_at.isoformat()
     if media_type == "movie":
@@ -3066,9 +3024,7 @@ async def _find_trakt_history_for_day(
         if not items:
             return None
         for entry in items:
-            matched_watched_at = _match_trakt_entry_for_payload(
-                entry, payload, media_type, start_at, end_at
-            )
+            matched_watched_at = _match_trakt_entry_for_payload(entry, payload, media_type, start_at, end_at)
             if matched_watched_at:
                 history_id = _coerce_str(entry.get("id"))
                 if history_id:
@@ -3219,9 +3175,7 @@ def _parse_trakt_page_count(headers: dict[str, str]) -> int | None:
         return None
 
 
-async def _sync_local_watched_at(
-    db: AsyncSession, payload: dict[str, object], watched_at: datetime
-) -> None:
+async def _sync_local_watched_at(db: AsyncSession, payload: dict[str, object], watched_at: datetime) -> None:
     watched_item_id = _coerce_str(payload.get("watched_item_id"))
     if not watched_item_id:
         return

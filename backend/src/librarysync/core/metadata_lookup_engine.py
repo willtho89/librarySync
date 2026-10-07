@@ -28,9 +28,7 @@ class LookupStrategy(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def lookup(
-        self, provider: MetadataProvider, request: LookupRequest
-    ) -> list[MediaCandidate]:
+    async def lookup(self, provider: MetadataProvider, request: LookupRequest) -> list[MediaCandidate]:
         raise NotImplementedError
 
 
@@ -38,13 +36,9 @@ class ExternalIdLookupStrategy(LookupStrategy):
     def supports(self, provider: MetadataProvider, request: LookupRequest) -> bool:
         if request.query_type != "imdb":
             return False
-        return provider.capabilities.supports_external_id and provider.supports_scope(
-            request.scope
-        )
+        return provider.capabilities.supports_external_id and provider.supports_scope(request.scope)
 
-    async def lookup(
-        self, provider: MetadataProvider, request: LookupRequest
-    ) -> list[MediaCandidate]:
+    async def lookup(self, provider: MetadataProvider, request: LookupRequest) -> list[MediaCandidate]:
         return await provider.find_by_external_id(request.query, request.scope)
 
 
@@ -54,9 +48,7 @@ class ProviderIdLookupStrategy(LookupStrategy):
             return False
         return provider.capabilities.supports_details
 
-    async def lookup(
-        self, provider: MetadataProvider, request: LookupRequest
-    ) -> list[MediaCandidate]:
+    async def lookup(self, provider: MetadataProvider, request: LookupRequest) -> list[MediaCandidate]:
         scopes = self._resolve_scopes(provider, request.scope)
         last_error: Exception | None = None
         for scope in scopes:
@@ -85,9 +77,7 @@ class TitleLookupStrategy(LookupStrategy):
             return False
         return provider.capabilities.supports_search and provider.supports_scope(request.scope)
 
-    async def lookup(
-        self, provider: MetadataProvider, request: LookupRequest
-    ) -> list[MediaCandidate]:
+    async def lookup(self, provider: MetadataProvider, request: LookupRequest) -> list[MediaCandidate]:
         return await provider.search(request.query, request.scope)
 
 
@@ -104,9 +94,7 @@ class MetadataLookupEngine:
         ]
         self._detail_limit = detail_limit
 
-    async def lookup(
-        self, provider: MetadataProvider, request: LookupRequest
-    ) -> list[MediaCandidate]:
+    async def lookup(self, provider: MetadataProvider, request: LookupRequest) -> list[MediaCandidate]:
         for strategy in self._strategies:
             if not strategy.supports(provider, request):
                 continue

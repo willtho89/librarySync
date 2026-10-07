@@ -47,9 +47,7 @@ MODE_CONFIGS: dict[str, ModeConfig] = {
     ),
     "watchlist": ModeConfig("watchlist", process_watchlist_refresh_once, 60.0, 10.0),
     "merge_history": ModeConfig("merge_history", process_merge_history_once, 60.0, 10.0),
-    "merge_all_history": ModeConfig(
-        "merge_all_history", process_merge_all_history_once, 86400.0, 3600.0
-    ),  # daily
+    "merge_all_history": ModeConfig("merge_all_history", process_merge_all_history_once, 86400.0, 3600.0),  # daily
     # Scheduled daily via a lease; polling hourly just checks whether it is due.
     "retention": ModeConfig("retention", process_retention_once, 3600.0, 3600.0),
 }

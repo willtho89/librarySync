@@ -81,9 +81,7 @@ class PublicMetaDbClient:
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def delete_watched(
-        self, api_key: str, watched_id: str
-    ) -> tuple[dict[str, Any], int]:
+    async def delete_watched(self, api_key: str, watched_id: str) -> tuple[dict[str, Any], int]:
         response = await self._request(
             "DELETE",
             f"/api/external/watched/{watched_id}",
@@ -124,9 +122,7 @@ class PublicMetaDbClient:
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def delete_watchlist(
-        self, api_key: str, watchlist_id: str
-    ) -> tuple[dict[str, Any], int]:
+    async def delete_watchlist(self, api_key: str, watchlist_id: str) -> tuple[dict[str, Any], int]:
         response = await self._request(
             "DELETE",
             f"/api/external/watchlist/{watchlist_id}",
@@ -183,9 +179,7 @@ class PublicMetaDbClient:
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def delete_rating(
-        self, api_key: str, rating_id: str
-    ) -> tuple[dict[str, Any], int]:
+    async def delete_rating(self, api_key: str, rating_id: str) -> tuple[dict[str, Any], int]:
         response = await self._request(
             "DELETE",
             f"/api/external/ratings/{rating_id}",
@@ -250,9 +244,7 @@ class PublicMetaDbClient:
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def delete_episode_rating(
-        self, api_key: str, rating_id: str
-    ) -> tuple[dict[str, Any], int]:
+    async def delete_episode_rating(self, api_key: str, rating_id: str) -> tuple[dict[str, Any], int]:
         response = await self._request(
             "DELETE",
             f"/api/external/episode-ratings/{rating_id}",
