@@ -13,6 +13,8 @@ const watchlistState = {
     orderDir: "desc",
   },
   searchTimer: null,
+  requestVersion: 0,
+  loadController: null,
 };
 
 const watchlistSelectionState = {
@@ -213,15 +215,33 @@ async function loadWatchlist() {
     return;
   }
   bindWatchlistUi();
+  // Only the most recent request may render; abort and ignore older ones.
+  const requestVersion = watchlistState.requestVersion + 1;
+  watchlistState.requestVersion = requestVersion;
+  if (watchlistState.loadController) {
+    watchlistState.loadController.abort();
+  }
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  watchlistState.loadController = controller;
   container.textContent = "Loading...";
   const params = buildWatchlistQueryParams();
   let data = null;
   try {
-    data = await requestJSON(`/api/watchlist/items?${params.toString()}`);
+    data = await requestJSON(`/api/watchlist/items?${params.toString()}`, {
+      signal: controller ? controller.signal : undefined,
+    });
   } catch (error) {
+    if (requestVersion !== watchlistState.requestVersion || error.name === "AbortError") {
+      return;
+    }
+    watchlistState.loadController = null;
     container.textContent = "Unable to load watchlist.";
     return;
   }
+  if (requestVersion !== watchlistState.requestVersion) {
+    return;
+  }
+  watchlistState.loadController = null;
   const items = data && data.items ? data.items : [];
   const total = data && typeof data.total === "number" ? data.total : items.length;
   watchlistState.total = total;

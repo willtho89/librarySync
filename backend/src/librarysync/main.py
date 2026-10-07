@@ -202,6 +202,15 @@ def create_app() -> FastAPI:
     async def webmanifest_512() -> FileResponse:
         return _static_asset("web-app-manifest-512x512.png")
 
+    @app.get("/service-worker.js", include_in_schema=False)
+    async def service_worker() -> FileResponse:
+        # Served from the root so the worker's scope covers every page, not just /static/.
+        return FileResponse(
+            STATIC_DIR / "service-worker.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         run_migrations()

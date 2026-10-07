@@ -288,6 +288,10 @@ function renderMetadataSection(title, rows) {
   return section;
 }
 
+const metadataModalFocus = {
+  release: null,
+};
+
 function openMetadataModal(item) {
   const modal = document.getElementById("metadata-modal");
   if (!modal || !item) {
@@ -483,15 +487,28 @@ function openMetadataModal(item) {
   );
   body.appendChild(renderMetadataSection("Timestamps", timestampRows));
 
+  const wasOpen = !modal.hasAttribute("hidden");
   modal.removeAttribute("hidden");
+  if (!wasOpen) {
+    const panel = modal.querySelector("[role='dialog']") || modal;
+    metadataModalFocus.release = activateFocusTrap(panel, {
+      initialFocus: "button[data-modal-close]",
+      onEscape: closeMetadataModal,
+    });
+  }
 }
 
 function closeMetadataModal() {
   const modal = document.getElementById("metadata-modal");
-  if (!modal) {
+  if (!modal || modal.hasAttribute("hidden")) {
     return;
   }
   modal.setAttribute("hidden", "");
+  if (metadataModalFocus.release) {
+    const release = metadataModalFocus.release;
+    metadataModalFocus.release = null;
+    release();
+  }
 }
 
 window.librarysyncOnMetadataRefresh = null;
