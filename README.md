@@ -22,7 +22,8 @@ my watch history in sync.
 
 1. Copy the env example:
    `cp .env.example .env`
-2. Edit `.env` with your credentials and secrets.
+2. Edit `.env` with your credentials and secrets. `LIBRARYSYNC_SECRET_KEY` is required; generate it
+   with `openssl rand -hex 32`.
 3. Start:
    `docker compose up --build`
 4. Open `http://localhost:8000`.
@@ -44,9 +45,17 @@ All defaults below are from `.env.example`.
   SQLAlchemy connection string used by API/worker.
 
 ### App
-- `LIBRARYSYNC_SECRET_KEY` (default `change_me`): encryption key for stored secrets.
-  Change this in production.
-- `LIBRARYSYNC_ADMIN_API_KEY` (default `your_admin_api_key`): required for admin endpoints.
+- `LIBRARYSYNC_SECRET_KEY` (required): signs logins and encrypts stored provider credentials.
+  The API and worker refuse to start when it is empty or a published placeholder such as
+  `change_me`. Generate one with `openssl rand -hex 32`.
+- `LIBRARYSYNC_SECRET_KEY_PREVIOUS` (default empty): comma-separated previous keys. Stored
+  credentials encrypted with them stay readable and are re-encrypted under the current key when the
+  API starts. To rotate, set the new key and move the old one here; existing sessions are signed
+  out.
+- `LIBRARYSYNC_ALLOW_INSECURE_SECRET_KEY` (default `false`): start anyway with a placeholder key
+  (local experiments only).
+- `LIBRARYSYNC_ADMIN_API_KEY` (default empty): enables the admin endpoints (`X-API-Key`). Admin
+  endpoints are disabled while it is empty or a placeholder.
 - `LIBRARYSYNC_BASE_URL` (default `http://localhost:8000`): base URL for OAuth callbacks.
 - `LOG_LEVEL` (default `INFO`): logging level.
 - `HISTORY_LOOKBACK_DAYS` (default `30`): import-all lookback window (set `-1` for full history).
@@ -54,27 +63,52 @@ All defaults below are from `.env.example`.
 - `LIBRARYSYNC_JWT_ALGORITHM` (default `HS256`): JWT signing algorithm.
 - `LIBRARYSYNC_ALLOW_REGISTRATION` (default `true`): enable `/api/auth/register`.
 - `LIBRARYSYNC_MAX_USERS` (default `1`): max number of registered users (`-1` for unlimited).
+- `LIBRARYSYNC_GZIP_ENABLED` (default `true`) / `LIBRARYSYNC_GZIP_MIN_SIZE` (default `500`):
+  response compression.
+- `LIBRARYSYNC_ENABLE_DASHBOARD_STATS` (default `true`): dashboard statistics. Comparisons with other
+  users only appear when at least three other users have history.
+- `LIBRARYSYNC_ALLOW_PRIVATE_URLS` (default `false`): allow external catalogs and custom provider
+  API URLs that point at private, loopback or CGNAT (e.g. Tailscale) addresses. Leave off unless you
+  deliberately use LAN addons.
+- `LIBRARYSYNC_EXTERNAL_CATALOG_REFRESH_HOURS` (default `3`) /
+  `LIBRARYSYNC_EXTERNAL_CATALOG_MAX_ITEMS` (default `500`): external Stremio catalog refresh.
+
+Failed logins are throttled per username and per client address (HTTP 429 with `Retry-After`).
 
 ### OAuth
 - `TRAKT_CLIENT_ID` (default `your_trakt_client_id`): Trakt OAuth app client ID.
 - `TRAKT_CLIENT_SECRET` (default `your_trakt_client_secret`): Trakt OAuth app secret.
 - `SIMKL_CLIENT_ID` (default `your_simkl_client_id`): SIMKL OAuth app client ID.
 - `SIMKL_CLIENT_SECRET` (default `your_simkl_client_secret`): SIMKL OAuth app secret.
+- `ANILIST_CLIENT_ID` / `ANILIST_CLIENT_SECRET`: AniList OAuth app credentials.
 
 ### Worker Modes
 - `LIBRARYSYNC_WORKER_MODES` (default `all`): comma-separated list of worker loops.
-  Options: `outbox`, `metadata`, `metadata_backfill`, `metadata_cache`, `quick_import`, `import_all`, `watch_state`, `watchlist`, `merge_history`, `merge_all_history`.
+  Options: `outbox`, `metadata`, `metadata_backfill`, `metadata_cache`, `quick_import`, `import_all`, `watch_state`, `external_catalog_refresh`, `watchlist`, `merge_history`, `merge_all_history`, `retention`.
+- `LIBRARYSYNC_WORKER_ID` (default hostname plus a random suffix): stable identity used for job leases.
 - `LIBRARYSYNC_WORKER_OUTBOX_CONCURRENCY` (default `1`): outbox loop concurrency.
 - `LIBRARYSYNC_WORKER_METADATA_CONCURRENCY` (default `1`): metadata loop concurrency.
 - `LIBRARYSYNC_WORKER_METADATA_CACHE_CONCURRENCY` (default `1`): metadata cache loop concurrency.
 - `LIBRARYSYNC_WORKER_QUICK_IMPORT_CONCURRENCY` (default `1`): quick import loop concurrency.
 - `LIBRARYSYNC_WORKER_IMPORT_ALL_CONCURRENCY` (default `1`): import-all loop concurrency.
 
+### Outbox Delivery and Retention
+- `LIBRARYSYNC_OUTBOX_MAX_ATTEMPTS` (default `48`): retryable failures give up after this many
+  attempts. Provider throttling (HTTP 429) is retried after the provider's `Retry-After` and does not
+  count as an attempt.
+- `LIBRARYSYNC_OUTBOX_STALE_MINUTES` (default `30`): jobs left in progress longer than this, for
+  example after a worker crash, are requeued. Workers also release claimed jobs on `SIGTERM`.
+- `LIBRARYSYNC_OUTBOX_RETENTION_DAYS` (default `90`) / `LIBRARYSYNC_LOOKUP_RETENTION_DAYS`
+  (default `30`): the `retention` mode deletes finished outbox jobs and metadata lookups older than
+  this once a day (`0` keeps them forever).
+
 ### Rate Limits (per user, per provider, per minute)
 - `LIBRARYSYNC_TRAKT_RATE_LIMIT_PER_MINUTE` (default `60`).
 - `LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE` (default `60`).
 - `LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE` (default `30`).
 - `LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE` (default `120`).
+- `LIBRARYSYNC_ANILIST_RATE_LIMIT_PER_MINUTE` (default `90`).
+- `LIBRARYSYNC_PUBLICMETADB_RATE_LIMIT_PER_MINUTE` (default `120`).
 - `LIBRARYSYNC_TMDB_RATE_LIMIT_PER_MINUTE` (default `150`).
 - `LIBRARYSYNC_TVDB_RATE_LIMIT_PER_MINUTE` (default `150`).
 
@@ -170,22 +204,24 @@ Example values (replace `example.com` with your domain):
 - Trakt app URL: `https://example.com`
 - Trakt redirect URI: `https://example.com/api/integrations/trakt/callback`
 - SIMKL app URL: `https://example.com`
-- SIMKL redirect URI: `https://example.com/api/integrations/simkl`
+- SIMKL redirect URI: `https://example.com/api/integrations/simkl/callback`
 
 
 ## Development (uv + Ruff)
 
-1. Install Python 3.13 or 3.14 and `uv` (`python3 -m pip install --upgrade pip && python3 -m pip install uv`).
-2. Sync deps:
-   - `cd backend && uv sync --extra tests`
-3. Run API:
-   `cd backend && uv run uvicorn librarysync.main:app --reload`
-4. Run worker:
-   `cd backend && uv run python -m librarysync.worker`
-5. Lint:
-   `cd backend && uv run ruff check src tests`
-6. Run tests:
-   `cd backend && uv run pytest -q tests`
+1. Install Python 3.13 or 3.14, [`uv`](https://docs.astral.sh/uv/) and, for CSS changes, Node.js.
+2. Sync deps from the repository root: `uv sync --group dev`
+3. Start Postgres (for example `docker compose up db`) and point `DATABASE_URL` at it.
+4. Run API: `cd backend && uv run uvicorn librarysync.main:app --reload`
+5. Run worker: `cd backend && uv run python -m librarysync.worker`
+6. Lint and format: `uv run ruff check backend scripts` and `uv run ruff format backend scripts`
+7. Run tests: `uv run --directory backend pytest -q`. Set `WATCH_STATE_TEST_DATABASE_URL` to a
+   disposable Postgres database to include the PostgreSQL and migration tests (CI does).
+8. Styles: edit `frontend/input.css`, then `cd frontend && npm ci && npm run build:css` and commit
+   the rebuilt `backend/src/librarysync/static/styles.css` (CI checks it is up to date).
+
+A `justfile` wraps these (`just sync`, `just test`, `just lint`, `just fmt`, `just css`,
+`just dev-api`, `just dev-worker`), and `.pre-commit-config.yaml` runs Ruff on commit.
 
 If you’re using `docker compose` with the `scaled-workers` profile, `worker-metadata-cache`
 is now available and will run the metadata cache loop (`LIBRARYSYNC_WORKER_MODES=metadata_cache`).
@@ -199,7 +235,8 @@ Examples:
 - `python scripts/release.py --patch`
 - `python scripts/release.py 0.9.0 --no-release`
 
-The release helper runs `ruff` and the unit tests before it commits.
+The release helper runs `ruff` and the unit tests before it commits, and refuses to release a
+commit whose CI run on `main` has not passed (override with `--skip-ci-check`).
 
 `gh` must be installed and authenticated if you are creating a GitHub release.
 
