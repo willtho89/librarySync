@@ -12,14 +12,39 @@ from librarysync.config import settings
 _INLINE_SCRIPT_RE = re.compile(r"<script>(.*?)</script>", re.DOTALL)
 
 
+def _script_hashes(html: str) -> list[str]:
+    hashes: list[str] = []
+    for body in _INLINE_SCRIPT_RE.findall(html):
+        digest = hashlib.sha256(body.encode("utf-8")).digest()
+        hashes.append(f"'sha256-{base64.b64encode(digest).decode('ascii')}'")
+    return hashes
+
+
 def inline_script_hashes(template_paths: list[Path]) -> list[str]:
     """CSP hashes of the inline <script> blocks the templates ship (e.g. the pre-paint theme script)."""
     hashes: list[str] = []
     for path in template_paths:
-        for body in _INLINE_SCRIPT_RE.findall(path.read_text(encoding="utf-8")):
-            digest = hashlib.sha256(body.encode("utf-8")).digest()
-            hashes.append(f"'sha256-{base64.b64encode(digest).decode('ascii')}'")
+        hashes.extend(_script_hashes(path.read_text(encoding="utf-8")))
     return hashes
+
+
+def api_docs_content_security_policy(html: str) -> str:
+    """CSP for FastAPI's Swagger UI / ReDoc pages, which load their bundles from jsDelivr
+    and fonts from Google Fonts and initialise from an inline script."""
+    directives = {
+        "default-src": ["'self'"],
+        "script-src": ["'self'", "https://cdn.jsdelivr.net", *_script_hashes(html)],
+        "style-src": ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://fonts.googleapis.com"],
+        "img-src": ["'self'", "data:", "https:"],
+        "font-src": ["'self'", "data:", "https://fonts.gstatic.com"],
+        "connect-src": ["'self'"],
+        "worker-src": ["'self'", "blob:"],
+        "object-src": ["'none'"],
+        "base-uri": ["'self'"],
+        "form-action": ["'self'"],
+        "frame-ancestors": ["'none'"],
+    }
+    return "; ".join(f"{name} {' '.join(values)}" for name, values in directives.items())
 
 
 def build_content_security_policy(script_hashes: list[str]) -> str:
@@ -55,6 +80,7 @@ def install_security_headers(app: FastAPI, template_paths: list[Path]) -> None:
         headers.setdefault("X-Frame-Options", "DENY")
         if hsts:
             headers.setdefault("Strict-Transport-Security", "max-age=15552000")
+        # Routes that render third-party pages (the API docs) set their own policy.
         if response.headers.get("content-type", "").startswith("text/html"):
             headers.setdefault("Content-Security-Policy", csp)
         return response

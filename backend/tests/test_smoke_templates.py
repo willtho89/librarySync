@@ -156,3 +156,21 @@ class TestSecurityHeaders:
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["x-frame-options"] == "DENY"
         assert "content-security-policy" not in response.headers
+
+
+@pytest.mark.parametrize("route", ["/docs", "/redoc", "/docs/oauth2-redirect"])
+def test_api_documentation_pages_are_allowed_by_their_csp(client, route):
+    import base64
+    import hashlib
+    import re
+    from urllib.parse import urlparse
+
+    response = client.get(route)
+    assert response.status_code == 200
+    policy = response.headers["content-security-policy"]
+    script_src = next(d.strip() for d in policy.split(";") if d.strip().startswith("script-src "))
+    external = [urlparse(src).netloc for src in re.findall(r'<script[^>]+src="([^"]+)"', response.text)]
+    assert all(host in script_src for host in external if host), (external, script_src)
+    for body in re.findall(r"<script>(.*?)</script>", response.text, re.DOTALL):
+        digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
+        assert f"'sha256-{digest}'" in script_src

@@ -6,7 +6,8 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -32,7 +33,7 @@ from librarysync.config import settings
 from librarysync.core.http_client import quiet_http_request_logging
 from librarysync.core.integrations import reencrypt_integration_secrets
 from librarysync.core.security import validate_security_settings
-from librarysync.core.security_headers import install_security_headers
+from librarysync.core.security_headers import api_docs_content_security_policy, install_security_headers
 from librarysync.db.migrate import run_migrations
 from librarysync.db.models import User
 from librarysync.db.session import SessionLocal, init_session_factory
@@ -76,6 +77,36 @@ def make_static_url(version: str) -> callable:
     return static_url
 
 
+def _with_docs_csp(response: HTMLResponse) -> HTMLResponse:
+    response.headers["Content-Security-Policy"] = api_docs_content_security_policy(response.body.decode("utf-8"))
+    return response
+
+
+def _add_api_docs_routes(app: FastAPI) -> None:
+    """Swagger UI and ReDoc at their usual paths, each with a CSP that allows exactly
+    the external bundles and inline initialisation script of that page."""
+
+    @app.get("/docs", include_in_schema=False)
+    async def swagger_ui(request: Request) -> HTMLResponse:
+        root_path = request.scope.get("root_path", "").rstrip("/")
+        return _with_docs_csp(
+            get_swagger_ui_html(
+                openapi_url=f"{root_path}{app.openapi_url}",
+                title=f"{app.title} - Swagger UI",
+                oauth2_redirect_url=f"{root_path}/docs/oauth2-redirect",
+            )
+        )
+
+    @app.get("/docs/oauth2-redirect", include_in_schema=False)
+    async def swagger_ui_oauth2_redirect() -> HTMLResponse:
+        return _with_docs_csp(get_swagger_ui_oauth2_redirect_html())
+
+    @app.get("/redoc", include_in_schema=False)
+    async def redoc(request: Request) -> HTMLResponse:
+        root_path = request.scope.get("root_path", "").rstrip("/")
+        return _with_docs_csp(get_redoc_html(openapi_url=f"{root_path}{app.openapi_url}", title=f"{app.title} - ReDoc"))
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="librarySync",
@@ -83,6 +114,9 @@ def create_app() -> FastAPI:
             "Authenticate with `Authorization: Bearer <token>` or the `access_token` cookie set by `/api/auth/login`."
         ),
         openapi_tags=OPENAPI_TAGS,
+        # Served below with a page-specific Content-Security-Policy.
+        docs_url=None,
+        redoc_url=None,
     )
 
     # The Stremio addon and Watch State endpoints are fetched cross-origin by
@@ -101,6 +135,7 @@ def create_app() -> FastAPI:
         app.add_middleware(GZipMiddleware, minimum_size=settings.gzip_min_size)
 
     install_security_headers(app, sorted(TEMPLATES_DIR.rglob("*.html")))
+    _add_api_docs_routes(app)
 
     app.include_router(routes_auth.router)
     app.include_router(routes_integrations.router)
