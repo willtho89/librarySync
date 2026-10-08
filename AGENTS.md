@@ -133,7 +133,7 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - `dedupe_key` is unique only among waiting jobs (`pending`, `failed_retryable`). A changed payload for a target already in flight becomes a successor that runs after it; a failed predecessor becomes `superseded`. Finished jobs never keep a key.
 - Retryable failures back off up to an hour and give up after `LIBRARYSYNC_OUTBOX_MAX_ATTEMPTS`; HTTP 429 honours `Retry-After` without using an attempt; a 401 from an OAuth provider expires the stored token and retries
 - Jobs stuck `in_progress` longer than `LIBRARYSYNC_OUTBOX_STALE_MINUTES` are requeued
-- Deleting watches cancels their queued pushes (`cancel_queued_pushes`)
+- Deleting watches cancels their queued pushes (`cancel_queued_pushes`); pushes already claimed when their watch was deleted are skipped at delivery
 
 #### Watch State Inbox
 - `watch_state` drains durable bulk receipts and mapping retries.
@@ -147,8 +147,8 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history and episode lists that are missing posters or identifiers
 
 #### Import Jobs
-- **`quick_import`**: Runs 7-day import window on the user's configured schedule (30 min to 7 days). Due runs are selected from an unlocked scan, then locked. Per-user runs are single-flight via a lease stored in the integration config (10-minute expiry, refreshed at each claim); an expired lease lets any worker resume a stuck run from its saved queue index
-- **`import_all`**: Sequences providers per user for full import, single-flight via a two-hour lease renewed at each provider step
+- **`quick_import`**: Runs 7-day import window on the user's configured schedule (30 min to 7 days). Due runs are selected from an unlocked scan, then locked. Per-user runs are single-flight via a lease stored in the integration config (10-minute expiry). The lease owner is unique per claim (so loops of one process exclude each other too) and is released after every provider step; an expired lease lets any worker resume a stuck run from its saved queue index
+- **`import_all`**: Sequences providers per user for full import, single-flight via a per-claim two-hour lease released after each provider step
 - **Watchlist reconciliation**: removals are only reconciled against complete listings. A failed fetch, a failed SIMKL category or a page-capped listing (`PagedEntries.truncated`) never deletes items
 - **Dropped ingestion**: Trakt (`GET /users/hidden/dropped?type=show`) and SIMKL (`status: "dropped"` in `/sync/all-items`) dropped shows are imported into the terminal `dropped` watchlist status, tracked via a per-provider `WatchlistSource` (`external_id="dropped"`); reconcile un-drops shows that leave the provider's dropped list. Import upserts never resurrect dropped items (`restore_dropped=False`)
 - **`merge_history`**: Post-import deduplication (same-day movie entries) and repoints sync/outbox rows
@@ -200,9 +200,9 @@ See `.env.example` and the README for every variable and default. Highlights:
 - **Passwords**: Bcrypt hashing (in a worker thread) with 8+ character minimum and 72-byte maximum (rejected, not truncated)
 - **Sessions**: HttpOnly SameSite=Lax cookie (Secure on https); CORS never allows credentials
 - **OAuth**: State validation (constant-time) for Trakt, SIMKL and AniList flows
-- **OAuth tokens**: Refresh through `core/integration_tokens.py` only (row-locked, committed immediately); never refresh and discard a rotating token
+- **OAuth tokens**: Refresh through `core/integration_tokens.py` only (row-locked, in its own transaction so the caller's transaction and locks are untouched); never refresh and discard a rotating token. Key rotation rewrites each secret under the same row lock
 - **Outbound requests to user-supplied URLs**: Validate with `core/url_safety.py` (`ensure_public_url` / `ensure_public_host`)
-- **Responses**: Security headers and a CSP for pages (`core/security_headers.py`); inline scripts must be plain `<script>` blocks so their hashes are allowed
+- **Responses**: Security headers and a CSP for pages (`core/security_headers.py`); inline scripts must be plain `<script>` blocks so their hashes are allowed. `/docs` and `/redoc` are served by the app with their own page-specific CSP
 - **Logging**: Never log raw secrets or tokens; redact credentials in URLs (`redact_secrets`); httpx request logging stays at WARNING
 
 ---
