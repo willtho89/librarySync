@@ -18,11 +18,32 @@ def select_next_episode(
     released_episodes: Iterable[EpisodeItem],
     watched_episode_ids: set[str],
 ) -> EpisodeItem | None:
-    """Return the first episode not in ``watched_episode_ids``.
+    """Return the next episode after the user's latest watched point.
 
     ``released_episodes`` must already be ordered by season/episode number.
+    This avoids recommending an earlier, previously-unwatched episode from an
+    older season when the user has already progressed to a later season.
     """
-    for episode in released_episodes:
+    ordered_episodes = list(released_episodes)
+    if not ordered_episodes:
+        return None
+
+    last_watched = None
+    for episode in ordered_episodes:
+        if episode.id in watched_episode_ids:
+            last_watched = episode
+
+    if last_watched is None:
+        for episode in ordered_episodes:
+            if episode.id not in watched_episode_ids:
+                return episode
+        return None
+
+    last_key = (last_watched.season_number, last_watched.episode_number)
+    for episode in ordered_episodes:
+        episode_key = (episode.season_number, episode.episode_number)
+        if episode_key <= last_key:
+            continue
         if episode.id not in watched_episode_ids:
             return episode
     return None
@@ -106,12 +127,14 @@ async def find_next_episodes_bulk(
     released = await _released_episodes(db, show_ids, now_date)
     watched_ids = await _watched_episode_ids(db, user_id, show_ids, now_date)
     next_episodes: dict[str, EpisodeItem] = {}
+    per_show_episodes: dict[str, list[EpisodeItem]] = {}
     for episode in released:
-        if episode.show_media_item_id in next_episodes:
-            continue
-        if episode.id in watched_ids:
-            continue
-        next_episodes[episode.show_media_item_id] = episode
+        per_show_episodes.setdefault(episode.show_media_item_id, []).append(episode)
+
+    for show_id, episodes in per_show_episodes.items():
+        next_episode = select_next_episode(episodes, watched_ids)
+        if next_episode is not None:
+            next_episodes[show_id] = next_episode
     return next_episodes
 
 
