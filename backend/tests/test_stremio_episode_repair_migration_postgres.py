@@ -120,3 +120,48 @@ def test_repair_moves_misattributed_stremio_episode_watches(monkeypatch):
         with admin.begin() as connection:
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
         admin.dispose()
+
+
+@pytest.mark.skipif(not DATABASE, reason="Isolated PostgreSQL test URL required")
+def test_repair_restores_episodes_history_merge_already_collapsed(monkeypatch):
+    import asyncio
+
+    from librarysync.jobs.merge_history import merge_history_for_user
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    schema = "stremio_repair_merged_" + uuid.uuid4().hex
+    admin = create_engine(DATABASE)
+    with admin.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    url = DATABASE + "?options=-csearch_path%3D" + schema
+    monkeypatch.setattr(session, "settings", SimpleNamespace(database_url=url))
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(__file__).parents[1] / "src/librarysync/db/migrations"))
+    engine = create_engine(url)
+    try:
+        command.upgrade(cfg, BEFORE)
+        with engine.begin() as connection:
+            _seed(connection)
+
+        async def _merge() -> int:
+            async_engine = create_async_engine(url)
+            factory = async_sessionmaker(async_engine, autoflush=False, expire_on_commit=False)
+            async with factory() as db:
+                merged = await merge_history_for_user(db, "u")
+            await async_engine.dispose()
+            return merged
+
+        assert asyncio.run(_merge()) == 2
+        command.upgrade(cfg, REPAIR)
+        with engine.connect() as connection:
+            episodes = (
+                connection.execute(text("SELECT episode_item_id FROM watched_items WHERE source = 'stremio'"))
+                .scalars()
+                .all()
+            )
+        assert sorted(episodes) == ["ep1", "ep2", "ep3", "other-ep2"]
+    finally:
+        engine.dispose()
+        with admin.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        admin.dispose()
