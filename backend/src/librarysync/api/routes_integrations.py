@@ -1,7 +1,8 @@
 import json
 import secrets
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
@@ -11,11 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.config import settings
-from librarysync.connectors.services.aiostreams_proxy import (
-    AIOStreamsClient,
-    AIOStreamsError,
-    has_required_aiostreams_fields,
-)
 from librarysync.connectors.services.anilist import (
     AniListClient,
     AniListError,
@@ -84,6 +80,7 @@ from librarysync.core.import_control import (
     set_quick_import_interval,
 )
 from librarysync.core.import_schedule import normalize_interval_seconds
+from librarysync.core.integration_tokens import ensure_letterboxd_access_token
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.publicmetadb import (
     PUBLICMETADB_METADATA_ENABLED_KEY,
@@ -93,6 +90,7 @@ from librarysync.core.publicmetadb import (
     set_publicmetadb_sync_enabled,
 )
 from librarysync.core.security import decrypt_value, encrypt_value
+from librarysync.core.url_safety import UnsafeUrlError, ensure_public_url
 from librarysync.core.watchlist import WATCHLIST_IMPORT_KEY, parse_watchlist_import_config
 from librarysync.db.models import Integration, IntegrationSecret, User
 
@@ -130,12 +128,6 @@ class StremioLoginConfig(BaseModel):
     email: str
     password: str
     api_base_url: str | None = None
-
-
-class AIOStreamsConfig(BaseModel):
-    api_base_url: str | None = None
-    auth: str
-    username: str | None = None
 
 
 class PublicMetaDbSyncConfig(BaseModel):
@@ -177,9 +169,7 @@ def _normalize_cookies(cookies: dict[str, str] | None) -> dict[str, str] | None:
 
 
 def _publicmetadb_status(config: dict[str, object], has_secrets: bool) -> str:
-    if has_secrets and (
-        is_publicmetadb_sync_enabled(config) or is_publicmetadb_metadata_enabled(config)
-    ):
+    if has_secrets and (is_publicmetadb_sync_enabled(config) or is_publicmetadb_metadata_enabled(config)):
         return "connected"
     if has_secrets:
         return "configured"
@@ -227,28 +217,16 @@ async def _load_integration(
     return await load_integration_with_secrets(db, user_id, provider)
 
 
-async def _delete_integration_secret(
-    db: AsyncSession, integration: Integration
-) -> None:
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
+async def _delete_integration_secret(db: AsyncSession, integration: Integration) -> None:
+    result = await db.execute(select(IntegrationSecret).where(IntegrationSecret.integration_id == integration.id))
     secret = result.scalars().first()
     if secret:
         await db.delete(secret)
 
 
-async def _upsert_integration_secret(
-    db: AsyncSession, integration: Integration, payload: dict[str, object]
-) -> None:
+async def _upsert_integration_secret(db: AsyncSession, integration: Integration, payload: dict[str, object]) -> None:
     encrypted = encrypt_value(json.dumps(payload))
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
+    result = await db.execute(select(IntegrationSecret).where(IntegrationSecret.integration_id == integration.id))
     secret = result.scalars().first()
     if not secret:
         secret = IntegrationSecret(
@@ -280,7 +258,7 @@ def _validate_oauth_state(
 ) -> None:
     stored_state = config.get("oauth_state")
     stored_expires = parse_expires(config.get("oauth_state_expires_at"))
-    if stored_state is None or stored_state != state:
+    if not isinstance(stored_state, str) or not secrets.compare_digest(stored_state, state):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid OAuth state",
@@ -401,28 +379,21 @@ async def list_integrations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    result = await db.execute(
-        select(Integration).where(Integration.user_id == current_user.id)
-    )
+    result = await db.execute(select(Integration).where(Integration.user_id == current_user.id))
     integrations = [
-        integration
-        for integration in result.scalars().all()
-        if integration.provider != IMPORT_ALL_PROVIDER
+        integration for integration in result.scalars().all() if integration.provider != IMPORT_ALL_PROVIDER
     ]
     integration_ids = [integration.id for integration in integrations]
     if integration_ids:
         result = await db.execute(
-            select(IntegrationSecret.integration_id).where(
-                IntegrationSecret.integration_id.in_(integration_ids)
-            )
+            select(IntegrationSecret.integration_id).where(IntegrationSecret.integration_id.in_(integration_ids))
         )
         secret_ids = set(result.scalars().all())
     else:
         secret_ids = set()
     return {
         "integrations": [
-            _integration_to_out(integration, integration.id in secret_ids).model_dump()
-            for integration in integrations
+            _integration_to_out(integration, integration.id in secret_ids).model_dump() for integration in integrations
         ]
     }
 
@@ -479,6 +450,7 @@ async def save_letterboxd(
         existing_base = integration.config.get("api_base_url")
     if not api_base_url:
         api_base_url = existing_base or DEFAULT_LETTERBOXD_API_BASE_URL
+    await _ensure_safe_api_base_url(api_base_url, DEFAULT_LETTERBOXD_API_BASE_URL, "Letterboxd API URL")
 
     config = dict(integration.config or {})
     config["api_base_url"] = api_base_url
@@ -487,11 +459,7 @@ async def save_letterboxd(
     db.add(integration)
     await db.flush()
 
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration.id
-        )
-    )
+    result = await db.execute(select(IntegrationSecret).where(IntegrationSecret.integration_id == integration.id))
     secret = result.scalars().first()
     secret_data: dict[str, object] = {}
     if secret:
@@ -595,11 +563,10 @@ async def test_letterboxd(
         cookies=cookies,
     )
     try:
-        me_payload = await client.fetch_me()
+        access_token = await ensure_letterboxd_access_token(db, integration.id, secret_data, client)
+        me_payload = await client.fetch_me(access_token)
     except LetterboxdError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     member_id = extract_member_id(me_payload)
     member_name = extract_member_name(me_payload)
@@ -812,9 +779,7 @@ async def trakt_callback(
     try:
         token = await client.exchange_code(code, redirect_uri)
     except TraktError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     secret_payload = token_to_secret_payload(token)
     await _upsert_integration_secret(db, integration, secret_payload)
@@ -906,9 +871,7 @@ async def simkl_callback(
     try:
         token = await client.exchange_code(code, redirect_uri)
     except SimklError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=_format_simkl_error(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_format_simkl_error(exc)) from exc
 
     secret_payload = simkl_token_to_secret_payload(token)
     await _upsert_integration_secret(db, integration, secret_payload)
@@ -1084,9 +1047,7 @@ async def save_publicmetadb_sync(
         )
 
     result = await db.execute(
-        select(IntegrationSecret.integration_id).where(
-            IntegrationSecret.integration_id == integration.id
-        )
+        select(IntegrationSecret.integration_id).where(IntegrationSecret.integration_id == integration.id)
     )
     has_secrets = result.scalar_one_or_none() is not None
     if is_publicmetadb_sync_enabled(config) and not has_secrets:
@@ -1159,9 +1120,7 @@ async def disconnect_publicmetadb_sync(
         has_secrets = False
     else:
         result = await db.execute(
-            select(IntegrationSecret.integration_id).where(
-                IntegrationSecret.integration_id == integration.id
-            )
+            select(IntegrationSecret.integration_id).where(IntegrationSecret.integration_id == integration.id)
         )
         has_secrets = result.scalar_one_or_none() is not None
 
@@ -1169,131 +1128,6 @@ async def disconnect_publicmetadb_sync(
     db.add(integration)
     await db.commit()
     return {"status": "ok"}
-
-
-@router.post(
-    "/aiostreams",
-    summary="Connect AIOStreams Proxy",
-    description="Store AIOStreams Proxy auth for the current user.",
-)
-async def aiostreams_connect(
-    payload: AIOStreamsConfig,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    auth = _normalize_optional(payload.auth)
-    if not auth:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Auth token is required"
-        )
-    api_base_url = _normalize_optional(payload.api_base_url)
-    username = _normalize_optional(payload.username)
-
-    integration = await _get_integration(db, current_user.id, "aiostreams")
-    existing_base = None
-    if integration and integration.config:
-        existing_base = integration.config.get("api_base_url")
-    if not api_base_url:
-        api_base_url = existing_base
-    if not api_base_url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="API base URL is required",
-        )
-    if not username:
-        username = _parse_aiostreams_username(auth)
-
-    if not integration:
-        integration = Integration(
-            user_id=current_user.id,
-            provider="aiostreams",
-            status="connected",
-        )
-
-    config = dict(integration.config or {})
-    config["api_base_url"] = api_base_url
-    if username:
-        config["username"] = username
-    else:
-        config.pop("username", None)
-    integration.status = "connected"
-    integration.config = config
-    db.add(integration)
-    await db.flush()
-
-    secret_payload = {"auth": auth}
-    await _upsert_integration_secret(db, integration, secret_payload)
-
-    await db.commit()
-    return _integration_to_out(integration, True).model_dump()
-
-
-@router.post(
-    "/aiostreams/test",
-    summary="Test AIOStreams Proxy",
-    description="Verify access to the AIOStreams stats endpoint.",
-)
-async def aiostreams_test(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    integration, secret_data = await _load_integration(db, current_user.id, "aiostreams")
-    if not integration or not secret_data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="AIOStreams integration not configured",
-        )
-    if not has_required_aiostreams_fields(secret_data):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="AIOStreams auth is missing",
-        )
-    api_base_url = None
-    if integration.config and integration.config.get("api_base_url"):
-        api_base_url = str(integration.config["api_base_url"])
-    if not api_base_url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="AIOStreams API base URL is missing",
-        )
-    auth = str(secret_data.get("auth"))
-    username = None
-    if integration.config and integration.config.get("username"):
-        username = str(integration.config["username"])
-    if not username:
-        username = _parse_aiostreams_username(auth)
-    client = AIOStreamsClient(api_base_url=api_base_url)
-    try:
-        stats = await client.get_stats(auth)
-    except AIOStreamsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
-    if username:
-        users = stats.get("users") if isinstance(stats, dict) else None
-        if not isinstance(users, dict) or username not in users:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="AIOStreams user not found in stats response",
-            )
-    return {"status": "ok"}
-
-
-@router.post(
-    "/aiostreams/disconnect",
-    summary="Disconnect AIOStreams Proxy",
-    description="Remove stored AIOStreams auth for the current user.",
-)
-async def aiostreams_disconnect(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    return await _disconnect_integration(
-        db,
-        current_user.id,
-        "aiostreams",
-        cleanup=_clear_aiostreams_profile,
-    )
 
 
 @router.post(
@@ -1309,13 +1143,9 @@ async def stremio_login(
     email = payload.email.strip()
     password = payload.password
     if not email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Email is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is required")
     if not password or not password.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Password is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password is required")
     api_base_url = _normalize_optional(payload.api_base_url)
 
     integration = await _get_integration(db, current_user.id, "stremio")
@@ -1324,14 +1154,13 @@ async def stremio_login(
         existing_base = integration.config.get("api_base_url")
     if not api_base_url:
         api_base_url = existing_base or DEFAULT_STREMIO_API_BASE_URL
+    await _ensure_safe_api_base_url(api_base_url, DEFAULT_STREMIO_API_BASE_URL, "Stremio API URL")
 
     client = StremioClient(api_base_url=api_base_url)
     try:
         login = await client.login(email, password)
     except StremioError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=_format_stremio_error(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_format_stremio_error(exc)) from exc
 
     if not integration:
         integration = Integration(
@@ -1389,6 +1218,16 @@ def _extract_simkl_username(payload: object) -> str | None:
     return None
 
 
+async def _ensure_safe_api_base_url(api_base_url: str, default: str, label: str) -> None:
+    """Custom provider base URLs are fetched server-side; keep them off internal networks."""
+    if api_base_url.rstrip("/") == default.rstrip("/"):
+        return
+    try:
+        await ensure_public_url(api_base_url, label=label, schemes=("https",))
+    except UnsafeUrlError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 def _format_simkl_error(error: SimklError) -> str:
     message = str(error)
     status_code = error.status_code
@@ -1431,10 +1270,6 @@ def _clear_anilist_profile(config: dict[str, object]) -> None:
     _clear_oauth_state(config)
 
 
-def _clear_aiostreams_profile(config: dict[str, object]) -> None:
-    config.pop("username", None)
-
-
 def _apply_stremio_profile(
     config: dict[str, object],
     user_payload: object,
@@ -1444,9 +1279,7 @@ def _apply_stremio_profile(
     if isinstance(user_payload, dict):
         user = {str(key): value for key, value in user_payload.items()}
 
-    user_id = _coerce_stremio_field(user.get("_id")) or _coerce_stremio_field(
-        user.get("id")
-    )
+    user_id = _coerce_stremio_field(user.get("_id")) or _coerce_stremio_field(user.get("id"))
     if user_id:
         config["stremio_user_id"] = user_id
 
@@ -1491,12 +1324,3 @@ def _format_stremio_error(error: StremioError) -> str:
     if response_body:
         return f"{message} (body={response_body})"
     return message
-
-
-def _parse_aiostreams_username(auth: str | None) -> str | None:
-    if not isinstance(auth, str):
-        return None
-    cleaned = auth.strip()
-    if not cleaned or ":" not in cleaned:
-        return None
-    return cleaned.split(":", 1)[0].strip() or None

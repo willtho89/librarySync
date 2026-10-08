@@ -2,6 +2,7 @@ const authState = {
   user: null,
   loaded: false,
   promise: null,
+  redirecting: false,
 };
 const themeState = {
   mode: "system",
@@ -148,21 +149,47 @@ function initMobileMenu() {
     });
   };
 
+  // The closed panel is only translated off-screen, so make it inert to keep its
+  // links out of the tab order and the accessibility tree.
+  const setPanelHidden = (hidden) => {
+    if (hidden) {
+      panel.setAttribute("inert", "");
+    } else {
+      panel.removeAttribute("inert");
+    }
+    panel.setAttribute("aria-hidden", hidden ? "true" : "false");
+  };
+
+  let releaseFocus = null;
+
   function openMenu() {
     panel.classList.add("is-open");
     backdrop.classList.add("is-open");
-    panel.setAttribute("aria-hidden", "false");
+    setPanelHidden(false);
     setExpanded(true);
     document.body.style.overflow = "hidden";
+    if (!releaseFocus) {
+      releaseFocus = activateFocusTrap(panel, {
+        initialFocus: closeButton,
+        onEscape: closeMenu,
+      });
+    }
   }
 
   function closeMenu() {
     panel.classList.remove("is-open");
     backdrop.classList.remove("is-open");
-    panel.setAttribute("aria-hidden", "true");
+    setPanelHidden(true);
     setExpanded(false);
     document.body.style.overflow = "";
+    if (releaseFocus) {
+      const release = releaseFocus;
+      releaseFocus = null;
+      release();
+    }
   }
+
+  setPanelHidden(!panel.classList.contains("is-open"));
 
   toggleButtons.forEach((button) => {
     if (panel.id && !button.hasAttribute("aria-controls")) {
@@ -186,12 +213,6 @@ function initMobileMenu() {
 
   panel.querySelectorAll("a, button[data-logout]").forEach((link) => {
     link.addEventListener("click", closeMenu);
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && panel.classList.contains("is-open")) {
-      closeMenu();
-    }
   });
 }
 
@@ -278,30 +299,341 @@ function initTabsets() {
   });
 }
 
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+  "[contenteditable='true']",
+].join(",");
+
+function getFocusableElements(container) {
+  if (!container) {
+    return [];
+  }
+  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)).filter(
+    (el) => !el.closest("[hidden], [inert]") && el.getClientRects().length > 0
+  );
+}
+
+// Keeps keyboard focus inside `container` until the returned release function is called.
+// Focus moves into the container on activation and returns to the previously focused
+// element on release. `onEscape` is called when Escape is pressed while trapped.
+function activateFocusTrap(container, options = {}) {
+  if (!container) {
+    return () => {};
+  }
+  const { initialFocus = null, onEscape = null } = options;
+  const previouslyFocused =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  const focusContainer = () => {
+    if (!container.hasAttribute("tabindex")) {
+      container.setAttribute("tabindex", "-1");
+    }
+    container.focus();
+  };
+
+  const handleKeydown = (event) => {
+    if (event.key === "Escape" && typeof onEscape === "function") {
+      event.preventDefault();
+      onEscape(event);
+      return;
+    }
+    if (event.key !== "Tab") {
+      return;
+    }
+    const focusable = getFocusableElements(container);
+    if (!focusable.length) {
+      event.preventDefault();
+      focusContainer();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    const outside = !container.contains(active);
+    if (event.shiftKey && (active === first || active === container || outside)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (active === last || outside)) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const handleFocusIn = (event) => {
+    if (!container.contains(event.target)) {
+      const focusable = getFocusableElements(container);
+      if (focusable.length) {
+        focusable[0].focus();
+      } else {
+        focusContainer();
+      }
+    }
+  };
+
+  document.addEventListener("keydown", handleKeydown, true);
+  document.addEventListener("focusin", handleFocusIn);
+
+  const target =
+    (typeof initialFocus === "string"
+      ? container.querySelector(initialFocus)
+      : initialFocus) || getFocusableElements(container)[0];
+  if (target) {
+    target.focus();
+  } else {
+    focusContainer();
+  }
+
+  let released = false;
+  return (releaseOptions = {}) => {
+    if (released) {
+      return;
+    }
+    released = true;
+    document.removeEventListener("keydown", handleKeydown, true);
+    document.removeEventListener("focusin", handleFocusIn);
+    const { restoreFocus = true } = releaseOptions;
+    if (restoreFocus && previouslyFocused && previouslyFocused.isConnected) {
+      previouslyFocused.focus();
+    }
+  };
+}
+
+const REQUEST_LOCATION_PREFIXES = new Set(["body", "query", "path", "header", "cookie"]);
+
+// Turns a FastAPI/Pydantic `detail` (string, object or list of validation errors)
+// into a readable message, e.g. "rating: Input should be less than or equal to 5".
+function formatErrorDetail(detail) {
+  if (detail === null || detail === undefined || detail === "") {
+    return "";
+  }
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    return detail
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return entry === null || entry === undefined ? "" : String(entry);
+        }
+        const loc = Array.isArray(entry.loc)
+          ? entry.loc
+              .filter((part, index) => !(index === 0 && REQUEST_LOCATION_PREFIXES.has(part)))
+              .join(".")
+          : "";
+        const msg = entry.msg || entry.message || "";
+        if (loc && msg) {
+          return `${loc}: ${msg}`;
+        }
+        return msg || loc;
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  if (typeof detail === "object") {
+    if (typeof detail.message === "string") {
+      return detail.message;
+    }
+    if (typeof detail.msg === "string") {
+      return detail.msg;
+    }
+    try {
+      return JSON.stringify(detail);
+    } catch (error) {
+      return "";
+    }
+  }
+  return String(detail);
+}
+
+function isSafeRedirectPath(value) {
+  return (
+    typeof value === "string" &&
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.startsWith("/\\")
+  );
+}
+
+function buildLoginUrl() {
+  const { pathname, search, hash } = window.location;
+  if (!pathname || pathname === "/" || pathname.startsWith("/login")) {
+    return "/login";
+  }
+  return `/login?next=${encodeURIComponent(`${pathname}${search}${hash}`)}`;
+}
+
+function getPostLoginPath() {
+  try {
+    const next = new URLSearchParams(window.location.search).get("next");
+    if (isSafeRedirectPath(next)) {
+      const url = new URL(next, window.location.origin);
+      if (url.origin === window.location.origin && !url.pathname.startsWith("/login")) {
+        return `${url.pathname}${url.search}${url.hash}`;
+      }
+    }
+  } catch (error) {
+    // fall through to the default
+  }
+  return "/";
+}
+
+function redirectToLogin() {
+  if (authState.redirecting) {
+    return;
+  }
+  authState.redirecting = true;
+  clearOfflineCaches().finally(() => {
+    window.location.href = buildLoginUrl();
+  });
+}
+
+// A 401 from an API call made on behalf of a signed-in session means the session
+// expired; auth endpoints report bad credentials with 401 and are handled by callers.
+function shouldRedirectOnUnauthorized(path) {
+  let pathname = "";
+  try {
+    pathname = new URL(path, window.location.href).pathname;
+  } catch (error) {
+    return false;
+  }
+  if (!pathname.startsWith("/api/") || pathname.startsWith("/api/auth/")) {
+    return false;
+  }
+  const body = document.body;
+  return Boolean(authState.user) || Boolean(body && body.dataset.requiresAuth === "true");
+}
+
 async function requestJSON(path, options = {}) {
+  const { skipAuthRedirect = false, ...fetchOptions } = options;
   const headers = Object.assign(
     {},
-    options.headers || {},
-    options.body ? { "Content-Type": "application/json" } : {}
+    fetchOptions.headers || {},
+    fetchOptions.body ? { "Content-Type": "application/json" } : {}
   );
   const response = await fetch(path, {
     credentials: "include",
-    ...options,
+    ...fetchOptions,
     headers,
   });
   const contentType = response.headers.get("content-type") || "";
-  const data = contentType.includes("application/json")
-    ? await response.json()
-    : null;
+  let data = null;
+  if (contentType.includes("application/json")) {
+    try {
+      data = await response.json();
+    } catch (error) {
+      if (isAbortError(error) || response.ok) {
+        throw error;
+      }
+      data = null;
+    }
+  }
   if (!response.ok) {
     const message =
-      (data && (data.detail || data.message)) ||
+      formatErrorDetail(data && (data.detail || data.message)) ||
       `Request failed (${response.status})`;
     const error = new Error(message);
     error.status = response.status;
+    error.detail = data ? data.detail : undefined;
+    if (response.status === 401 && !skipAuthRedirect && shouldRedirectOnUnauthorized(path)) {
+      redirectToLogin();
+    }
     throw error;
   }
   return data;
+}
+
+function createAbortError() {
+  try {
+    return new DOMException("The operation was aborted.", "AbortError");
+  } catch (error) {
+    const abortError = new Error("The operation was aborted.");
+    abortError.name = "AbortError";
+    return abortError;
+  }
+}
+
+function isAbortError(error) {
+  return Boolean(error && error.name === "AbortError");
+}
+
+function waitWithSignal(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(createAbortError());
+    };
+    const timer = window.setTimeout(() => {
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      resolve();
+    }, ms);
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+const METADATA_LOOKUP_TIMEOUT_MESSAGE =
+  "Lookup timed out — is the metadata worker running?";
+
+// Polls an async metadata lookup until it completes, fails, times out or is aborted.
+// Resolves with the completed lookup payload. Rejects with an Error whose `code` is
+// "failed" or "timeout", with request errors from requestJSON, or with an AbortError
+// when `signal` aborts. `onUpdate` receives each still-pending payload (partial results).
+async function pollMetadataLookup(lookupId, options = {}) {
+  const {
+    timeoutMs = 60000,
+    initialDelayMs = 1200,
+    maxDelayMs = 5000,
+    backoffFactor = 1.5,
+    onUpdate = null,
+    signal = null,
+  } = options;
+  const deadline = Date.now() + timeoutMs;
+  let delayMs = initialDelayMs;
+  while (true) {
+    if (signal && signal.aborted) {
+      throw createAbortError();
+    }
+    const data = await requestJSON(`/api/metadata/lookup/${encodeURIComponent(lookupId)}`, {
+      signal: signal || undefined,
+    });
+    if (signal && signal.aborted) {
+      throw createAbortError();
+    }
+    const status = data && data.status;
+    if (status === "completed") {
+      return data;
+    }
+    if (status === "failed") {
+      const failure = new Error((data && data.error) || "Lookup failed.");
+      failure.code = "failed";
+      failure.lookup = data;
+      throw failure;
+    }
+    if (typeof onUpdate === "function") {
+      onUpdate(data);
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      const timeout = new Error(METADATA_LOOKUP_TIMEOUT_MESSAGE);
+      timeout.code = "timeout";
+      timeout.lookup = data;
+      throw timeout;
+    }
+    await waitWithSignal(Math.min(delayMs, remainingMs), signal);
+    delayMs = Math.min(maxDelayMs, Math.round(delayMs * backoffFactor));
+  }
 }
 
 async function loadCurrentUser() {
@@ -350,7 +682,7 @@ async function handleLogin(data) {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    window.location.href = "/";
+    window.location.href = getPostLoginPath();
   } catch (error) {
     setMessage("login-message", error.message, true);
   }
@@ -368,9 +700,24 @@ async function handleRegister(data) {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    window.location.href = "/";
+    window.location.href = getPostLoginPath();
   } catch (error) {
     setMessage("register-message", error.message, true);
+  }
+}
+
+async function clearOfflineCaches() {
+  // Cached pages can contain user data, so drop them whenever the session ends.
+  if (!("caches" in window)) {
+    return;
+  }
+  try {
+    const keys = await caches.keys();
+    await Promise.all(
+      keys.filter((key) => key.startsWith("librarysync")).map((key) => caches.delete(key))
+    );
+  } catch (error) {
+    console.warn("failed to clear offline caches", error);
   }
 }
 
@@ -380,6 +727,7 @@ async function handleLogout() {
   } catch (error) {
     console.error("logout failed", error);
   }
+  await clearOfflineCaches();
   window.location.href = "/login";
 }
 
@@ -387,9 +735,28 @@ function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) {
     return;
   }
-  navigator.serviceWorker.register("/static/service-worker.js").catch((error) => {
+  const version = document.documentElement.dataset.appVersion || "";
+  const scriptUrl = version
+    ? `/service-worker.js?v=${encodeURIComponent(version)}`
+    : "/service-worker.js";
+  navigator.serviceWorker.register(scriptUrl, { scope: "/" }).catch((error) => {
     console.warn("service worker registration failed", error);
   });
+  // Older releases registered the worker under /static/, where it could never control pages.
+  if (typeof navigator.serviceWorker.getRegistrations === "function") {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((registrations) => {
+        registrations.forEach((registration) => {
+          const worker =
+            registration.active || registration.waiting || registration.installing;
+          if (worker && new URL(worker.scriptURL).pathname === "/static/service-worker.js") {
+            registration.unregister();
+          }
+        });
+      })
+      .catch(() => {});
+  }
 }
 
 async function initBase() {
@@ -400,17 +767,20 @@ async function initBase() {
   initThemeToggle();
   initMobileMenu();
   initTabsets();
+  document.querySelectorAll("[data-reload]").forEach((button) => {
+    button.addEventListener("click", () => window.location.reload());
+  });
 
   const user = await loadCurrentUser();
   applyAuthVisibility(user);
 
   if (requiresAuth && !user) {
-    window.location.href = "/login";
+    window.location.href = buildLoginUrl();
     return;
   }
 
   if (guestOnly && user) {
-    window.location.href = "/";
+    window.location.href = getPostLoginPath();
     return;
   }
 
@@ -432,18 +802,33 @@ function showToast(message, isError = false, duration = 3000) {
     return;
   }
 
+  // Build the toast from DOM nodes: messages can contain server-provided text,
+  // so they must never be parsed as HTML.
   const toast = document.createElement("div");
   toast.className = `toast ${isError ? "toast-error" : "toast-success"}`;
-  toast.innerHTML = `
-    <div class="toast-content">
-      <span class="toast-icon">${isError ? "⚠️" : "✓"}</span>
-      <span class="toast-message">${message}</span>
-    </div>
-    <button class="toast-close" aria-label="Close notification">×</button>
-  `;
+
+  const content = document.createElement("div");
+  content.className = "toast-content";
+  const icon = document.createElement("span");
+  icon.className = "toast-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = isError ? "⚠️" : "✓";
+  const text = document.createElement("span");
+  text.className = "toast-message";
+  text.textContent = message === null || message === undefined ? "" : String(message);
+  content.appendChild(icon);
+  content.appendChild(text);
+
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "toast-close";
+  closeButton.setAttribute("aria-label", "Close notification");
+  closeButton.textContent = "×";
+
+  toast.appendChild(content);
+  toast.appendChild(closeButton);
 
   // Add close button functionality
-  const closeButton = toast.querySelector(".toast-close");
   closeButton.addEventListener("click", () => {
     toast.remove();
   });
@@ -463,6 +848,16 @@ function showToast(message, isError = false, duration = 3000) {
   requestAnimationFrame(() => {
     toast.classList.add("toast-visible");
   });
+}
+
+// Reports a failed background request with an error toast. Aborted requests and
+// expired sessions (which already redirect to login) are not reported.
+function showRequestErrorToast(context, error) {
+  if (isAbortError(error) || (error && error.status === 401)) {
+    return;
+  }
+  const detail = error && error.message ? error.message : "Unknown error";
+  showToast(`${context}: ${detail}`, true, 6000);
 }
 
 document.addEventListener("DOMContentLoaded", () => {

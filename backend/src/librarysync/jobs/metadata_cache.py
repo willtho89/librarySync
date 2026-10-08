@@ -179,9 +179,7 @@ def _raw_value(raw: dict[str, object], key: str) -> str | None:
     return None
 
 
-async def _find_existing_media_item(
-    db: AsyncSession, ids: dict[str, str]
-) -> MediaItem | None:
+async def _find_existing_media_item(db: AsyncSession, ids: dict[str, str]) -> MediaItem | None:
     for column_name, value in ids.items():
         column = getattr(MediaItem, column_name, None)
         if column is None:
@@ -193,9 +191,7 @@ async def _find_existing_media_item(
     return None
 
 
-def _build_media_item_fields(
-    candidate: MetadataLookupCandidate, ids: dict[str, str]
-) -> dict[str, object]:
+def _build_media_item_fields(candidate: MetadataLookupCandidate, ids: dict[str, str]) -> dict[str, object]:
     title = candidate.title.strip() if candidate.title else ""
     if not title:
         return {}

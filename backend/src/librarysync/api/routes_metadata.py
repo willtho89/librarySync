@@ -1,7 +1,8 @@
 import logging
 import re
-from datetime import date, datetime
-from typing import Awaitable, Callable, Literal
+from collections.abc import Awaitable, Callable
+from datetime import date
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
@@ -154,9 +155,7 @@ def _provider_label(provider: str) -> str:
 
 
 def _provider_unavailable_detail(provider: str) -> str:
-    return PROVIDER_UNAVAILABLE_DETAILS.get(
-        provider, f"{_provider_label(provider)} provider is not enabled"
-    )
+    return PROVIDER_UNAVAILABLE_DETAILS.get(provider, f"{_provider_label(provider)} provider is not enabled")
 
 
 def _provider_out(state: ProviderState) -> dict:
@@ -282,7 +281,7 @@ def _extract_ids_from_raw_dict(raw: dict) -> dict[str, str]:
         ("tmdbId", "tmdb_id"),
         ("tmdbID", "tmdb_id"),
     ]:
-        if key in raw and raw[key]:
+        if raw.get(key):
             ids.setdefault(id_key, str(raw[key]))
     nested = raw.get("ids")
     if isinstance(nested, dict):
@@ -294,7 +293,7 @@ def _extract_ids_from_raw_dict(raw: dict) -> dict[str, str]:
             "anilist_id",
             "tmdb_id",
         ]:
-            if id_key in nested and nested[id_key]:
+            if nested.get(id_key):
                 ids.setdefault(id_key, str(nested[id_key]))
     return ids
 
@@ -457,9 +456,7 @@ def _merge_group_data(target: dict, other: dict) -> None:
         target["primary"] = other["primary"]
 
 
-def _add_candidate_to_group(
-    group: dict, candidate: MetadataLookupCandidate, keys: list[tuple[str, str]]
-) -> None:
+def _add_candidate_to_group(group: dict, candidate: MetadataLookupCandidate, keys: list[tuple[str, str]]) -> None:
     raw = candidate.raw if isinstance(candidate.raw, dict) else {}
     overview = _extract_overview(raw)
     genres = _extract_genres(raw)
@@ -630,13 +627,9 @@ def _media_item_to_candidate_out(item: MediaItem) -> CandidateOut:
         if item.genres is not None
         else _extract_genres(raw)
     )
-    runtime_in_seconds = (
-        item.runtime_in_seconds if item.runtime_in_seconds is not None else _extract_runtime(raw)
-    )
+    runtime_in_seconds = item.runtime_in_seconds if item.runtime_in_seconds is not None else _extract_runtime(raw)
     release_date = (
-        item.release_date.isoformat()
-        if getattr(item, "release_date", None) is not None
-        else _extract_release_date(raw)
+        item.release_date.isoformat() if getattr(item, "release_date", None) is not None else _extract_release_date(raw)
     )
     return CandidateOut(
         id=item.id,
@@ -978,8 +971,7 @@ async def lookup_local(
         .subquery()
     )
     interaction_count = (
-        func.coalesce(watch_counts.c.watch_count, 0)
-        + func.coalesce(watchlist_counts.c.watchlist_count, 0)
+        func.coalesce(watch_counts.c.watch_count, 0) + func.coalesce(watchlist_counts.c.watchlist_count, 0)
     ).label("interaction_count")
     result = await db.execute(
         select(MediaItem)
@@ -1109,9 +1101,7 @@ async def list_tv_episodes(
             detail="Episode lookup is not supported for this provider",
         )
     episodes = await provider_instance.list_episodes(provider_item_id, season_number)
-    await _persist_episode_list(
-        db, normalized, provider_item_id, season_number, episodes, provider_instance
-    )
+    await _persist_episode_list(db, normalized, provider_item_id, season_number, episodes, provider_instance)
     return [
         EpisodeOut(
             episode_number=episode.episode_number,
@@ -1128,14 +1118,12 @@ def _parse_air_date(value: str | None) -> date | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
+        return date.fromisoformat(value)
     except ValueError:
         return None
 
 
-async def _find_media_item_for_provider(
-    db: AsyncSession, provider: str, provider_item_id: str
-) -> MediaItem | None:
+async def _find_media_item_for_provider(db: AsyncSession, provider: str, provider_item_id: str) -> MediaItem | None:
     if provider == "tmdb":
         result = await db.execute(
             select(MediaItem).where(
@@ -1355,9 +1343,7 @@ async def _upsert_media_item(db: AsyncSession, candidate: MediaCandidate) -> Med
     return item
 
 
-async def _validate_tmdb_credentials(
-    api_key: str, language: str | None, region: str | None
-) -> None:
+async def _validate_tmdb_credentials(api_key: str, language: str | None, region: str | None) -> None:
     try:
         provider = TmdbMetadataProvider.from_settings(
             {"language": language, "region": region, "include_adult": False},
@@ -1371,9 +1357,7 @@ async def _validate_tmdb_credentials(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="TMDB API key is invalid",
             ) from exc
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TMDB error: {exc}"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TMDB error: {exc}") from exc
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1395,13 +1379,9 @@ async def _validate_tvdb_credentials(api_key: str, pin: str | None, language: st
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="TVDB API key or PIN is invalid",
             ) from exc
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TVDB error: {exc}"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TVDB error: {exc}") from exc
     except httpx.RequestError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TVDB error: {exc}"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"TVDB error: {exc}") from exc
 
 
 async def _validate_publicmetadb_credentials(api_key: str) -> None:
@@ -1418,9 +1398,7 @@ async def _validate_publicmetadb_credentials(api_key: str) -> None:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="PublicMetaDB API key is invalid",
             ) from exc
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"PublicMetaDB error: {exc}"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"PublicMetaDB error: {exc}") from exc
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1436,9 +1414,7 @@ async def _validate_publicmetadb_credentials(api_key: str) -> None:
 )
 async def refresh_local_metadata(
     media_item_id: str = Path(..., description="Media item ID to refresh"),
-    episode_item_id: str | None = Query(
-        None, description="Episode item ID to also refresh episode metadata"
-    ),
+    episode_item_id: str | None = Query(None, description="Episode item ID to also refresh episode metadata"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CandidateOut:

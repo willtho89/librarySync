@@ -70,11 +70,7 @@ async def process_metadata_backfill_once() -> int:
             logger.exception("Metadata backfill failed")
             await fail_scheduled_job(db, job_name, METADATA_BACKFILL_RETRY_DELAY)
             return 0
-        interval = (
-            METADATA_BACKFILL_FORCE_INTERVAL
-            if force_refresh
-            else METADATA_BACKFILL_INTERVAL
-        )
+        interval = METADATA_BACKFILL_FORCE_INTERVAL if force_refresh else METADATA_BACKFILL_INTERVAL
         await complete_scheduled_job(db, job, interval)
     return 1
 
@@ -132,18 +128,15 @@ async def _backfill_media_items(
     direct_ids = select(WatchedItem.media_item_id.label("media_item_id")).where(
         WatchedItem.media_item_id.is_not(None),
     )
-    episode_ids = (
-        select(EpisodeItem.show_media_item_id.label("media_item_id"))
-        .join(WatchedItem, WatchedItem.episode_item_id == EpisodeItem.id)
+    episode_ids = select(EpisodeItem.show_media_item_id.label("media_item_id")).join(
+        WatchedItem, WatchedItem.episode_item_id == EpisodeItem.id
     )
     union_ids = union_all(direct_ids, episode_ids).subquery()
 
     missing_predicate = _missing_metadata_predicate(tmdb_required)
     episode_predicate = _episode_refresh_predicate(tmdb_required, episode_refresh_cutoff)
     candidate_predicate = (
-        or_(missing_predicate, episode_predicate)
-        if episode_predicate is not None
-        else missing_predicate
+        or_(missing_predicate, episode_predicate) if episode_predicate is not None else missing_predicate
     )
 
     tmdb_override = provider_overrides.get("tmdb")
@@ -304,4 +297,4 @@ def _should_sample_media_item(
         over_delta = age - refresh_delta if age > refresh_delta else timedelta(0)
         weight = 1.0 + (over_delta.total_seconds() / refresh_delta.total_seconds())
     probability = min(1.0, sample_rate * weight)
-    return random.random() < probability
+    return random.random() < probability  # noqa: S311 - sampling, not security

@@ -1,4 +1,4 @@
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import (

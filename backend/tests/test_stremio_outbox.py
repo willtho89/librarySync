@@ -17,9 +17,7 @@ def test_stremio_remove_series_skips_retry_when_cinemeta_has_no_episodes() -> No
     with (
         patch(
             "librarysync.jobs.process_outbox.load_integration_with_secrets",
-            new=AsyncMock(
-                return_value=(SimpleNamespace(config={}), {"auth_key": "auth-key"})
-            ),
+            new=AsyncMock(return_value=(SimpleNamespace(config={}), {"auth_key": "auth-key"})),
         ),
         patch(
             "librarysync.jobs.process_outbox._has_newer_stremio_series_job",

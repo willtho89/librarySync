@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import socket
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,8 +21,10 @@ from librarysync.connectors.services.letterboxd import (
 )
 from librarysync.core.catalog_ordering import CatalogOrderBy
 from librarysync.core.http_client import get_http_client
+from librarysync.core.integration_tokens import ensure_letterboxd_access_token
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_providers import MetadataProviderService
+from librarysync.core.url_safety import ensure_public_host
 from librarysync.core.watchlist_links import (
     parse_imdb_chart_urls,
     parse_letterboxd_list_urls,
@@ -73,46 +73,8 @@ class ExternalCatalogProviderError(Exception):
     pass
 
 
-def _is_disallowed_host_address(value: str) -> bool:
-    ip = ipaddress.ip_address(value)
-    return (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
-
-
 async def _validate_external_manifest_host(hostname: str | None) -> None:
-    if not hostname:
-        raise ValueError("Manifest URL host is required")
-    if hostname.lower() == "localhost":
-        raise ValueError("Manifest URL host is not allowed")
-
-    try:
-        if _is_disallowed_host_address(hostname):
-            raise ValueError("Manifest URL host is not allowed")
-        return
-    except ValueError as exc:
-        if str(exc) == "Manifest URL host is not allowed":
-            raise
-        pass
-
-    try:
-        resolved = await asyncio.get_running_loop().getaddrinfo(
-            hostname,
-            None,
-            proto=socket.IPPROTO_TCP,
-        )
-    except socket.gaierror:
-        return
-
-    for entry in resolved:
-        address = entry[4][0]
-        if _is_disallowed_host_address(address):
-            raise ValueError("Manifest URL host is not allowed")
+    await ensure_public_host(hostname, label="Manifest URL")
 
 
 def _decode_external_json(response: httpx.Response, context: str) -> dict[str, Any]:
@@ -162,9 +124,7 @@ def normalize_external_source_provider(value: str | None) -> str | None:
 def normalize_external_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
     base = filters if isinstance(filters, dict) else {}
     statuses = (
-        base.get("statuses")
-        if isinstance(base.get("statuses"), list)
-        else EXTERNAL_CATALOG_DEFAULT_FILTERS["statuses"]
+        base.get("statuses") if isinstance(base.get("statuses"), list) else EXTERNAL_CATALOG_DEFAULT_FILTERS["statuses"]
     )
     show_watched = (
         base.get("show_watched")
@@ -201,9 +161,7 @@ def external_catalog_out(catalog: StremioExternalCatalog) -> dict[str, Any]:
         "name": catalog.name,
         "slug": catalog.slug,
         "source_kind": source_kind,
-        "source_provider": normalize_external_source_provider(
-            getattr(catalog, "source_provider", None)
-        ),
+        "source_provider": normalize_external_source_provider(getattr(catalog, "source_provider", None)),
         "source_url": catalog.manifest_url,
         "addon_name": catalog.addon_name,
         "manifest_url": catalog.manifest_url,
@@ -352,9 +310,7 @@ async def _prefetch_external_media_item_ids(
         if not stremio_id or not media_types:
             continue
 
-        filters.append(
-            MediaItem.media_type.in_(media_types) & (MediaItem.raw["stremio_id"].as_string() == stremio_id)
-        )
+        filters.append(MediaItem.media_type.in_(media_types) & (MediaItem.raw["stremio_id"].as_string() == stremio_id))
 
         imdb_id = _extract_imdb_id(meta, stremio_id)
         if imdb_id:
@@ -438,9 +394,7 @@ async def refresh_external_catalog(
         manifest_response = await client.get(normalized_manifest_url)
         manifest_response.raise_for_status()
         manifest_payload = _decode_external_json(manifest_response, "External manifest")
-        catalog.addon_name = (
-            str(manifest_payload.get("name") or catalog.addon_name or "").strip() or None
-        )
+        catalog.addon_name = str(manifest_payload.get("name") or catalog.addon_name or "").strip() or None
 
         metas: list[dict[str, Any]] = []
         skip = 0
@@ -464,11 +418,7 @@ async def refresh_external_catalog(
                 break
             skip += limit
 
-    await db.execute(
-        delete(StremioExternalCatalogItem).where(
-            StremioExternalCatalogItem.catalog_id == catalog.id
-        )
-    )
+    await db.execute(delete(StremioExternalCatalogItem).where(StremioExternalCatalogItem.catalog_id == catalog.id))
 
     metas = _dedupe_external_metas(metas)
     media_item_lookup = await _prefetch_external_media_item_ids(
@@ -546,13 +496,9 @@ async def _refresh_external_list_catalog(
             max_catalog_items,
         )
     elif provider == "tvdb":
-        items = await _load_tvdb_list_items(
-            db, catalog.user_id, catalog.manifest_url, max_catalog_items
-        )
+        items = await _load_tvdb_list_items(db, catalog.user_id, catalog.manifest_url, max_catalog_items)
     elif provider == "letterboxd":
-        items = await _load_letterboxd_list_items(
-            db, catalog.user_id, catalog.manifest_url, max_catalog_items
-        )
+        items = await _load_letterboxd_list_items(db, catalog.user_id, catalog.manifest_url, max_catalog_items)
     elif provider == "mdblist":
         items = await _load_mdblist_items(catalog.manifest_url, max_catalog_items)
     else:
@@ -562,11 +508,7 @@ async def _refresh_external_list_catalog(
     items = _dedupe_external_list_items(items)
 
     fetched_at = datetime.now(timezone.utc)
-    await db.execute(
-        delete(StremioExternalCatalogItem).where(
-            StremioExternalCatalogItem.catalog_id == catalog.id
-        )
-    )
+    await db.execute(delete(StremioExternalCatalogItem).where(StremioExternalCatalogItem.catalog_id == catalog.id))
 
     created = 0
     for position, item in enumerate(items):
@@ -678,9 +620,7 @@ async def _resolve_external_media_item_id(
     if tvdb_id:
         conditions.append(MediaItem.tvdb_id == tvdb_id)
     result = await db.execute(
-        select(MediaItem.id)
-        .where(MediaItem.media_type.in_(media_types), or_(*conditions))
-        .limit(1)
+        select(MediaItem.id).where(MediaItem.media_type.in_(media_types), or_(*conditions)).limit(1)
     )
     media_item_id = result.scalars().first()
     return str(media_item_id) if media_item_id else None
@@ -873,16 +813,9 @@ async def _load_tmdb_external_ids(
             stremio_id=stremio_id,
             stremio_type=stremio_type,
             title=_coerce_text(
-                item.get("title")
-                or item.get("original_title")
-                or item.get("name")
-                or item.get("original_name")
+                item.get("title") or item.get("original_title") or item.get("name") or item.get("original_name")
             ),
-            year=_coerce_year(
-                item.get("release_date")
-                or item.get("first_air_date")
-                or item.get("year")
-            ),
+            year=_coerce_year(item.get("release_date") or item.get("first_air_date") or item.get("year")),
             poster_url=_tmdb_poster_url(item.get("poster_path")),
             imdb_id=imdb_id,
             tmdb_id=tmdb_id,
@@ -927,14 +860,9 @@ async def _load_tvdb_list_items(
                 stremio_type="movie" if media_type == "movie" else "series",
                 title=_coerce_text(entry.get("name") or entry.get("title") or entry.get("slug")),
                 year=_coerce_year(
-                    entry.get("year")
-                    or entry.get("firstAired")
-                    or entry.get("first_aired")
-                    or entry.get("releaseDate")
+                    entry.get("year") or entry.get("firstAired") or entry.get("first_aired") or entry.get("releaseDate")
                 ),
-                poster_url=_coerce_text(
-                    entry.get("image") or entry.get("image_url") or entry.get("imageUrl")
-                ),
+                poster_url=_coerce_text(entry.get("image") or entry.get("image_url") or entry.get("imageUrl")),
                 imdb_id=imdb_id,
                 tmdb_id=_extract_remote_id(entry, "tmdb"),
                 tvdb_id=tvdb_id,
@@ -1018,18 +946,14 @@ async def _load_mdblist_items(source_url: str, max_items: int) -> list[ExternalC
                 year=_coerce_year(entry.get("release_year") or entry.get("year")),
                 poster_url=None,
                 imdb_id=imdb_id,
-                tmdb_id=_coerce_text(
-                    entry.get("tmdb_id") or entry.get("tmdbid") or entry.get("id")
-                ),
+                tmdb_id=_coerce_text(entry.get("tmdb_id") or entry.get("tmdbid") or entry.get("id")),
                 tvdb_id=_coerce_text(entry.get("tvdb_id") or entry.get("tvdbid")),
             )
         )
     return items
 
 
-async def _build_letterboxd_client(
-    db: AsyncSession, user_id: str
-) -> tuple[LetterboxdClient, str]:
+async def _build_letterboxd_client(db: AsyncSession, user_id: str) -> tuple[LetterboxdClient, str]:
     integration, secret_data = await load_integration_with_secrets(db, user_id, "letterboxd")
     if not integration or integration.status == "disconnected":
         raise ValueError("Letterboxd integration is not connected")
@@ -1044,7 +968,8 @@ async def _build_letterboxd_client(
         client_secret=str(secret_data.get("client_secret")),
         refresh_token=str(secret_data.get("refresh_token")),
     )
-    access_token = await client.refresh_access_token()
+    # Letterboxd rotates refresh tokens, so the refreshed token must be persisted.
+    access_token = await ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     return client, access_token
 
 
@@ -1100,15 +1025,10 @@ def _extract_remote_id(entry: dict[str, Any], provider: str) -> str | None:
         source_name = str(remote.get("sourceName") or "").lower()
         source = str(remote.get("source") or "").lower()
         entry_type = str(remote.get("type") or "").lower()
-        if provider == "imdb" and (
-            source_name == "imdb" or source == "imdb" or entry_type == "imdb"
-        ):
+        if provider == "imdb" and (source_name == "imdb" or source == "imdb" or entry_type == "imdb"):
             return _coerce_text(remote.get("id") or remote.get("value"))
         if provider == "tmdb" and (
-            source_name == "tmdb"
-            or "themoviedb" in source_name
-            or source == "tmdb"
-            or entry_type == "tmdb"
+            source_name == "tmdb" or "themoviedb" in source_name or source == "tmdb" or entry_type == "tmdb"
         ):
             return _coerce_text(remote.get("id") or remote.get("value"))
     return None

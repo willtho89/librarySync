@@ -5,6 +5,7 @@ Covers:
 - _apply_episode_metadata with force=True overwrites existing title/air_date
 - refresh_episode_metadata public function
 """
+
 import asyncio
 import sys
 import unittest
@@ -97,15 +98,17 @@ class TestApplyEpisodeMetadataForce(unittest.TestCase):
         return provider
 
     def test_force_overwrites_existing_title(self) -> None:
-        provider = self._make_provider([
-            EpisodeSummary(
-                episode_number=1,
-                title="Real Episode Title",
-                provider_id="99999",
-                air_date="2024-03-01",
-                still_url=None,
-            )
-        ])
+        provider = self._make_provider(
+            [
+                EpisodeSummary(
+                    episode_number=1,
+                    title="Real Episode Title",
+                    provider_id="99999",
+                    air_date="2024-03-01",
+                    still_url=None,
+                )
+            ]
+        )
         media_item = _make_media_item(media_type="tv", tmdb_id="12345")
         episode_item = _make_episode_item(
             tmdb_id="99999",
@@ -119,15 +122,17 @@ class TestApplyEpisodeMetadataForce(unittest.TestCase):
         self.assertEqual(episode_item.title, "Real Episode Title")
 
     def test_no_force_skips_when_title_exists(self) -> None:
-        provider = self._make_provider([
-            EpisodeSummary(
-                episode_number=1,
-                title="Real Episode Title",
-                provider_id="99999",
-                air_date="2024-03-01",
-                still_url=None,
-            )
-        ])
+        provider = self._make_provider(
+            [
+                EpisodeSummary(
+                    episode_number=1,
+                    title="Real Episode Title",
+                    provider_id="99999",
+                    air_date="2024-03-01",
+                    still_url=None,
+                )
+            ]
+        )
         media_item = _make_media_item(media_type="tv", tmdb_id="12345")
         episode_item = _make_episode_item(
             tmdb_id="99999",
@@ -143,15 +148,17 @@ class TestApplyEpisodeMetadataForce(unittest.TestCase):
         self.assertEqual(episode_item.title, "Old Title")
 
     def test_no_force_populates_missing_title(self) -> None:
-        provider = self._make_provider([
-            EpisodeSummary(
-                episode_number=1,
-                title="New Title",
-                provider_id="99999",
-                air_date="2024-03-01",
-                still_url=None,
-            )
-        ])
+        provider = self._make_provider(
+            [
+                EpisodeSummary(
+                    episode_number=1,
+                    title="New Title",
+                    provider_id="99999",
+                    air_date="2024-03-01",
+                    still_url=None,
+                )
+            ]
+        )
         media_item = _make_media_item(media_type="tv", tmdb_id="12345")
         episode_item = _make_episode_item(
             tmdb_id=None,
@@ -168,15 +175,17 @@ class TestApplyEpisodeMetadataForce(unittest.TestCase):
     def test_force_overwrites_air_date(self) -> None:
         from datetime import date
 
-        provider = self._make_provider([
-            EpisodeSummary(
-                episode_number=1,
-                title="Title",
-                provider_id="99999",
-                air_date="2024-06-15",
-                still_url=None,
-            )
-        ])
+        provider = self._make_provider(
+            [
+                EpisodeSummary(
+                    episode_number=1,
+                    title="Title",
+                    provider_id="99999",
+                    air_date="2024-06-15",
+                    still_url=None,
+                )
+            ]
+        )
         media_item = _make_media_item(media_type="tv", tmdb_id="12345")
         episode_item = _make_episode_item(
             tmdb_id="99999",
@@ -233,9 +242,7 @@ class TestRefreshEpisodeMetadata(unittest.TestCase):
         media_item = _make_media_item(media_type="tv", tmdb_id="12345")
         episode_item = _make_episode_item(title=None)
 
-        with patch(
-            "librarysync.core.metadata_enrichment.MetadataProviderService"
-        ) as mock_service_cls:
+        with patch("librarysync.core.metadata_enrichment.MetadataProviderService") as mock_service_cls:
             mock_service = MagicMock()
             mock_service.load_provider = AsyncMock(return_value=None)
             mock_service_cls.return_value = mock_service
@@ -249,9 +256,7 @@ class TestRefreshEpisodeMetadata(unittest.TestCase):
 
         db = AsyncMock()
         media_item = _make_media_item(media_type="tv", tmdb_id="12345")
-        episode_item = _make_episode_item(
-            tmdb_id="99999", title=None, episode_number=1, season_number=1
-        )
+        episode_item = _make_episode_item(tmdb_id="99999", title=None, episode_number=1, season_number=1)
 
         mock_provider = MagicMock(spec=EpisodeMetadataProvider)
         mock_provider.provider = "tmdb"
@@ -267,9 +272,7 @@ class TestRefreshEpisodeMetadata(unittest.TestCase):
             ]
         )
 
-        with patch(
-            "librarysync.core.metadata_enrichment.MetadataProviderService"
-        ) as mock_service_cls:
+        with patch("librarysync.core.metadata_enrichment.MetadataProviderService") as mock_service_cls:
             mock_service = MagicMock()
             mock_service.load_provider = AsyncMock(return_value=mock_provider)
             mock_service_cls.return_value = mock_service
@@ -284,9 +287,7 @@ class TestRefreshEpisodeMetadata(unittest.TestCase):
 
         db = AsyncMock()
         media_item = _make_media_item(media_type="tv", tmdb_id="12345")
-        episode_item = _make_episode_item(
-            tmdb_id="99999", title="Old Title", episode_number=1, season_number=1
-        )
+        episode_item = _make_episode_item(tmdb_id="99999", title="Old Title", episode_number=1, season_number=1)
 
         mock_provider = MagicMock(spec=EpisodeMetadataProvider)
         mock_provider.provider = "tmdb"
@@ -303,9 +304,7 @@ class TestRefreshEpisodeMetadata(unittest.TestCase):
         )
 
         result = asyncio.run(
-            refresh_episode_metadata(
-                db, "user-1", media_item, episode_item, provider_overrides={"tmdb": mock_provider}
-            )
+            refresh_episode_metadata(db, "user-1", media_item, episode_item, provider_overrides={"tmdb": mock_provider})
         )
 
         self.assertTrue(result)

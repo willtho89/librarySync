@@ -56,9 +56,7 @@ class TestStremioAddonCatalogs(unittest.TestCase):
             page_size=30,
             show_in_home=True,
         )
-        custom_catalog = SimpleNamespace(
-            name="Curated Picks", slug="curated_picks", media_type="movie"
-        )
+        custom_catalog = SimpleNamespace(name="Curated Picks", slug="curated_picks", media_type="movie")
 
         manifest = routes_stremio_addon_public._build_manifest(
             catalogs,
@@ -120,27 +118,21 @@ class TestStremioAddonCatalogs(unittest.TestCase):
 
     def test_in_progress_query_applies_status_filter(self) -> None:
         catalog = {"filters": {"statuses": ["added"]}}
-        query = asyncio.run(
-            routes_stremio_addon_public._build_in_progress_query("user-id", catalog, None)
-        )
+        query = asyncio.run(routes_stremio_addon_public._build_in_progress_query("user-id", catalog, None))
 
         compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
         self.assertIn("watchlist_items.status in", compiled)
 
     def test_watchlist_query_includes_rewatch_requested_items(self) -> None:
         catalog = {"media_type": "movie", "filters": {"statuses": []}}
-        query = asyncio.run(
-            routes_stremio_addon_public._build_watchlist_query("user-id", catalog, None)
-        )
+        query = asyncio.run(routes_stremio_addon_public._build_watchlist_query("user-id", catalog, None))
 
         compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
         self.assertIn("watchlist_items.rewatch_requested is true", compiled)
 
     def test_watchlist_show_query_keeps_status_filter_and_rewatch_override(self) -> None:
         catalog = {"media_type": "tv", "filters": {"statuses": []}}
-        query = asyncio.run(
-            routes_stremio_addon_public._build_watchlist_query("user-id", catalog, None)
-        )
+        query = asyncio.run(routes_stremio_addon_public._build_watchlist_query("user-id", catalog, None))
 
         compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
         self.assertIn("watchlist_items.rewatch_requested is true", compiled)
@@ -148,9 +140,7 @@ class TestStremioAddonCatalogs(unittest.TestCase):
 
     def test_watchlist_query_excludes_dropped_items(self) -> None:
         catalog = {"media_type": "movie", "filters": {"statuses": []}}
-        query = asyncio.run(
-            routes_stremio_addon_public._build_watchlist_query("user-id", catalog, None)
-        )
+        query = asyncio.run(routes_stremio_addon_public._build_watchlist_query("user-id", catalog, None))
 
         compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
         self.assertIn("watchlist_items.status not in", compiled)
@@ -158,9 +148,7 @@ class TestStremioAddonCatalogs(unittest.TestCase):
 
     def test_in_progress_query_excludes_dropped_items(self) -> None:
         catalog = {"filters": {"statuses": ["added"]}}
-        query = asyncio.run(
-            routes_stremio_addon_public._build_in_progress_query("user-id", catalog, None)
-        )
+        query = asyncio.run(routes_stremio_addon_public._build_in_progress_query("user-id", catalog, None))
 
         compiled = str(query.compile(compile_kwargs={"literal_binds": True})).lower()
         self.assertIn("watchlist_items.status not in", compiled)
@@ -243,9 +231,7 @@ class TestStremioAddonCatalogs(unittest.TestCase):
         self.assertIsNone(payload.source_url)
 
     def test_parse_mdblist_url(self) -> None:
-        refs = parse_mdblist_urls([
-            "https://mdblist.com/lists/cb2131/emby-imdb-top-rated-movies"
-        ])
+        refs = parse_mdblist_urls(["https://mdblist.com/lists/cb2131/emby-imdb-top-rated-movies"])
 
         self.assertEqual(len(refs), 1)
         self.assertEqual(refs[0].username, "cb2131")
@@ -275,10 +261,10 @@ class TestStremioAddonCatalogs(unittest.TestCase):
         self.assertEqual([item.title for item in deduped], ["First", "Second"])
 
     def test_normalize_external_manifest_url_preserves_query(self) -> None:
-        self.assertEqual(
-            asyncio.run(normalize_external_manifest_url("https://addon.example/path?foo=bar")),
-            "https://addon.example/path/manifest.json?foo=bar",
-        )
+        # Host safety is covered in test_url_safety; addon.example does not resolve.
+        with patch("librarysync.core.external_catalog._validate_external_manifest_host", new=AsyncMock()):
+            normalized = asyncio.run(normalize_external_manifest_url("https://addon.example/path?foo=bar"))
+        self.assertEqual(normalized, "https://addon.example/path/manifest.json?foo=bar")
 
     def test_normalize_external_manifest_url_rejects_disallowed_host(self) -> None:
         with self.assertRaises(ValueError):

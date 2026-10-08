@@ -35,9 +35,7 @@ def _extract_year(date_value: str | None) -> int | None:
 def _poster_url(poster: dict[str, Any] | None) -> str | None:
     if not poster:
         return None
-    return (
-        poster.get("small") or poster.get("medium") or poster.get("tiny") or poster.get("original")
-    )
+    return poster.get("small") or poster.get("medium") or poster.get("tiny") or poster.get("original")
 
 
 def _normalize_title(raw: dict[str, Any], language: str | None) -> str:
@@ -97,9 +95,7 @@ class KitsuMetadataProvider(MetadataProvider[KitsuConfig, None]):
         items = payload.get("data") or []
         return [self._normalize_candidate(item) for item in items]
 
-    async def find_by_external_id(
-        self, external_id: str, scope: str = "all"
-    ) -> list[MediaCandidate]:
+    async def find_by_external_id(self, external_id: str, scope: str = "all") -> list[MediaCandidate]:
         if scope not in (MEDIA_TYPE_ANIME, MEDIA_SCOPE_ALL):
             return []
         if not external_id.lower().startswith("tt"):
@@ -140,11 +136,7 @@ class KitsuMetadataProvider(MetadataProvider[KitsuConfig, None]):
         attributes = raw.get("attributes") or {}
         kitsu_id = raw.get("id") or ""
         title = _normalize_title(raw, self._language)
-        year = _extract_year(
-            attributes.get("startDate")
-            or attributes.get("start_date")
-            or attributes.get("createdAt")
-        )
+        year = _extract_year(attributes.get("startDate") or attributes.get("start_date") or attributes.get("createdAt"))
         poster_url = _poster_url(attributes.get("posterImage") or attributes.get("poster_image"))
         imdb_id = attributes.get("imdbId") or attributes.get("imdb_id")
 

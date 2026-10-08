@@ -46,9 +46,7 @@ def _first_alnum(value: str) -> str:
 
 
 def _normalize_media_type(raw: dict[str, Any]) -> str:
-    type_value = str(
-        raw.get("qid") or raw.get("q") or raw.get("type") or raw.get("typeId") or ""
-    ).lower()
+    type_value = str(raw.get("qid") or raw.get("q") or raw.get("type") or raw.get("typeId") or "").lower()
     if "tv" in type_value or "series" in type_value or "episode" in type_value:
         return MEDIA_TYPE_TV
     if "movie" in type_value or "feature" in type_value or "film" in type_value:
@@ -91,9 +89,7 @@ class ImdbMetadataProvider(MetadataProvider[ImdbConfig, None]):
                 break
         return candidates
 
-    async def find_by_external_id(
-        self, external_id: str, scope: str = "all"
-    ) -> list[MediaCandidate]:
+    async def find_by_external_id(self, external_id: str, scope: str = "all") -> list[MediaCandidate]:
         if not external_id.lower().startswith("tt"):
             return []
         payload = await self._get_suggestions(external_id)

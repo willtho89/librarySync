@@ -86,6 +86,12 @@ services:
     environment:
       LIBRARYSYNC_WORKER_MODES: import_all
 
+  worker-watch-state:
+    <<: *worker-base
+    profiles: ["scaled-workers"]
+    environment:
+      LIBRARYSYNC_WORKER_MODES: watch_state
+
   worker-watchlist:
     <<: *worker-base
     profiles: ["scaled-workers"]

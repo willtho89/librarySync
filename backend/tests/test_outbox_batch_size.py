@@ -216,6 +216,7 @@ def _create_mock_job(idx: int):
     job.job_type = "push_watched"
     job.created_at = datetime.now(timezone.utc)
     job.status = "pending"
+    job.payload = {}
     return job
 
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Generic, Mapping, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -117,7 +118,7 @@ class MetadataProvider(ABC, Generic[ConfigT, SecretsT]):
         config: Mapping[str, Any] | None,
         secrets: Mapping[str, Any] | None,
         context: ProviderContext,
-    ) -> "MetadataProvider":
+    ) -> MetadataProvider:
         config_obj = cls._build_schema(cls.config_schema, config or {}, "config")
         secrets_obj = None
         if cls.secrets_schema is not None:
@@ -137,9 +138,7 @@ class MetadataProvider(ABC, Generic[ConfigT, SecretsT]):
     async def search(self, query: str, scope: str = MEDIA_SCOPE_ALL) -> list[MediaCandidate]:
         raise NotImplementedError
 
-    async def find_by_external_id(
-        self, external_id: str, scope: str = MEDIA_SCOPE_ALL
-    ) -> list[MediaCandidate]:
+    async def find_by_external_id(self, external_id: str, scope: str = MEDIA_SCOPE_ALL) -> list[MediaCandidate]:
         return []
 
     @abstractmethod

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -7,6 +8,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.core.worker_identity import worker_instance_id
 from librarysync.db.models import ScheduledJob
+
+logger = logging.getLogger(__name__)
+
+
+async def _owns_lease(db: AsyncSession, job: ScheduledJob) -> bool:
+    """Re-read the lease under a row lock; a worker whose lease expired must not
+    overwrite the state of the worker that took the job over."""
+    await db.refresh(job, attribute_names=["lease_owner", "lease_until"], with_for_update=True)
+    if job.lease_owner == worker_instance_id():
+        return True
+    logger.warning("Scheduled job %s lease is held by another worker; leaving it untouched", job.name)
+    return False
 
 
 async def claim_scheduled_job(
@@ -19,9 +32,7 @@ async def claim_scheduled_job(
     if now is None:
         now = datetime.now(timezone.utc)
     async with db.begin():
-        result = await db.execute(
-            select(ScheduledJob).where(ScheduledJob.name == name).with_for_update()
-        )
+        result = await db.execute(select(ScheduledJob).where(ScheduledJob.name == name).with_for_update())
         job = result.scalars().first()
         if not job:
             job = ScheduledJob(name=name, next_run_at=now)
@@ -46,6 +57,9 @@ async def complete_scheduled_job(
 ) -> None:
     if now is None:
         now = datetime.now(timezone.utc)
+    if not await _owns_lease(db, job):
+        await db.commit()
+        return
     job.last_run_at = now
     job.next_run_at = now + interval
     job.lease_until = None
@@ -59,12 +73,17 @@ async def extend_scheduled_job(
     job: ScheduledJob,
     lease_duration: timedelta,
     now: datetime | None = None,
-) -> None:
+) -> bool:
+    """Extend the lease; returns False when another worker has taken the job over."""
     if now is None:
         now = datetime.now(timezone.utc)
+    if not await _owns_lease(db, job):
+        await db.commit()
+        return False
     job.lease_until = now + lease_duration
     job.updated_at = now
     await db.commit()
+    return True
 
 
 async def release_scheduled_job(
@@ -75,6 +94,9 @@ async def release_scheduled_job(
 ) -> None:
     if now is None:
         now = datetime.now(timezone.utc)
+    if not await _owns_lease(db, job):
+        await db.commit()
+        return
     job.next_run_at = now + retry_delay
     job.lease_until = None
     job.lease_owner = None

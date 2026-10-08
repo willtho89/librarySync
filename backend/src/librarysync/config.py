@@ -44,6 +44,13 @@ class Settings:
     simkl_max_batch_size: int
     external_catalog_refresh_hours: int
     external_catalog_max_items: int
+    outbox_max_attempts: int
+    outbox_stale_minutes: int
+    allow_private_urls: bool
+    secret_key_previous: tuple[str, ...]
+    allow_insecure_secret_key: bool
+    outbox_retention_days: int
+    lookup_retention_days: int
 
 
 def load_settings() -> Settings:
@@ -60,33 +67,17 @@ def load_settings() -> Settings:
         admin_api_key=_get_env("LIBRARYSYNC_ADMIN_API_KEY"),
         history_lookback_days=int(_get_env("HISTORY_LOOKBACK_DAYS", "30") or "30"),
         log_level=_get_env("LOG_LEVEL", "INFO") or "INFO",
-        jwt_access_token_minutes=int(
-            _get_env("LIBRARYSYNC_JWT_ACCESS_TOKEN_MINUTES", "60") or "60"
-        ),
+        jwt_access_token_minutes=int(_get_env("LIBRARYSYNC_JWT_ACCESS_TOKEN_MINUTES", "60") or "60"),
         jwt_algorithm=_get_env("LIBRARYSYNC_JWT_ALGORITHM", "HS256") or "HS256",
-        allow_registration=(
-            (_get_env("LIBRARYSYNC_ALLOW_REGISTRATION", "true") or "true").lower() == "true"
-        ),
+        allow_registration=((_get_env("LIBRARYSYNC_ALLOW_REGISTRATION", "true") or "true").lower() == "true"),
         max_users=int(_get_env("LIBRARYSYNC_MAX_USERS", "1") or "1"),
-        gzip_enabled=(
-            (_get_env("LIBRARYSYNC_GZIP_ENABLED", "true") or "true").lower() == "true"
-        ),
+        gzip_enabled=((_get_env("LIBRARYSYNC_GZIP_ENABLED", "true") or "true").lower() == "true"),
         gzip_min_size=int(_get_env("LIBRARYSYNC_GZIP_MIN_SIZE", "500") or "500"),
-        trakt_rate_limit_per_minute=int(
-            _get_env("LIBRARYSYNC_TRAKT_RATE_LIMIT_PER_MINUTE", "60") or "60"
-        ),
-        simkl_rate_limit_per_minute=int(
-            _get_env("LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE", "60") or "60"
-        ),
-        letterboxd_rate_limit_per_minute=int(
-            _get_env("LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE", "30") or "30"
-        ),
-        stremio_rate_limit_per_minute=int(
-            _get_env("LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE", "120") or "120"
-        ),
-        anilist_rate_limit_per_minute=int(
-            _get_env("LIBRARYSYNC_ANILIST_RATE_LIMIT_PER_MINUTE", "90") or "90"
-        ),
+        trakt_rate_limit_per_minute=int(_get_env("LIBRARYSYNC_TRAKT_RATE_LIMIT_PER_MINUTE", "60") or "60"),
+        simkl_rate_limit_per_minute=int(_get_env("LIBRARYSYNC_SIMKL_RATE_LIMIT_PER_MINUTE", "60") or "60"),
+        letterboxd_rate_limit_per_minute=int(_get_env("LIBRARYSYNC_LETTERBOXD_RATE_LIMIT_PER_MINUTE", "30") or "30"),
+        stremio_rate_limit_per_minute=int(_get_env("LIBRARYSYNC_STREMIO_RATE_LIMIT_PER_MINUTE", "120") or "120"),
+        anilist_rate_limit_per_minute=int(_get_env("LIBRARYSYNC_ANILIST_RATE_LIMIT_PER_MINUTE", "90") or "90"),
         publicmetadb_rate_limit_per_minute=int(
             _get_env("LIBRARYSYNC_PUBLICMETADB_RATE_LIMIT_PER_MINUTE", "120") or "120"
         ),
@@ -102,27 +93,24 @@ def load_settings() -> Settings:
         publicmetadb_batch_rate_limit_interval_seconds=float(
             _get_env("LIBRARYSYNC_PUBLICMETADB_BATCH_RATE_LIMIT_INTERVAL_SECONDS", "1") or "1"
         ),
-        tmdb_rate_limit_per_minute=int(
-            _get_env("LIBRARYSYNC_TMDB_RATE_LIMIT_PER_MINUTE", "150") or "150"
+        tmdb_rate_limit_per_minute=int(_get_env("LIBRARYSYNC_TMDB_RATE_LIMIT_PER_MINUTE", "150") or "150"),
+        tvdb_rate_limit_per_minute=int(_get_env("LIBRARYSYNC_TVDB_RATE_LIMIT_PER_MINUTE", "150") or "150"),
+        enable_dashboard_stats=((_get_env("LIBRARYSYNC_ENABLE_DASHBOARD_STATS", "true") or "true").lower() == "true"),
+        trakt_max_batch_size=int(_get_env("LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE", "750") or "750"),
+        simkl_max_batch_size=int(_get_env("LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE", "750") or "750"),
+        external_catalog_refresh_hours=int(_get_env("LIBRARYSYNC_EXTERNAL_CATALOG_REFRESH_HOURS", "3") or "3"),
+        external_catalog_max_items=int(_get_env("LIBRARYSYNC_EXTERNAL_CATALOG_MAX_ITEMS", "500") or "500"),
+        outbox_max_attempts=int(_get_env("LIBRARYSYNC_OUTBOX_MAX_ATTEMPTS", "48") or "48"),
+        outbox_stale_minutes=int(_get_env("LIBRARYSYNC_OUTBOX_STALE_MINUTES", "30") or "30"),
+        allow_private_urls=(_get_env("LIBRARYSYNC_ALLOW_PRIVATE_URLS", "false") or "false").lower() == "true",
+        secret_key_previous=tuple(
+            key.strip() for key in (_get_env("LIBRARYSYNC_SECRET_KEY_PREVIOUS", "") or "").split(",") if key.strip()
         ),
-        tvdb_rate_limit_per_minute=int(
-            _get_env("LIBRARYSYNC_TVDB_RATE_LIMIT_PER_MINUTE", "150") or "150"
+        allow_insecure_secret_key=(
+            (_get_env("LIBRARYSYNC_ALLOW_INSECURE_SECRET_KEY", "false") or "false").lower() == "true"
         ),
-        enable_dashboard_stats=(
-            (_get_env("LIBRARYSYNC_ENABLE_DASHBOARD_STATS", "true") or "true").lower() == "true"
-        ),
-        trakt_max_batch_size=int(
-            _get_env("LIBRARYSYNC_TRAKT_MAX_BATCH_SIZE", "750") or "750"
-        ),
-        simkl_max_batch_size=int(
-            _get_env("LIBRARYSYNC_SIMKL_MAX_BATCH_SIZE", "750") or "750"
-        ),
-        external_catalog_refresh_hours=int(
-            _get_env("LIBRARYSYNC_EXTERNAL_CATALOG_REFRESH_HOURS", "3") or "3"
-        ),
-        external_catalog_max_items=int(
-            _get_env("LIBRARYSYNC_EXTERNAL_CATALOG_MAX_ITEMS", "500") or "500"
-        ),
+        outbox_retention_days=int(_get_env("LIBRARYSYNC_OUTBOX_RETENTION_DAYS", "90") or "90"),
+        lookup_retention_days=int(_get_env("LIBRARYSYNC_LOOKUP_RETENTION_DAYS", "30") or "30"),
     )
 
 

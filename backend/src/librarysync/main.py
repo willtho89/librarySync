@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from importlib import metadata
 from pathlib import Path
@@ -5,7 +6,8 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -13,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.api import (
     routes_activity,
+    routes_addon_watch_state,
     routes_admin,
     routes_auth,
     routes_blacklist,
@@ -27,10 +30,15 @@ from librarysync.api import (
 )
 from librarysync.api.deps import get_db, get_optional_user
 from librarysync.config import settings
+from librarysync.core.http_client import quiet_http_request_logging
+from librarysync.core.integrations import reencrypt_integration_secrets
+from librarysync.core.security import validate_security_settings
+from librarysync.core.security_headers import api_docs_content_security_policy, install_security_headers
 from librarysync.db.migrate import run_migrations
 from librarysync.db.models import User
-from librarysync.db.session import init_session_factory
+from librarysync.db.session import SessionLocal, init_session_factory
 
+logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_CACHE_LONG = 60 * 60 * 24 * 30
@@ -69,27 +77,65 @@ def make_static_url(version: str) -> callable:
     return static_url
 
 
+def _with_docs_csp(response: HTMLResponse) -> HTMLResponse:
+    response.headers["Content-Security-Policy"] = api_docs_content_security_policy(response.body.decode("utf-8"))
+    return response
+
+
+def _add_api_docs_routes(app: FastAPI) -> None:
+    """Swagger UI and ReDoc at their usual paths, each with a CSP that allows exactly
+    the external bundles and inline initialisation script of that page."""
+
+    @app.get("/docs", include_in_schema=False)
+    async def swagger_ui(request: Request) -> HTMLResponse:
+        root_path = request.scope.get("root_path", "").rstrip("/")
+        return _with_docs_csp(
+            get_swagger_ui_html(
+                openapi_url=f"{root_path}{app.openapi_url}",
+                title=f"{app.title} - Swagger UI",
+                oauth2_redirect_url=f"{root_path}/docs/oauth2-redirect",
+            )
+        )
+
+    @app.get("/docs/oauth2-redirect", include_in_schema=False)
+    async def swagger_ui_oauth2_redirect() -> HTMLResponse:
+        return _with_docs_csp(get_swagger_ui_oauth2_redirect_html())
+
+    @app.get("/redoc", include_in_schema=False)
+    async def redoc(request: Request) -> HTMLResponse:
+        root_path = request.scope.get("root_path", "").rstrip("/")
+        return _with_docs_csp(get_redoc_html(openapi_url=f"{root_path}{app.openapi_url}", title=f"{app.title} - ReDoc"))
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="librarySync",
         description=(
-            "Authenticate with `Authorization: Bearer <token>` or the "
-            "`access_token` cookie set by `/api/auth/login`."
+            "Authenticate with `Authorization: Bearer <token>` or the `access_token` cookie set by `/api/auth/login`."
         ),
         openapi_tags=OPENAPI_TAGS,
+        # Served below with a page-specific Content-Security-Policy.
+        docs_url=None,
+        redoc_url=None,
     )
 
-    # CORS configuration
+    # The Stremio addon and Watch State endpoints are fetched cross-origin by
+    # Stremio/AIOStreams clients and authenticate via the URL, never cookies.
+    # Credentialed cross-origin access would let any site the user visits drive
+    # the cookie-authenticated API, so credentials are never allowed.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
     if settings.gzip_enabled:
         app.add_middleware(GZipMiddleware, minimum_size=settings.gzip_min_size)
+
+    install_security_headers(app, sorted(TEMPLATES_DIR.rglob("*.html")))
+    _add_api_docs_routes(app)
 
     app.include_router(routes_auth.router)
     app.include_router(routes_integrations.router)
@@ -102,6 +148,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_watchlist.router)
     app.include_router(routes_stremio_addon.router)
     app.include_router(routes_stremio_addon_public.router)
+    app.include_router(routes_addon_watch_state.router)
     app.include_router(routes_admin.router)
 
     app_version = get_app_version()
@@ -200,10 +247,26 @@ def create_app() -> FastAPI:
     async def webmanifest_512() -> FileResponse:
         return _static_asset("web-app-manifest-512x512.png")
 
+    @app.get("/service-worker.js", include_in_schema=False)
+    async def service_worker() -> FileResponse:
+        # Served from the root so the worker's scope covers every page, not just /static/.
+        return FileResponse(
+            STATIC_DIR / "service-worker.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        quiet_http_request_logging()
+        validate_security_settings()
         run_migrations()
         init_session_factory()
+        if settings.secret_key_previous:
+            async with SessionLocal() as db:
+                rotated = await reencrypt_integration_secrets(db)
+            if rotated:
+                logger.info("Re-encrypted %s integration secret(s) under the current key", rotated)
         yield
 
     app.router.lifespan_context = lifespan

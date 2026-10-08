@@ -45,9 +45,7 @@ def test_publicmetadb_retry_precheck_skips_duplicate_push_watched() -> None:
             new=AsyncMock(),
         ) as sync_mock,
     ):
-        response_code, external_id = asyncio.run(
-            process_outbox._deliver_publicmetadb_watch(None, job)
-        )
+        response_code, external_id = asyncio.run(process_outbox._deliver_publicmetadb_watch(None, job))
 
     assert response_code == 200
     assert external_id == "pmdb-42"
@@ -91,9 +89,7 @@ def test_publicmetadb_retry_precheck_falls_through_when_day_differs() -> None:
         "librarysync.jobs.process_outbox._load_publicmetadb_client",
         new=AsyncMock(return_value=(client, "api-key")),
     ):
-        response_code, external_id = asyncio.run(
-            process_outbox._deliver_publicmetadb_watch(None, job)
-        )
+        response_code, external_id = asyncio.run(process_outbox._deliver_publicmetadb_watch(None, job))
 
     assert response_code == 201
     assert external_id == "pmdb-new"

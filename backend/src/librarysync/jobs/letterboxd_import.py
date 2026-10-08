@@ -19,18 +19,9 @@ from librarysync.connectors.services.letterboxd import (
     extract_member_name,
     has_required_letterboxd_fields,
 )
-from librarysync.connectors.services.letterboxd import (
-    is_token_expired as is_letterboxd_token_expired,
-)
-from librarysync.connectors.services.letterboxd import (
-    parse_expires_at as parse_letterboxd_expires_at,
-)
-from librarysync.connectors.services.letterboxd import (
-    token_to_secret_payload as letterboxd_token_to_secret_payload,
-)
+from librarysync.core.integration_tokens import ensure_letterboxd_access_token
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import coerce_star_rating
-from librarysync.core.security import encrypt_value
 from librarysync.core.watchlist_links import parse_letterboxd_list_urls
 from librarysync.core.watchlist_sources import (
     LEGACY_LIST_SOURCE_TYPE,
@@ -42,7 +33,6 @@ from librarysync.core.watchlist_sources import (
 )
 from librarysync.db.models import (
     Integration,
-    IntegrationSecret,
     MediaItem,
     WatchlistSource,
 )
@@ -68,6 +58,8 @@ TMDB_URL_RE = re.compile(r"/(?:movie|film|tv)/(\d+)", re.IGNORECASE)
 ENTRY_KEY_BATCH_SIZE = 200
 WATCHLIST_PER_PAGE = 50
 WATCHLIST_MAX_PAGES = 10
+_ensure_letterboxd_access_token = ensure_letterboxd_access_token
+
 logger = logging.getLogger(__name__)
 
 
@@ -119,17 +111,13 @@ async def _import_for_integration(
     max_pages: int,
     now: datetime,
 ) -> ImportResult:
-    integration, secret_data = await load_integration_with_secrets(
-        db, integration.user_id, "letterboxd"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, integration.user_id, "letterboxd")
     if not integration or not secret_data:
         return ImportResult(imported=0, attempted=False)
     if not has_required_letterboxd_fields(secret_data):
         return ImportResult(imported=0, attempted=False)
     try:
-        client, access_token, member_id = await _build_letterboxd_context(
-            db, integration, secret_data
-        )
+        client, access_token, member_id = await _build_letterboxd_context(db, integration, secret_data)
         full_history = lookback_days < 0
         since = _select_letterboxd_since(now, lookback_days)
         entries = await client.get_history(
@@ -142,9 +130,7 @@ async def _import_for_integration(
             stop_after_empty_months=FULL_HISTORY_EMPTY_MONTHS if full_history else None,
         )
     except LetterboxdError as exc:
-        logger.warning(
-            "Letterboxd import failed for user %s: %s", integration.user_id, exc
-        )
+        logger.warning("Letterboxd import failed for user %s: %s", integration.user_id, exc)
         return ImportResult(imported=0, attempted=True)
 
     imported = 0
@@ -156,9 +142,7 @@ async def _import_for_integration(
                 if candidate:
                     candidates.append(candidate)
             except Exception:
-                logger.exception(
-                    "Letterboxd entry import failed for user %s", integration.user_id
-                )
+                logger.exception("Letterboxd entry import failed for user %s", integration.user_id)
         if not candidates:
             continue
         imported += await process_import_candidates(
@@ -207,9 +191,7 @@ async def _import_watchlist_for_integration(
         name="Letterboxd watchlist",
     )
     if sources is None:
-        sources = await list_watchlist_sources(
-            db, integration.user_id, provider="letterboxd"
-        )
+        sources = await list_watchlist_sources(db, integration.user_id, provider="letterboxd")
     if not sources:
         return 0
     imported = 0
@@ -232,6 +214,8 @@ async def _import_watchlist_for_integration(
                 candidate = _build_watchlist_candidate(entry)
                 if candidate:
                     candidates.append(candidate)
+            # A page-capped listing is incomplete; never reconcile removals against it.
+            complete = not getattr(entries, "truncated", False)
             if candidates:
                 imported += await process_watchlist_candidates(
                     db,
@@ -240,9 +224,10 @@ async def _import_watchlist_for_integration(
                     source,
                     candidates,
                     now=now,
+                    reconcile=complete,
                 )
                 candidates = []
-            elif not entries:
+            elif not entries and complete:
                 await reconcile_watchlist_source(
                     db,
                     source,
@@ -298,6 +283,7 @@ async def _import_watchlist_for_integration(
                 source,
                 candidates,
                 now=now,
+                reconcile=not getattr(list_entries, "truncated", False),
             )
             candidates = []
     return imported
@@ -311,18 +297,14 @@ async def import_watchlist_source(
 ) -> int:
     if source.provider != "letterboxd":
         raise ValueError("Watchlist source is not a Letterboxd list")
-    integration, secret_data = await load_integration_with_secrets(
-        db, source.user_id, "letterboxd"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, source.user_id, "letterboxd")
     if not integration or integration.status == "disconnected":
         raise ValueError("Letterboxd integration is not connected")
     if not secret_data or not has_required_letterboxd_fields(secret_data):
         raise ValueError("Letterboxd credentials are incomplete")
     if now is None:
         now = datetime.now(timezone.utc)
-    client, access_token, member_id = await _build_letterboxd_context(
-        db, integration, secret_data
-    )
+    client, access_token, member_id = await _build_letterboxd_context(db, integration, secret_data)
     return await _import_watchlist_for_integration(
         db,
         integration,
@@ -355,9 +337,7 @@ async def _build_letterboxd_context(
         refresh_token=str(secret_data.get("refresh_token")),
         cookies=cookies,
     )
-    access_token = await _ensure_letterboxd_access_token(
-        db, integration.id, secret_data, client
-    )
+    access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     if not member_id:
         try:
             me_payload = await client.fetch_me(access_token=access_token)
@@ -379,46 +359,6 @@ async def _build_letterboxd_context(
                 db.add(integration)
                 await db.commit()
     return client, access_token, member_id
-
-
-async def _ensure_letterboxd_access_token(
-    db: AsyncSession,
-    integration_id: str,
-    secret_data: dict[str, object],
-    client: LetterboxdClient,
-) -> str:
-    access_token = secret_data.get("access_token")
-    expires_at = parse_letterboxd_expires_at(secret_data.get("expires_at"))
-    if isinstance(access_token, str) and access_token and not is_letterboxd_token_expired(
-        expires_at
-    ):
-        return access_token
-    token = await client.refresh_access_token_payload()
-    updated = dict(secret_data)
-    updated.update(letterboxd_token_to_secret_payload(token))
-    await _save_integration_secret(db, integration_id, updated)
-    await db.commit()
-    return token.access_token
-
-
-async def _save_integration_secret(
-    db: AsyncSession, integration_id: str, secret_data: dict[str, object]
-) -> None:
-    encrypted = encrypt_value(json.dumps(secret_data))
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration_id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(
-            integration_id=integration_id,
-            secret_data=encrypted,
-        )
-    else:
-        secret.secret_data = encrypted
-    db.add(secret)
 
 
 def _select_letterboxd_since(now: datetime, lookback_days: int) -> datetime:
@@ -502,9 +442,7 @@ def build_letterboxd_list_candidate(
     return _build_watchlist_candidate(entry, list_context=list_context)
 
 
-async def _get_or_create_media_item(
-    db: AsyncSession, film: FilmSummary
-) -> MediaItem | None:
+async def _get_or_create_media_item(db: AsyncSession, film: FilmSummary) -> MediaItem | None:
     item = await _find_media_item(db, film)
     if item:
         await _apply_media_updates(db, item, film)
@@ -528,15 +466,11 @@ async def _get_or_create_media_item(
 async def _find_media_item(db: AsyncSession, film: FilmSummary) -> MediaItem | None:
     item: MediaItem | None = None
     if film.imdb_id:
-        result = await db.execute(
-            select(MediaItem).where(MediaItem.imdb_id == film.imdb_id)
-        )
+        result = await db.execute(select(MediaItem).where(MediaItem.imdb_id == film.imdb_id))
         item = result.scalars().first()
     if film.tmdb_id:
         result = await db.execute(
-            select(MediaItem).where(
-                MediaItem.tmdb_id == film.tmdb_id, MediaItem.media_type == "movie"
-            )
+            select(MediaItem).where(MediaItem.tmdb_id == film.tmdb_id, MediaItem.media_type == "movie")
         )
         tmdb_item = result.scalars().first()
         if item and tmdb_item and item.id != tmdb_item.id:
@@ -610,9 +544,7 @@ async def _can_assign_media_id(
     value: str,
 ) -> bool:
     if field == "imdb_id":
-        result = await db.execute(
-            select(MediaItem.id).where(MediaItem.imdb_id == value)
-        )
+        result = await db.execute(select(MediaItem.id).where(MediaItem.imdb_id == value))
     elif field == "tmdb_id":
         result = await db.execute(
             select(MediaItem.id).where(
@@ -635,9 +567,7 @@ def _build_media_raw(film: FilmSummary) -> dict:
     return raw
 
 
-def _build_entry_key(
-    entry_id: str | None, film_id: str | None, watched_at: datetime
-) -> str | None:
+def _build_entry_key(entry_id: str | None, film_id: str | None, watched_at: datetime) -> str | None:
     if entry_id:
         return f"entry:{entry_id}"
     if film_id:
@@ -753,8 +683,7 @@ def _extract_entry_watched_at(entry: dict[str, Any]) -> datetime | None:
 def _extract_film_summary(entry: dict[str, Any]) -> FilmSummary | None:
     film_payload = _extract_film_payload(entry)
     film_id = _coerce_str(
-        _first_match(film_payload, ("id", "filmId", "film_id"))
-        or _first_match(entry, ("filmId", "film_id"))
+        _first_match(film_payload, ("id", "filmId", "film_id")) or _first_match(entry, ("filmId", "film_id"))
     )
     title = _coerce_str(_first_match(film_payload, ("name", "title", "filmName")))
     imdb_id = _extract_imdb_id(film_payload) or _extract_imdb_id(entry)
@@ -928,11 +857,7 @@ def _sanitize_film_payload(payload: dict[str, Any]) -> dict[str, Any]:
             keep[key] = payload[key]
     links = payload.get("links")
     if isinstance(links, dict):
-        keep["links"] = {
-            key: value
-            for key, value in links.items()
-            if isinstance(value, (str, int))
-        }
+        keep["links"] = {key: value for key, value in links.items() if isinstance(value, (str, int))}
     return keep
 
 

@@ -4,8 +4,8 @@ import base64
 import binascii
 import math
 import zlib
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 class WatchedBitFieldError(ValueError):
@@ -82,7 +82,7 @@ class BitField8:
 
 
 def new_bitfield8(length: int) -> BitField8:
-    byte_length = int(math.ceil(length / 8)) if length > 0 else 0
+    byte_length = math.ceil(length / 8) if length > 0 else 0
     return BitField8(Length=length, values=bytearray(byte_length))
 
 
@@ -95,7 +95,7 @@ def new_bitfield8_from_string(encoded: str, length: int) -> BitField8:
 def new_bitfield8_with_values(values: bytes | bytearray, length: int) -> BitField8:
     if length == 0:
         length = len(values) * 8
-    byte_length = int(math.ceil(length / 8)) if length > 0 else 0
+    byte_length = math.ceil(length / 8) if length > 0 else 0
     updated = bytearray(values)
     if byte_length > len(updated):
         updated.extend(b"\x00" * (byte_length - len(updated)))
@@ -110,7 +110,7 @@ class WatchedField:
 
     def marshal_text(self) -> bytes:
         bitfield_str = self.BitField.to_string()
-        return f"{self.AnchorVideo}:{self.AnchorLength}:{bitfield_str}".encode("utf-8")
+        return f"{self.AnchorVideo}:{self.AnchorLength}:{bitfield_str}".encode()
 
     def unmarshal_text(self, text: bytes) -> None:
         components = text.decode("utf-8").split(":")
@@ -120,9 +120,7 @@ class WatchedField:
         try:
             anchor_length = int(components[-2])
         except ValueError as exc:
-            raise WatchedBitFieldError(
-                "invalid_format", "Cannot obtain the length field", exc
-            ) from exc
+            raise WatchedBitFieldError("invalid_format", "Cannot obtain the length field", exc) from exc
         anchor_video_id = ":".join(components[:-2])
         bitfield = BitField8(Length=0, values=bytearray())
         bitfield.unmarshal_text(bitfield_buf.encode("utf-8"))

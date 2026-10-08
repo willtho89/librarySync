@@ -93,9 +93,7 @@ async def _import_for_integration(
     lookback_days: int,
     now: datetime,
 ) -> ImportResult:
-    integration, secret_data = await load_integration_with_secrets(
-        db, integration.user_id, "publicmetadb"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, integration.user_id, "publicmetadb")
     if not integration or not secret_data:
         return ImportResult(imported=0, attempted=False)
     if not has_required_publicmetadb_fields(secret_data):
@@ -187,9 +185,7 @@ async def _load_existing_external_ids(
     return {str(value) for value in result.scalars().all() if value}
 
 
-def _build_watch_entry(
-    item: dict[str, Any], default_watched_at: datetime
-) -> PublicMetaDbWatchEntry | None:
+def _build_watch_entry(item: dict[str, Any], default_watched_at: datetime) -> PublicMetaDbWatchEntry | None:
     tmdb_id = _extract_tmdb_id(item)
     if not tmdb_id:
         return None
@@ -301,9 +297,7 @@ def _build_candidate(entry: PublicMetaDbWatchEntry) -> ImportCandidate | None:
     return None
 
 
-async def _get_or_create_movie_item(
-    db: AsyncSession, movie: PublicMetaDbMovie
-) -> MediaItem | None:
+async def _get_or_create_movie_item(db: AsyncSession, movie: PublicMetaDbMovie) -> MediaItem | None:
     item = await _find_media_item(
         db,
         media_type="movie",
@@ -337,9 +331,7 @@ async def _get_or_create_movie_item(
     return item
 
 
-async def _get_or_create_show_item(
-    db: AsyncSession, episode: PublicMetaDbEpisode
-) -> MediaItem | None:
+async def _get_or_create_show_item(db: AsyncSession, episode: PublicMetaDbEpisode) -> MediaItem | None:
     item = await _find_media_item(
         db,
         media_type="tv",
@@ -643,10 +635,7 @@ def _build_entry_key(
         return f"publicmetadb:{external_id}"
     timestamp = watched_at.astimezone(timezone.utc).isoformat()
     if media_type == "episode":
-        return (
-            f"publicmetadb:tv:{tmdb_id}:s{season_number or 0}"
-            f"e{episode_number or 0}:{timestamp}"
-        )
+        return f"publicmetadb:tv:{tmdb_id}:s{season_number or 0}e{episode_number or 0}:{timestamp}"
     return f"publicmetadb:movie:{tmdb_id}:{timestamp}"
 
 

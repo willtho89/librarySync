@@ -91,9 +91,9 @@ def test_get_anime_provider_ids():
         imdb_id="tt0000000",
         tmdb_id="999",
     )
-    
+
     ids = get_anime_provider_ids(item)
-    
+
     assert ids == {
         "kitsu": "123",
         "myanimelist": "456",
@@ -113,6 +113,6 @@ def test_get_anime_provider_ids_empty():
         imdb_id="tt0000000",
         tmdb_id="999",
     )
-    
+
     ids = get_anime_provider_ids(item)
     assert ids == {}

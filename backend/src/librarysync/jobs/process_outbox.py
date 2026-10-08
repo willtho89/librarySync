@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
-from sqlalchemy import or_, select
+import httpx
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from librarysync.config import settings
 from librarysync.connectors.services.anilist import (
@@ -27,15 +29,6 @@ from librarysync.connectors.services.letterboxd import (
     extract_member_name,
     has_required_letterboxd_fields,
 )
-from librarysync.connectors.services.letterboxd import (
-    is_token_expired as is_letterboxd_token_expired,
-)
-from librarysync.connectors.services.letterboxd import (
-    parse_expires_at as parse_letterboxd_expires_at,
-)
-from librarysync.connectors.services.letterboxd import (
-    token_to_secret_payload as letterboxd_token_to_secret_payload,
-)
 from librarysync.connectors.services.publicmetadb import (
     PublicMetaDbClient,
     PublicMetaDbError,
@@ -45,15 +38,6 @@ from librarysync.connectors.services.simkl import (
     SimklClient,
     SimklError,
     has_required_simkl_fields,
-)
-from librarysync.connectors.services.simkl import (
-    is_token_expired as is_simkl_token_expired,
-)
-from librarysync.connectors.services.simkl import (
-    parse_expires_at as parse_simkl_expires_at,
-)
-from librarysync.connectors.services.simkl import (
-    token_to_secret_payload as simkl_token_to_secret_payload,
 )
 from librarysync.connectors.services.stremio import (
     DEFAULT_STREMIO_API_BASE_URL,
@@ -70,33 +54,46 @@ from librarysync.connectors.services.trakt import (
     TraktClient,
     TraktError,
     has_required_trakt_fields,
-    is_token_expired,
-    parse_expires_at,
-    token_to_secret_payload,
 )
 from librarysync.core.import_control import load_blocked_outbox_users
+from librarysync.core.integration_tokens import (
+    ensure_letterboxd_access_token,
+    ensure_simkl_access_token,
+    ensure_trakt_access_token,
+    expire_access_token,
+)
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.core.ratings import coerce_star_rating
-from librarysync.core.security import encrypt_value
-from librarysync.core.watch_pipeline import process_new_item_job, process_watchlist_update_job
+from librarysync.core.shutdown import shutdown_requested
+from librarysync.core.watch_pipeline import (
+    WATCH_DELETED_ERROR,
+    WATCH_PUSH_JOB_TYPES,
+    process_new_item_job,
+    process_watchlist_update_job,
+)
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
-    IntegrationSecret,
     MediaItem,
     OutboxJob,
     SyncAttempt,
     WatchedItem,
+    WatchStateEntry,
     WatchSync,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
 
 RETRYABLE_STATUSES = ("pending", "failed_retryable")
+SUPERSEDED_STATUS = "superseded"
 BATCHABLE_PROVIDERS = {"trakt", "simkl"}
 BATCHABLE_JOB_TYPES = {"push_watched", "push_rating"}
 MIXED_PROVIDER_ORDER = ("trakt", "simkl", "publicmetadb", "letterboxd", "stremio")
+_ensure_letterboxd_access_token = ensure_letterboxd_access_token
+_ensure_trakt_access_token = ensure_trakt_access_token
+_ensure_simkl_access_token = ensure_simkl_access_token
+
 logger = logging.getLogger(__name__)
 
 
@@ -140,10 +137,66 @@ class OutboxDispatcher:
         self._registry = registry
 
     async def deliver(self, db: AsyncSession, job: OutboxJob) -> DeliveryResult:
+        payload = job.payload or {}
+        if payload.get("state_entry_id"):
+            from librarysync.core.watch_state_events import utc
+            from librarysync.db.models import WatchStateEntry
+
+            entry = await db.get(
+                WatchStateEntry, payload["state_entry_id"], with_for_update=True, populate_existing=True
+            )
+            if (
+                not entry
+                or entry.user_id != job.user_id
+                or int(utc(entry.occurred_at).timestamp()) != payload.get("protocol_at")
+                or entry.payload["event"] != payload.get("protocol_event")
+                or entry.payload.get("rating") != payload.get("protocol_rating")
+            ):
+                return DeliveryResult(None, None)
+        elif await _superseded_history_rating(db, job):
+            return DeliveryResult(None, None)
         handler = self._registry.get(job.target_provider)
         if not handler:
             raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
         return await handler.deliver(db, job)
+
+
+async def _superseded_history_rating(db: AsyncSession, job: OutboxJob) -> bool:
+    """Independent ratings own supported scopes, including queued legacy writes."""
+    from librarysync.core.watch_state_ratings import RATING_SCOPES
+
+    payload = job.payload or {}
+    if (
+        job.job_type != "push_rating"
+        or payload.get("state_entry_id")
+        or job.target_provider not in RATING_SCOPES
+        or not payload.get("watched_item_id")
+    ):
+        return False
+    watched = await db.get(WatchedItem, payload["watched_item_id"])
+    if not watched or watched.user_id != job.user_id:
+        return False
+    if watched.episode_item_id:
+        scope = "episode"
+        target = WatchStateEntry.episode_item_id == watched.episode_item_id
+    else:
+        media = await db.get(MediaItem, watched.media_item_id) if watched.media_item_id else None
+        scope = "movie" if media and media.media_type == "movie" else "series"
+        target = WatchStateEntry.media_item_id == watched.media_item_id
+    if scope not in RATING_SCOPES[job.target_provider]:
+        return False
+    entry = await db.scalar(
+        select(WatchStateEntry)
+        .where(
+            WatchStateEntry.user_id == job.user_id,
+            WatchStateEntry.category == "rating",
+            WatchStateEntry.scope == scope,
+            target,
+        )
+        .limit(1)
+        .with_for_update()
+    )
+    return entry is not None
 
 
 class LetterboxdOutboxHandler(OutboxHandler):
@@ -180,7 +233,7 @@ class TraktOutboxHandler(OutboxHandler):
         if job.job_type == "push_watched":
             response_code, external_id = await _deliver_trakt_watch(db, job)
             return DeliveryResult(response_code, external_id)
-        if job.job_type == "push_rating":
+        if job.job_type in {"push_rating", "remove_rating"}:
             response_code, external_id = await _deliver_trakt_rating(db, job)
             return DeliveryResult(response_code, external_id)
         if job.job_type == "push_watchlist":
@@ -205,7 +258,7 @@ class SimklOutboxHandler(OutboxHandler):
         if job.job_type == "push_watched":
             response_code, external_id = await _deliver_simkl_watch(db, job)
             return DeliveryResult(response_code, external_id)
-        if job.job_type == "push_rating":
+        if job.job_type in {"push_rating", "remove_rating"}:
             response_code, external_id = await _deliver_simkl_rating(db, job)
             return DeliveryResult(response_code, external_id)
         if job.job_type == "push_watchlist":
@@ -243,7 +296,7 @@ class PublicMetaDbOutboxHandler(OutboxHandler):
         if job.job_type == "push_watched":
             response_code, external_id = await _deliver_publicmetadb_watch(db, job)
             return DeliveryResult(response_code, external_id)
-        if job.job_type == "push_rating":
+        if job.job_type in {"push_rating", "remove_rating"}:
             response_code, external_id = await _deliver_publicmetadb_rating(db, job)
             return DeliveryResult(response_code, external_id)
         if job.job_type == "push_watchlist":
@@ -268,7 +321,7 @@ class AniListOutboxHandler(OutboxHandler):
         if job.job_type == "push_watched":
             response_code, external_id = await _deliver_anilist_watch(db, job)
             return DeliveryResult(response_code, external_id)
-        if job.job_type == "push_rating":
+        if job.job_type in {"push_rating", "remove_rating"}:
             response_code, external_id = await _deliver_anilist_rating(db, job)
             return DeliveryResult(response_code, external_id)
         if job.job_type == "remove_history":
@@ -363,16 +416,14 @@ async def _deliver_anilist_watch(db: AsyncSession, job: OutboxJob) -> tuple[int 
     return 200, external_id
 
 
-async def _deliver_anilist_rating(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_anilist_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     """Update rating for an existing AniList entry."""
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
     rating = payload.get("rating")
     anilist_id = payload.get("anilist_id")
 
-    if not entry_id:
+    if not entry_id and not payload.get("state_entry_id"):
         raise AniListError("AniList entry ID is required for rating update")
     if not anilist_id:
         raise AniListError("AniList media ID is required")
@@ -389,6 +440,16 @@ async def _deliver_anilist_rating(
 
     client = AniListClient(access_token=access_token)
 
+    if payload.get("state_entry_id"):
+        viewer = await client.get_viewer()
+        existing = await client.get_media_list_entry(int(anilist_id), int(viewer["id"]))
+        if job.job_type == "remove_rating" and not existing:
+            return 200, None
+        status = existing.get("status", "PLANNING") if existing else "PLANNING"
+        score = 0 if job.job_type == "remove_rating" else payload["protocol_rating"]
+        result = await client.add_media_list_entry(media_id=int(anilist_id), status=status, score=score)
+        return 200, str(result["id"]) if result.get("id") else None
+
     # Convert rating from 0.5-5.0 to 0-10 scale
     anilist_score = convert_rating_to_anilist_scale(rating)
 
@@ -402,9 +463,7 @@ async def _deliver_anilist_rating(
     return 200, str(entry_id)
 
 
-async def _deliver_anilist_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_anilist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     """Remove an entry from AniList."""
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
@@ -454,24 +513,197 @@ async def process_outbox_once(limit: int = 50) -> int:
             return 0
         logger.info("Processing %s outbox job(s)", len(jobs))
         batch_groups, remaining = _group_batchable_jobs(jobs)
-        for group in batch_groups:
+        for index, group in enumerate(batch_groups):
+            if shutdown_requested():
+                unprocessed = [job for batch in batch_groups[index:] for job in batch] + remaining
+                await _release_claimed_jobs(db, unprocessed)
+                return len(jobs)
             await _process_job_batch(db, group)
-        for job in remaining:
+        for index, job in enumerate(remaining):
+            if shutdown_requested():
+                await _release_claimed_jobs(db, remaining[index:])
+                return len(jobs)
             await _process_job(db, job)
         return len(jobs)
+
+
+def _pushed_watch_id(job: OutboxJob) -> str | None:
+    if job.job_type not in WATCH_PUSH_JOB_TYPES:
+        return None
+    watched_item_id = (job.payload or {}).get("watched_item_id")
+    return str(watched_item_id) if watched_item_id else None
+
+
+async def _lock_live_watches(db: AsyncSession, jobs: list[OutboxJob]) -> set[str]:
+    """Share-lock the watches these jobs push and return the ids that still exist.
+
+    The lock is held until the job's transaction commits after the provider write,
+    so a concurrent deletion waits for an in-flight push and then queues its provider
+    removal behind it; a deletion that committed first leaves the watch missing here
+    and the push is skipped. cancel_queued_pushes covers jobs that are still waiting.
+    """
+    watched_ids = sorted({watched_id for job in jobs if (watched_id := _pushed_watch_id(job))})
+    if not watched_ids:
+        return set()
+    # A query (not db.get): the identity map may still hold a row deleted elsewhere.
+    result = await db.execute(
+        select(WatchedItem.id)
+        .where(WatchedItem.id.in_(watched_ids))
+        .order_by(WatchedItem.id)
+        .with_for_update(read=True)
+    )
+    return set(result.scalars().all())
+
+
+def _pushes_missing_watch(job: OutboxJob, existing: set[str]) -> bool:
+    watched_id = _pushed_watch_id(job)
+    return watched_id is not None and watched_id not in existing
+
+
+def _retire_for_deleted_watch(job: OutboxJob, now: datetime) -> None:
+    job.status = SUPERSEDED_STATUS
+    job.dedupe_key = None
+    job.run_after = None
+    job.last_error = WATCH_DELETED_ERROR
+    job.updated_at = now
+    logger.info("Outbox job %s %s skipped: its watch was deleted", job.id, f"{job.target_provider}:{job.job_type}")
+
+
+async def _has_waiting_successor(db: AsyncSession, job: OutboxJob) -> bool:
+    if not job.dedupe_key:
+        return False
+    result = await db.execute(
+        select(OutboxJob.id)
+        .where(
+            OutboxJob.dedupe_key == job.dedupe_key,
+            OutboxJob.id != job.id,
+            OutboxJob.status.in_(RETRYABLE_STATUSES),
+        )
+        .limit(1)
+    )
+    return result.first() is not None
+
+
+async def _requeue_job(
+    db: AsyncSession,
+    job: OutboxJob,
+    now: datetime,
+    *,
+    run_after: datetime | None,
+    last_error: str | None,
+) -> bool:
+    """Return a claimed job to the queue, or retire it if a newer job already waits.
+
+    Only waiting jobs are unique on dedupe_key, so a job leaving in_progress must
+    yield to a successor queued while it was in flight. Returns False when superseded.
+    """
+    if await _has_waiting_successor(db, job):
+        job.status = SUPERSEDED_STATUS
+        job.dedupe_key = None
+        job.run_after = None
+        job.last_error = "Superseded by a newer queued job"
+        job.updated_at = now
+        return False
+    job.status = "pending"
+    job.run_after = run_after
+    job.last_error = last_error
+    job.updated_at = now
+    return True
+
+
+OAUTH_PROVIDERS = {"trakt", "simkl", "letterboxd"}
+AUTH_RETRY_ATTEMPTS = 2
+
+
+async def _finalize_job(
+    db: AsyncSession,
+    job: OutboxJob,
+    status: str,
+    error_message: str | None,
+    now: datetime,
+    response_code: int | None = None,
+    retry_after: float | None = None,
+) -> tuple[str, str | None]:
+    if response_code == 429:
+        # Provider throttling is not a delivery failure: retry when the provider
+        # allows it without consuming one of the job's attempts.
+        job.attempts = max(job.attempts - 1, 0)
+        status = "failed_retryable"
+    if (
+        status == "failed_permanent"
+        and response_code == 401
+        and job.target_provider in OAUTH_PROVIDERS
+        and job.attempts <= AUTH_RETRY_ATTEMPTS
+        and await expire_access_token(db, job.user_id, job.target_provider)
+    ):
+        # The provider rejected a token we believed valid; refresh it on the next attempt.
+        status = "failed_retryable"
+    if status == "failed_retryable" and job.attempts >= settings.outbox_max_attempts:
+        status = "failed_permanent"
+        error_message = f"Gave up after {job.attempts} attempts: {error_message or 'unknown error'}"
+    if status == "failed_retryable" and await _has_waiting_successor(db, job):
+        status = SUPERSEDED_STATUS
+        error_message = "Superseded by a newer queued job"
+    job.status = status
+    job.last_error = error_message
+    if status == "failed_retryable" and response_code == 429:
+        job.run_after = now + _throttle_delay(retry_after)
+    elif status == "failed_retryable":
+        job.run_after = now + _next_retry_delay(job.attempts)
+    else:
+        job.run_after = None
+        job.dedupe_key = None
+    job.updated_at = now
+    return status, error_message
+
+
+async def _release_claimed_jobs(db: AsyncSession, jobs: list[OutboxJob]) -> None:
+    """Hand unprocessed claimed jobs back to the queue during shutdown."""
+    if not jobs:
+        return
+    now = datetime.now(timezone.utc)
+    for job in jobs:
+        await _requeue_job(db, job, now, run_after=None, last_error=job.last_error)
+    await db.commit()
+    logger.info("Released %s claimed outbox job(s) for shutdown", len(jobs))
+
+
+async def _recover_stale_jobs(db: AsyncSession, now: datetime, limit: int) -> int:
+    """Requeue jobs stranded in_progress by a worker that died mid-batch."""
+    stale_before = now - timedelta(minutes=settings.outbox_stale_minutes)
+    result = await db.execute(
+        select(OutboxJob)
+        .where(OutboxJob.status == "in_progress", OutboxJob.updated_at < stale_before)
+        .order_by(OutboxJob.updated_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    stale = result.scalars().all()
+    for job in stale:
+        requeued = await _requeue_job(db, job, now, run_after=None, last_error="Recovered after worker interruption")
+        if requeued:
+            await _update_watch_sync(db, job, "pending", job.last_error, None, now)
+    if stale:
+        await db.flush()
+        logger.warning("Recovered %s stale in-progress outbox job(s)", len(stale))
+    return len(stale)
 
 
 def _group_batchable_jobs(jobs: list[OutboxJob]) -> tuple[list[list[OutboxJob]], list[OutboxJob]]:
     grouped: dict[tuple[str, str, str], list[OutboxJob]] = {}
     remaining: list[OutboxJob] = []
     for job in jobs:
-        if job.target_provider in BATCHABLE_PROVIDERS and job.job_type in BATCHABLE_JOB_TYPES:
+        if (
+            job.target_provider in BATCHABLE_PROVIDERS
+            and job.job_type in BATCHABLE_JOB_TYPES
+            and not (job.payload or {}).get("state_entry_id")
+        ):
             key = (job.user_id, job.target_provider, job.job_type)
             grouped.setdefault(key, []).append(job)
         else:
             remaining.append(job)
     batch_groups: list[list[OutboxJob]] = []
-    for (user_id, provider, job_type), group in grouped.items():
+    for (_user_id, provider, _job_type), group in grouped.items():
         if len(group) < 2:
             remaining.extend(group)
             continue
@@ -521,78 +753,76 @@ async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
     if not jobs:
         return
     now = datetime.now(timezone.utc)
+    # Locks the batch's watches until the commit below (see _lock_live_watches).
+    existing = await _lock_live_watches(db, jobs)
+    live_jobs: list[OutboxJob] = []
+    for job in jobs:
+        if _pushes_missing_watch(job, existing):
+            _retire_for_deleted_watch(job, now)
+        else:
+            live_jobs.append(job)
+    jobs = live_jobs
+    if not jobs:
+        await db.commit()
+        return
+    # A batch is one provider request, so it costs one rate-limit token.
+    rate_decision = await RATE_LIMITER.try_acquire(db, jobs[0].user_id, jobs[0].target_provider, now=now)
+    if rate_decision and not rate_decision.allowed:
+        for job in jobs:
+            if await _requeue_job(db, job, now, run_after=rate_decision.retry_at, last_error="rate_limited"):
+                await _update_watch_sync(db, job, "pending", job.last_error, None, now)
+        await db.commit()
+        logger.info(
+            "Outbox batch of %s %s job(s) rate-limited until %s",
+            len(jobs),
+            f"{jobs[0].target_provider}:{jobs[0].job_type}",
+            rate_decision.retry_at.isoformat() if rate_decision.retry_at else "unknown",
+        )
+        return
     for job in jobs:
         job.attempts += 1
     status = "succeeded"
     response_code: int | None = None
     error_message: str | None = None
+    retry_after: float | None = None
 
     try:
-        response_code = await _deliver_batch(db, jobs)
-    except LetterboxdError as exc:
-        response_code = exc.status_code
-        error_message = _format_letterboxd_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except TraktError as exc:
-        response_code = exc.status_code
-        error_message = _format_trakt_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except SimklError as exc:
-        response_code = exc.status_code
-        error_message = _format_simkl_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except PublicMetaDbError as exc:
-        response_code = exc.status_code
-        error_message = _format_publicmetadb_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except StremioError as exc:
-        response_code = exc.status_code
-        error_message = _format_stremio_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except AniListError as exc:
-        response_code = exc.status_code
-        error_message = _format_anilist_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except ValueError as exc:
-        error_message = str(exc)
-        status = "failed_permanent"
+        deliveries = [job for job in jobs if not await _superseded_history_rating(db, job)]
+        if deliveries:
+            response_code = await _deliver_batch(db, deliveries)
     except Exception as exc:
-        error_message = str(exc)
-        status = "failed_retryable"
+        failure = _describe_failure(exc)
+        status, error_message, response_code = failure.status, failure.error, failure.response_code
+        retry_after = failure.retry_after
 
     for job in jobs:
-        job.status = status
-        job.last_error = error_message
-        if status == "failed_retryable":
-            job.run_after = now + _next_retry_delay(job.attempts)
-        else:
-            job.run_after = None
-        job.updated_at = now
-        await _update_watch_sync(
-            db,
-            job,
-            status,
-            error_message,
-            None,
-            now,
-        )
+        job_status, job_error = await _finalize_job(db, job, status, error_message, now, response_code, retry_after)
+        if job_status != SUPERSEDED_STATUS:
+            await _update_watch_sync(
+                db,
+                job,
+                job_status,
+                job_error,
+                None,
+                now,
+            )
         db.add(
             SyncAttempt(
                 job_id=job.id,
-                status=status,
+                status=job_status,
                 response_code=response_code,
-                error=error_message,
+                error=job_error,
             )
         )
         logger.info(
             "Outbox job %s %s -> %s (attempt %s)",
             job.id,
             f"{job.target_provider}:{job.job_type}",
-            status,
+            job_status,
             job.attempts,
         )
-        if error_message:
-            logger.warning("Outbox job %s error: %s", job.id, error_message)
+        if job_error:
+            logger.warning("Outbox job %s error: %s", job.id, job_error)
     await db.commit()
 
 
@@ -616,41 +846,66 @@ async def _claim_jobs(db: AsyncSession, limit: int) -> list[OutboxJob]:
     async with db.begin():
         if limit <= 0:
             return []
+        await _recover_stale_jobs(db, now, limit)
         blocked_users = await load_blocked_outbox_users(db)
+        in_flight = aliased(OutboxJob)
         filters = [
             OutboxJob.status.in_(RETRYABLE_STATUSES),
             or_(OutboxJob.run_after.is_(None), OutboxJob.run_after <= now),
+            # A successor waits until the job delivering the same target finishes.
+            ~exists().where(
+                in_flight.dedupe_key == OutboxJob.dedupe_key,
+                in_flight.status == "in_progress",
+            ),
         ]
         if blocked_users:
             filters.append(~OutboxJob.user_id.in_(blocked_users))
-        base_query = (
-            select(OutboxJob)
-            .where(*filters)
-            .order_by(OutboxJob.user_id, OutboxJob.created_at)
-            .with_for_update(skip_locked=True)
-        )
         jobs: list[OutboxJob] = []
         for provider, provider_limit in _mixed_provider_limits(limit, MIXED_PROVIDER_ORDER).items():
-            result = await db.execute(
-                base_query.where(OutboxJob.target_provider == provider).limit(provider_limit)
-            )
-            jobs.extend(result.scalars().all())
+            jobs.extend(await _lock_fair_batch(db, [*filters, OutboxJob.target_provider == provider], provider_limit))
         remaining_limit = limit - len(jobs)
         if remaining_limit > 0:
             claimed_ids = [job.id for job in jobs]
-            remainder_filters = []
-            if claimed_ids:
-                remainder_filters.append(~OutboxJob.id.in_(claimed_ids))
-            result = await db.execute(base_query.where(*remainder_filters).limit(remaining_limit))
-            jobs.extend(result.scalars().all())
+            remainder_filters = [~OutboxJob.id.in_(claimed_ids)] if claimed_ids else []
+            jobs.extend(await _lock_fair_batch(db, [*filters, *remainder_filters], remaining_limit))
         for job in jobs:
             job.status = "in_progress"
             job.updated_at = now
     return jobs
 
 
+async def _lock_fair_batch(db: AsyncSession, filters: list[Any], limit: int) -> list[OutboxJob]:
+    """Lock up to `limit` waiting jobs, taking users round-robin (each user's oldest first)
+    so one user's large backlog cannot hold back everyone else's syncs.
+
+    Ranking and locking are separate statements because PostgreSQL does not allow
+    FOR UPDATE together with window functions.
+    """
+    if limit <= 0:
+        return []
+    user_rank = func.row_number().over(partition_by=OutboxJob.user_id, order_by=OutboxJob.created_at)
+    ranked = await db.execute(
+        select(OutboxJob.id, user_rank.label("user_rank"))
+        .where(*filters)
+        .order_by(user_rank, OutboxJob.created_at)
+        .limit(limit * 2)
+    )
+    order = {job_id: index for index, (job_id, _rank) in enumerate(ranked.all())}
+    if not order:
+        return []
+    locked = await db.execute(
+        select(OutboxJob).where(OutboxJob.id.in_(list(order)), *filters).with_for_update(skip_locked=True)
+    )
+    return sorted(locked.scalars().all(), key=lambda job: order[job.id])[:limit]
+
+
 async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     now = datetime.now(timezone.utc)
+    # Locks the watch until this job's commit (see _lock_live_watches).
+    if _pushes_missing_watch(job, await _lock_live_watches(db, [job])):
+        _retire_for_deleted_watch(job, now)
+        await db.commit()
+        return
     rate_decision = await RATE_LIMITER.try_acquire(
         db,
         job.user_id,
@@ -658,18 +913,16 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
         now=now,
     )
     if rate_decision and not rate_decision.allowed:
-        job.status = "pending"
-        job.last_error = "rate_limited"
-        job.run_after = rate_decision.retry_at
-        job.updated_at = now
-        await _update_watch_sync(
-            db,
-            job,
-            "pending",
-            job.last_error,
-            None,
-            now,
-        )
+        requeued = await _requeue_job(db, job, now, run_after=rate_decision.retry_at, last_error="rate_limited")
+        if requeued:
+            await _update_watch_sync(
+                db,
+                job,
+                "pending",
+                job.last_error,
+                None,
+                now,
+            )
         await db.commit()
         logger.info(
             "Outbox job %s %s rate-limited until %s",
@@ -684,62 +937,29 @@ async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     error_message: str | None = None
     external_id: str | None = None
     resolved_rewatch: bool | None = None
+    retry_after: float | None = None
 
     try:
         result = await OUTBOX_DISPATCHER.deliver(db, job)
         response_code = result.response_code
         external_id = result.external_id
         resolved_rewatch = result.resolved_rewatch
-    except LetterboxdError as exc:
-        response_code = exc.status_code
-        error_message = _format_letterboxd_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except TraktError as exc:
-        response_code = exc.status_code
-        error_message = _format_trakt_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except SimklError as exc:
-        response_code = exc.status_code
-        error_message = _format_simkl_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except PublicMetaDbError as exc:
-        response_code = exc.status_code
-        error_message = _format_publicmetadb_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except StremioError as exc:
-        response_code = exc.status_code
-        error_message = _format_stremio_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except AniListError as exc:
-        response_code = exc.status_code
-        error_message = _format_anilist_error(exc)
-        status = _classify_failure(exc.status_code, error_message)
-    except ValueError as exc:
-        error_message = str(exc)
-        status = "failed_permanent"
     except Exception as exc:
-        error_message = str(exc)
-        status = "failed_retryable"
+        failure = _describe_failure(exc)
+        status, error_message, response_code = failure.status, failure.error, failure.response_code
+        retry_after = failure.retry_after
 
-    job.status = status
-    job.last_error = error_message
-    if status == "failed_retryable":
-        job.run_after = now + _next_retry_delay(job.attempts)
-    else:
-        job.run_after = None
-    if status in {"succeeded", "failed_permanent"}:
-        job.dedupe_key = None
-    job.updated_at = now
-
-    await _update_watch_sync(
-        db,
-        job,
-        status,
-        error_message,
-        external_id,
-        now,
-        resolved_rewatch,
-    )
+    status, error_message = await _finalize_job(db, job, status, error_message, now, response_code, retry_after)
+    if status != SUPERSEDED_STATUS:
+        await _update_watch_sync(
+            db,
+            job,
+            status,
+            error_message,
+            external_id,
+            now,
+            resolved_rewatch,
+        )
     logger.info(
         "Outbox job %s %s -> %s (attempt %s)",
         job.id,
@@ -798,9 +1018,7 @@ async def _deliver_letterboxd_watch(
     )
     access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     if force_update_rating and rating is not None and entry_id:
-        _, response_code = await client.update_log_entry_rating(
-            str(entry_id), rating, access_token=access_token
-        )
+        _, response_code = await client.update_log_entry_rating(str(entry_id), rating, access_token=access_token)
         return response_code, str(entry_id), None
     film_id = await client.resolve_film_id(access_token, imdb_id, tmdb_id)
     member_id = await _ensure_letterboxd_member(
@@ -841,15 +1059,11 @@ async def _deliver_letterboxd_watch(
     return response_code, external_id, effective_rewatch
 
 
-async def _deliver_letterboxd_watchlist(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_letterboxd_watchlist(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     return await _deliver_letterboxd_watchlist_change(db, job, in_watchlist=True)
 
 
-async def _deliver_letterboxd_watchlist_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_letterboxd_watchlist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     return await _deliver_letterboxd_watchlist_change(db, job, in_watchlist=False)
 
 
@@ -902,9 +1116,7 @@ async def _deliver_letterboxd_watchlist_change(
     return response_code, film_id
 
 
-async def _deliver_letterboxd_log_update(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_letterboxd_log_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
     if not entry_id:
@@ -936,7 +1148,7 @@ async def _deliver_letterboxd_log_update(
         cookies=_safe_cookies(secret_data.get("cookies")),
     )
     access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
-    response, response_code = await client.update_log_entry(
+    _response, response_code = await client.update_log_entry(
         str(entry_id),
         watched_at=watched_at,
         rating=rating,
@@ -947,9 +1159,7 @@ async def _deliver_letterboxd_log_update(
     return response_code, str(entry_id)
 
 
-async def _deliver_letterboxd_delete(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_letterboxd_delete(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     entry_id = payload.get("entry_id")
     if not entry_id:
@@ -973,27 +1183,6 @@ async def _deliver_letterboxd_delete(
     access_token = await _ensure_letterboxd_access_token(db, integration.id, secret_data, client)
     _, response_code = await client.delete_log_entry(str(entry_id), access_token=access_token)
     return response_code, str(entry_id)
-
-
-async def _ensure_letterboxd_access_token(
-    db: AsyncSession,
-    integration_id: str,
-    secret_data: dict[str, object],
-    client: LetterboxdClient,
-) -> str:
-    access_token = secret_data.get("access_token")
-    expires_at = parse_letterboxd_expires_at(secret_data.get("expires_at"))
-    if (
-        isinstance(access_token, str)
-        and access_token
-        and not is_letterboxd_token_expired(expires_at)
-    ):
-        return access_token
-    token = await client.refresh_access_token_payload()
-    updated = dict(secret_data)
-    updated.update(letterboxd_token_to_secret_payload(token))
-    await _save_integration_secret(db, integration_id, updated)
-    return token.access_token
 
 
 def _extract_letterboxd_member_id(integration: Integration) -> str | None:
@@ -1176,7 +1365,8 @@ async def _deliver_trakt_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | 
 
 async def _deliver_trakt_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
-    rating = _normalize_trakt_rating(payload.get("rating"))
+    clear = job.job_type == "remove_rating"
+    rating = None if clear else _normalize_trakt_rating(payload.get("rating"))
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
     if not integration or not secret_data:
         raise TraktError("Trakt credentials are missing", status_code=401)
@@ -1191,14 +1381,15 @@ async def _deliver_trakt_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
     )
     access_token = await _ensure_trakt_access_token(db, integration.id, secret_data, client)
     ratings_payload = _build_trakt_rating_payload(payload, rating)
-    response, response_code = await client.add_ratings(ratings_payload, access_token)
+    if clear:
+        response, response_code = await client.remove_ratings(ratings_payload, access_token)
+    else:
+        response, response_code = await client.add_ratings(ratings_payload, access_token)
     external_id = _extract_trakt_history_id(response, _coerce_str(payload.get("media_type")))
     return response_code, external_id
 
 
-async def _deliver_trakt_watchlist(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_trakt_watchlist(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
     if not integration or not secret_data:
@@ -1224,9 +1415,7 @@ async def _deliver_trakt_watchlist(
     return response_code, None
 
 
-async def _deliver_trakt_watchlist_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_trakt_watchlist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "trakt")
     if not integration or not secret_data:
@@ -1392,7 +1581,8 @@ async def _deliver_simkl_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | 
 
 async def _deliver_simkl_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
-    rating = _normalize_simkl_rating(payload.get("rating"))
+    clear = job.job_type == "remove_rating"
+    rating = None if clear else _normalize_simkl_rating(payload.get("rating"))
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
     if not integration or not secret_data:
         raise SimklError("SIMKL credentials are missing", status_code=401)
@@ -1407,14 +1597,15 @@ async def _deliver_simkl_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
     )
     access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
     ratings_payload = _build_simkl_rating_payload(payload, rating)
-    response, response_code = await client.add_ratings(ratings_payload, access_token)
+    if clear:
+        response, response_code = await client.remove_ratings(ratings_payload, access_token)
+    else:
+        response, response_code = await client.add_ratings(ratings_payload, access_token)
     external_id = _extract_simkl_history_id(response)
     return response_code, external_id
 
 
-async def _deliver_simkl_watchlist(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_simkl_watchlist(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
     if not integration or not secret_data:
@@ -1434,9 +1625,7 @@ async def _deliver_simkl_watchlist(
     return response_code, None
 
 
-async def _deliver_simkl_watchlist_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_simkl_watchlist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     integration, secret_data = await load_integration_with_secrets(db, job.user_id, "simkl")
     if not integration or not secret_data:
@@ -1458,9 +1647,37 @@ async def _deliver_simkl_watchlist_remove(
         watchlist_payload = _build_simkl_drop_watchlist_payload(payload)
         _, response_code = await client.add_to_list(watchlist_payload, access_token)
     else:
+        media_item_id = _coerce_str(payload.get("media_item_id"))
+        if media_item_id and await _has_local_watch_history(db, job.user_id, media_item_id):
+            # SIMKL has no list-only removal: /sync/history/remove deletes the title
+            # together with its watch history and ratings. A title with history is in
+            # watching/completed on SIMKL rather than plan-to-watch, so leave it alone.
+            logger.info(
+                "Skipping SIMKL watchlist removal for media item %s: user %s has watch history",
+                media_item_id,
+                job.user_id,
+            )
+            return None, None
         remove_payload = _build_simkl_watchlist_remove_payload(payload)
         _, response_code = await client.remove_history(remove_payload, access_token)
     return response_code, None
+
+
+async def _has_local_watch_history(db: AsyncSession, user_id: str, media_item_id: str) -> bool:
+    movie_watch = await db.execute(
+        select(WatchedItem.id)
+        .where(WatchedItem.user_id == user_id, WatchedItem.media_item_id == media_item_id)
+        .limit(1)
+    )
+    if movie_watch.first() is not None:
+        return True
+    episode_watch = await db.execute(
+        select(WatchedItem.id)
+        .join(EpisodeItem, EpisodeItem.id == WatchedItem.episode_item_id)
+        .where(WatchedItem.user_id == user_id, EpisodeItem.show_media_item_id == media_item_id)
+        .limit(1)
+    )
+    return episode_watch.first() is not None
 
 
 async def _deliver_simkl_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
@@ -1487,9 +1704,7 @@ async def _deliver_simkl_remove(db: AsyncSession, job: OutboxJob) -> tuple[int |
     return response_code, None
 
 
-async def _load_publicmetadb_client(
-    db: AsyncSession, user_id: str
-) -> tuple[PublicMetaDbClient, str]:
+async def _load_publicmetadb_client(db: AsyncSession, user_id: str) -> tuple[PublicMetaDbClient, str]:
     integration, secret_data = await load_integration_with_secrets(db, user_id, "publicmetadb")
     if not integration or not secret_data:
         raise PublicMetaDbError("PublicMetaDB credentials are missing", status_code=401)
@@ -1583,7 +1798,7 @@ def _normalize_publicmetadb_rating(value: object) -> int:
     rating = coerce_star_rating(value)
     if rating is None:
         raise ValueError("PublicMetaDB rating must be between 0.5 and 5.0 stars")
-    normalized = int(round(rating * 20))
+    normalized = round(rating * 20)
     if normalized < 0:
         return 0
     if normalized > 100:
@@ -1691,9 +1906,7 @@ async def _resolve_publicmetadb_watchlist_id(
     return None
 
 
-async def _deliver_publicmetadb_watch(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     tmdb_id = _extract_publicmetadb_tmdb_id(payload)
     if tmdb_id is None:
@@ -1816,9 +2029,7 @@ async def _find_publicmetadb_watched_for_retry(
     return None
 
 
-async def _deliver_publicmetadb_watchlist(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_watchlist(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     tmdb_id = _extract_publicmetadb_tmdb_id(payload)
     if tmdb_id is None:
@@ -1833,9 +2044,7 @@ async def _deliver_publicmetadb_watchlist(
     return response_code, _extract_publicmetadb_watchlist_id(response)
 
 
-async def _deliver_publicmetadb_watchlist_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_watchlist_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     client, api_key = await _load_publicmetadb_client(db, job.user_id)
     watchlist_id = _coerce_str(payload.get("watchlist_id") or payload.get("external_id"))
@@ -1859,9 +2068,7 @@ async def _deliver_publicmetadb_watchlist_remove(
     return response_code, None
 
 
-async def _deliver_publicmetadb_update(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_update(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     client, api_key = await _load_publicmetadb_client(db, job.user_id)
     history_id = _coerce_str(payload.get("history_id") or payload.get("external_id"))
@@ -1900,9 +2107,7 @@ async def _deliver_publicmetadb_update(
     return response_code, _extract_publicmetadb_entry_id(response)
 
 
-async def _deliver_publicmetadb_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     client, api_key = await _load_publicmetadb_client(db, job.user_id)
     history_id = _coerce_str(payload.get("history_id") or payload.get("external_id"))
@@ -1930,24 +2135,21 @@ async def _deliver_publicmetadb_remove(
     return response_code, None
 
 
-async def _deliver_publicmetadb_rating(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_publicmetadb_rating(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     tmdb_id = _extract_publicmetadb_tmdb_id(payload)
     if tmdb_id is None:
         raise ValueError("PublicMetaDB rating sync requires a TMDB ID")
     media_type = _normalize_publicmetadb_media_type(payload)
-    score = _normalize_publicmetadb_rating(payload.get("rating"))
+    clear = job.job_type == "remove_rating"
+    score = None if clear else _normalize_publicmetadb_rating(payload.get("rating"))
     label = _normalize_publicmetadb_label(payload.get("label"))
     season_number = _coerce_int(payload.get("season_number"))
     episode_number = _coerce_int(payload.get("episode_number"))
     client, api_key = await _load_publicmetadb_client(db, job.user_id)
-    if media_type == "tv":
+    if media_type == "tv" and payload.get("rating_scope", "episode") == "episode":
         if season_number is None or episode_number is None:
-            raise ValueError(
-                "PublicMetaDB TV rating sync requires season_number and episode_number"
-            )
+            raise ValueError("PublicMetaDB TV rating sync requires season_number and episode_number")
         existing_id = await _find_publicmetadb_rating_id(
             client,
             api_key,
@@ -1959,6 +2161,8 @@ async def _deliver_publicmetadb_rating(
         )
         if existing_id:
             await client.delete_episode_rating(api_key, existing_id)
+        if clear:
+            return 200, None
         try:
             _response_payload, response_code = await client.create_episode_rating(
                 api_key,
@@ -1993,6 +2197,8 @@ async def _deliver_publicmetadb_rating(
     )
     if existing_id:
         await client.delete_rating(api_key, existing_id)
+    if clear:
+        return 200, None
     try:
         _response_payload, response_code = await client.create_rating(
             api_key,
@@ -2094,9 +2300,7 @@ async def _deliver_stremio_watch(db: AsyncSession, job: OutboxJob) -> tuple[int 
     return 200, external_id
 
 
-async def _deliver_stremio_remove(
-    db: AsyncSession, job: OutboxJob
-) -> tuple[int | None, str | None]:
+async def _deliver_stremio_remove(db: AsyncSession, job: OutboxJob) -> tuple[int | None, str | None]:
     payload = job.payload or {}
     item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
     if not item_id:
@@ -2145,9 +2349,7 @@ async def _deliver_stremio_remove(
     return 200, external_id
 
 
-def _build_stremio_library_change(
-    payload: dict[str, object], watched_at: datetime
-) -> dict[str, object]:
+def _build_stremio_library_change(payload: dict[str, object], watched_at: datetime) -> dict[str, object]:
     item_id = _coerce_str(payload.get("item_id") or payload.get("stremio_item_id"))
     if not item_id:
         raise ValueError("Stremio sync requires item_id")
@@ -2325,9 +2527,7 @@ def _build_stremio_remove_change(payload: dict[str, object]) -> dict[str, object
     }
 
 
-async def _fetch_stremio_library_item(
-    client: StremioClient, auth_key: str, item_id: str
-) -> dict[str, object] | None:
+async def _fetch_stremio_library_item(client: StremioClient, auth_key: str, item_id: str) -> dict[str, object] | None:
     items = await client.get_library_items(auth_key, ids=[item_id])
     for item in items:
         if _coerce_str(item.get("_id") or item.get("id")) == item_id:
@@ -2389,9 +2589,7 @@ async def _resolve_show_media_item_id(
     media_id = result.scalars().first()
     if media_id:
         return str(media_id)
-    result = await db.execute(
-        select(MediaItem.id).where(MediaItem.raw["stremio_id"].as_string() == item_id).limit(1)
-    )
+    result = await db.execute(select(MediaItem.id).where(MediaItem.raw["stremio_id"].as_string() == item_id).limit(1))
     media_id = result.scalars().first()
     if media_id:
         return str(media_id)
@@ -2450,9 +2648,7 @@ def _select_stremio_ctime(existing_item: dict[str, object] | None, fallback: str
     return fallback
 
 
-def _build_trakt_history_payload(
-    payload: dict[str, object], watched_at: datetime
-) -> dict[str, Any]:
+def _build_trakt_history_payload(payload: dict[str, object], watched_at: datetime) -> dict[str, Any]:
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     watched_at_value = watched_at.isoformat()
     if media_type == "movie":
@@ -2662,9 +2858,7 @@ def _build_trakt_remove_payload_for_id(history_id: str) -> dict[str, Any]:
     return {"ids": [cleaned]}
 
 
-def _build_simkl_history_payload(
-    payload: dict[str, object], watched_at: datetime
-) -> dict[str, Any]:
+def _build_simkl_history_payload(payload: dict[str, object], watched_at: datetime) -> dict[str, Any]:
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     watched_at_value = watched_at.isoformat()
     if media_type == "movie":
@@ -2746,20 +2940,25 @@ def _build_simkl_remove_payload(payload: dict[str, object]) -> dict[str, Any]:
     raise ValueError("SIMKL remove requires show or episode ids")
 
 
-def _build_trakt_rating_payload(payload: dict[str, object], rating: int) -> dict[str, Any]:
+def _build_trakt_rating_payload(payload: dict[str, object], rating: int | None) -> dict[str, Any]:
+    score = {"rating": rating} if rating is not None else {}
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     if media_type == "movie":
         movie_ids = _normalize_trakt_ids(payload.get("movie_ids"))
         if not movie_ids:
             raise ValueError("Trakt rating requires movie ids")
-        return {"movies": [{"ids": movie_ids, "rating": rating}]}
+        return {"movies": [{"ids": movie_ids, **score}]}
 
     show_ids = _normalize_trakt_ids(payload.get("show_ids"))
     episode_ids = _normalize_trakt_ids(payload.get("episode_ids"))
     season_number = _coerce_int(payload.get("season_number"))
     episode_number = _coerce_int(payload.get("episode_number"))
+    if show_ids and payload.get("rating_scope") == "series":
+        return {"shows": [{"ids": show_ids, **score}]}
+    if show_ids and payload.get("rating_scope") == "season" and season_number is not None:
+        return {"shows": [{"ids": show_ids, "seasons": [{"number": season_number, **score}]}]}
     if episode_ids:
-        return {"episodes": [{"ids": episode_ids, "rating": rating}]}
+        return {"episodes": [{"ids": episode_ids, **score}]}
     if show_ids and season_number is not None and episode_number is not None:
         return {
             "shows": [
@@ -2768,7 +2967,7 @@ def _build_trakt_rating_payload(payload: dict[str, object], rating: int) -> dict
                     "seasons": [
                         {
                             "number": season_number,
-                            "episodes": [{"number": episode_number, "rating": rating}],
+                            "episodes": [{"number": episode_number, **score}],
                         }
                     ],
                 }
@@ -2777,20 +2976,23 @@ def _build_trakt_rating_payload(payload: dict[str, object], rating: int) -> dict
     raise ValueError("Trakt rating requires show or episode ids")
 
 
-def _build_simkl_rating_payload(payload: dict[str, object], rating: int) -> dict[str, Any]:
+def _build_simkl_rating_payload(payload: dict[str, object], rating: int | None) -> dict[str, Any]:
+    score = {"rating": rating} if rating is not None else {}
     media_type = _coerce_str(payload.get("media_type")) or "movie"
     if media_type == "movie":
         movie_ids = _normalize_simkl_ids(payload.get("movie_ids"))
         if not movie_ids:
             raise ValueError("SIMKL rating requires movie ids")
-        return {"movies": [{"ids": movie_ids, "rating": rating}]}
+        return {"movies": [{"ids": movie_ids, **score}]}
 
     show_ids = _normalize_simkl_ids(payload.get("show_ids"))
     episode_ids = _normalize_simkl_ids(payload.get("episode_ids"))
     season_number = _coerce_int(payload.get("season_number"))
     episode_number = _coerce_int(payload.get("episode_number"))
+    if show_ids and payload.get("rating_scope") == "series":
+        return {"shows": [{"ids": show_ids, **score}]}
     if episode_ids:
-        return {"episodes": [{"ids": episode_ids, "rating": rating}]}
+        return {"episodes": [{"ids": episode_ids, **score}]}
     if show_ids and season_number is not None and episode_number is not None:
         return {
             "shows": [
@@ -2799,7 +3001,7 @@ def _build_simkl_rating_payload(payload: dict[str, object], rating: int) -> dict
                     "seasons": [
                         {
                             "number": season_number,
-                            "episodes": [{"number": episode_number, "rating": rating}],
+                            "episodes": [{"number": episode_number, **score}],
                         }
                     ],
                 }
@@ -2847,7 +3049,7 @@ def _normalize_trakt_rating(value: object) -> int:
     rating = coerce_star_rating(value)
     if rating is None:
         raise ValueError("Trakt rating must be between 0.5 and 5.0 stars")
-    normalized = int(round(rating * 2))
+    normalized = round(rating * 2)
     if normalized < 1 or normalized > 10:
         raise ValueError("Trakt rating must be between 1 and 10")
     return normalized
@@ -2857,7 +3059,7 @@ def _normalize_simkl_rating(value: object) -> int:
     rating = coerce_star_rating(value)
     if rating is None:
         raise ValueError("SIMKL rating must be between 0.5 and 5.0 stars")
-    normalized = int(round(rating * 2))
+    normalized = round(rating * 2)
     if normalized < 1 or normalized > 10:
         raise ValueError("SIMKL rating must be between 1 and 10")
     return normalized
@@ -2886,9 +3088,7 @@ async def _find_trakt_history_for_day(
         if not items:
             return None
         for entry in items:
-            matched_watched_at = _match_trakt_entry_for_payload(
-                entry, payload, media_type, start_at, end_at
-            )
+            matched_watched_at = _match_trakt_entry_for_payload(entry, payload, media_type, start_at, end_at)
             if matched_watched_at:
                 history_id = _coerce_str(entry.get("id"))
                 if history_id:
@@ -3039,9 +3239,7 @@ def _parse_trakt_page_count(headers: dict[str, str]) -> int | None:
         return None
 
 
-async def _sync_local_watched_at(
-    db: AsyncSession, payload: dict[str, object], watched_at: datetime
-) -> None:
+async def _sync_local_watched_at(db: AsyncSession, payload: dict[str, object], watched_at: datetime) -> None:
     watched_item_id = _coerce_str(payload.get("watched_item_id"))
     if not watched_item_id:
         return
@@ -3053,65 +3251,6 @@ async def _sync_local_watched_at(
     if watched.watched_at != watched_at:
         watched.watched_at = watched_at
         db.add(watched)
-
-
-async def _ensure_trakt_access_token(
-    db: AsyncSession,
-    integration_id: str,
-    secret_data: dict[str, object],
-    client: TraktClient,
-) -> str:
-    access_token = secret_data.get("access_token")
-    refresh_token = secret_data.get("refresh_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise TraktError("Trakt access token is missing", status_code=401)
-    if not isinstance(refresh_token, str) or not refresh_token:
-        raise TraktError("Trakt refresh token is missing", status_code=401)
-    expires_at = parse_expires_at(secret_data.get("expires_at"))
-    if not is_token_expired(expires_at):
-        return access_token
-    token = await client.refresh_access_token(refresh_token)
-    updated = dict(secret_data)
-    updated.update(token_to_secret_payload(token))
-    await _save_integration_secret(db, integration_id, updated)
-    return token.access_token
-
-
-async def _ensure_simkl_access_token(
-    db: AsyncSession,
-    integration_id: str,
-    secret_data: dict[str, object],
-    client: SimklClient,
-) -> str:
-    access_token = secret_data.get("access_token")
-    refresh_token = secret_data.get("refresh_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise SimklError("SIMKL access token is missing", status_code=401)
-    if not isinstance(refresh_token, str) or not refresh_token:
-        return access_token
-    expires_at = parse_simkl_expires_at(secret_data.get("expires_at"))
-    if not is_simkl_token_expired(expires_at):
-        return access_token
-    token = await client.refresh_access_token(refresh_token)
-    updated = dict(secret_data)
-    updated.update(simkl_token_to_secret_payload(token))
-    await _save_integration_secret(db, integration_id, updated)
-    return token.access_token
-
-
-async def _save_integration_secret(
-    db: AsyncSession, integration_id: str, secret_data: dict[str, object]
-) -> None:
-    encrypted = encrypt_value(json.dumps(secret_data))
-    result = await db.execute(
-        select(IntegrationSecret).where(IntegrationSecret.integration_id == integration_id)
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(integration_id=integration_id, secret_data=encrypted)
-    else:
-        secret.secret_data = encrypted
-    db.add(secret)
 
 
 def _extract_trakt_history_id(payload: object, media_type: str | None) -> str | None:
@@ -3178,6 +3317,67 @@ async def _update_watch_sync(
         if external_id:
             watch_sync.external_id = external_id
     watch_sync.updated_at = now
+
+
+@dataclass(frozen=True)
+class DeliveryFailure:
+    status: str
+    error: str
+    response_code: int | None
+    retry_after: float | None
+
+
+def _provider_error_formatters() -> tuple[tuple[type[Exception], Any], ...]:
+    return (
+        (LetterboxdError, _format_letterboxd_error),
+        (TraktError, _format_trakt_error),
+        (SimklError, _format_simkl_error),
+        (PublicMetaDbError, _format_publicmetadb_error),
+        (StremioError, _format_stremio_error),
+        (AniListError, _format_anilist_error),
+    )
+
+
+def _describe_failure(exc: Exception) -> DeliveryFailure:
+    for error_type, formatter in _provider_error_formatters():
+        if isinstance(exc, error_type):
+            status_code = getattr(exc, "status_code", None)
+            message = formatter(exc)
+            return DeliveryFailure(
+                status=_classify_failure(status_code, message),
+                error=message,
+                response_code=status_code,
+                retry_after=_retry_after_seconds(exc),
+            )
+    if isinstance(exc, ValueError):
+        return DeliveryFailure("failed_permanent", str(exc), None, None)
+    return DeliveryFailure("failed_retryable", str(exc), None, None)
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """Read Retry-After from the HTTP response that caused a provider error, if any."""
+    cause = exc.__cause__
+    if not isinstance(cause, httpx.HTTPStatusError):
+        return None
+    value = cause.response.headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        return max(float(value), 0.0)
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0.0)
+
+
+def _throttle_delay(retry_after: float | None) -> timedelta:
+    seconds = retry_after if retry_after is not None else 60.0
+    return timedelta(seconds=min(max(seconds, 1.0), 3600.0))
 
 
 def _classify_failure(status_code: int | None, message: str | None) -> str:

@@ -110,9 +110,7 @@ def test_first_watch_creates_and_evaluates_show_watchlist_item_exactly_once() ->
         patch("librarysync.core.watch_pipeline.enrich_watched_metadata", new_callable=AsyncMock),
         patch("librarysync.core.watch_pipeline.backfill_show_episodes", new_callable=AsyncMock),
         patch("librarysync.core.watch_pipeline._sync_to_integrations", new_callable=AsyncMock),
-        patch(
-            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch("librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
         patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
     ):
         asyncio.run(process_new_item_job(db, _make_job()))
@@ -152,9 +150,7 @@ def test_second_watch_evaluates_existing_item_exactly_once_without_push() -> Non
         patch("librarysync.core.watch_pipeline.enrich_watched_metadata", new_callable=AsyncMock),
         patch("librarysync.core.watch_pipeline.backfill_show_episodes", new_callable=AsyncMock),
         patch("librarysync.core.watch_pipeline._sync_to_integrations", new_callable=AsyncMock),
-        patch(
-            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch("librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
         patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
     ):
         asyncio.run(process_new_item_job(db, _make_job()))
@@ -179,9 +175,7 @@ def test_pipeline_skips_check_and_update_when_item_was_created_and_evaluated() -
             new_callable=AsyncMock,
             return_value=(SimpleNamespace(id="wl-1"), True),
         ),
-        patch(
-            "librarysync.core.watch_pipeline.check_and_update_watchlist", new_callable=AsyncMock
-        ) as check,
+        patch("librarysync.core.watch_pipeline.check_and_update_watchlist", new_callable=AsyncMock) as check,
     ):
         asyncio.run(process_new_item_job(db, _make_job()))
 
@@ -202,9 +196,7 @@ def test_pipeline_runs_check_and_update_when_item_already_existed() -> None:
             new_callable=AsyncMock,
             return_value=(SimpleNamespace(id="wl-1"), False),
         ),
-        patch(
-            "librarysync.core.watch_pipeline.check_and_update_watchlist", new_callable=AsyncMock
-        ) as check,
+        patch("librarysync.core.watch_pipeline.check_and_update_watchlist", new_callable=AsyncMock) as check,
     ):
         asyncio.run(process_new_item_job(db, _make_job()))
 
@@ -235,9 +227,7 @@ def test_dropped_show_watch_restores_and_pushes_watchlist_sync() -> None:
         patch("librarysync.core.watch_pipeline.enrich_watched_metadata", new_callable=AsyncMock),
         patch("librarysync.core.watch_pipeline.backfill_show_episodes", new_callable=AsyncMock),
         patch("librarysync.core.watch_pipeline._sync_to_integrations", new_callable=AsyncMock),
-        patch(
-            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch("librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
         patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
     ):
         asyncio.run(process_new_item_job(db, _make_job()))
@@ -272,9 +262,7 @@ def test_dropped_anime_watch_restores_and_pushes_watchlist_sync() -> None:
         patch("librarysync.core.watch_pipeline.enrich_watched_metadata", new_callable=AsyncMock),
         patch("librarysync.core.watch_pipeline.backfill_show_episodes", new_callable=AsyncMock),
         patch("librarysync.core.watch_pipeline._sync_to_integrations", new_callable=AsyncMock),
-        patch(
-            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch("librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
         patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
     ):
         asyncio.run(process_new_item_job(db, _make_job()))

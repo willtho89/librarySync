@@ -324,25 +324,33 @@ async def test_mark_next_episode_watched_creates_watched_event_and_internal_outb
     assert watched_row.media_item_id is None
 
     events = (
-        await db_session.execute(
-            select(WatchEvent).where(
-                WatchEvent.user_id == user.id,
-                WatchEvent.episode_item_id == first_episode.id,
-                WatchEvent.event_type == "manual_watched",
+        (
+            await db_session.execute(
+                select(WatchEvent).where(
+                    WatchEvent.user_id == user.id,
+                    WatchEvent.episode_item_id == first_episode.id,
+                    WatchEvent.event_type == "manual_watched",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(events) == 1
 
     outbox_jobs = (
-        await db_session.execute(
-            select(OutboxJob).where(
-                OutboxJob.user_id == user.id,
-                OutboxJob.target_provider == "internal",
-                OutboxJob.job_type == "new_item_added",
+        (
+            await db_session.execute(
+                select(OutboxJob).where(
+                    OutboxJob.user_id == user.id,
+                    OutboxJob.target_provider == "internal",
+                    OutboxJob.job_type == "new_item_added",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(outbox_jobs) == 1
     assert outbox_jobs[0].payload.get("watched_item_id") == watched.id
 

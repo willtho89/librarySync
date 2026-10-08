@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import random
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, fields
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
@@ -128,9 +129,7 @@ class ProviderDefinition:
     def uses_secrets(self) -> bool:
         return bool(self.secret_fields)
 
-    def normalize_config(
-        self, config: dict[str, Any], context: ProviderContext
-    ) -> dict[str, Any]:
+    def normalize_config(self, config: dict[str, Any], context: ProviderContext) -> dict[str, Any]:
         normalized = dict(config)
         normalized = self._filter_config_fields(normalized)
         if self.config_adapter:
@@ -218,9 +217,7 @@ def _integration_status_for_provider(
     has_credentials: bool,
 ) -> str:
     if provider == PUBLICMETADB_PROVIDER:
-        if has_credentials and (
-            is_publicmetadb_metadata_enabled(config) or is_publicmetadb_sync_enabled(config)
-        ):
+        if has_credentials and (is_publicmetadb_metadata_enabled(config) or is_publicmetadb_sync_enabled(config)):
             return "connected"
         if has_credentials:
             return "configured"
@@ -305,15 +302,11 @@ class MetadataProviderService:
                 Integration.provider.in_(self._registry.providers),
             )
         )
-        integrations = {
-            integration.provider: integration for integration in result.scalars().all()
-        }
+        integrations = {integration.provider: integration for integration in result.scalars().all()}
         integration_ids = [integration.id for integration in integrations.values()]
         if integration_ids:
             result = await self._db.execute(
-                select(IntegrationSecret.integration_id).where(
-                    IntegrationSecret.integration_id.in_(integration_ids)
-                )
+                select(IntegrationSecret.integration_id).where(IntegrationSecret.integration_id.in_(integration_ids))
             )
             secret_ids = set(result.scalars().all())
         else:
@@ -337,17 +330,13 @@ class MetadataProviderService:
             )
         return states
 
-    async def save_provider_settings(
-        self, provider: str, payload: BaseModel
-    ) -> ProviderState:
+    async def save_provider_settings(self, provider: str, payload: BaseModel) -> ProviderState:
         definition = self._registry.get(provider)
         if not definition:
             raise ValueError(f"Unknown provider: {provider}")
 
         result = await self._db.execute(
-            select(Integration).where(
-                Integration.user_id == self._user_id, Integration.provider == provider
-            )
+            select(Integration).where(Integration.user_id == self._user_id, Integration.provider == provider)
         )
         integration = result.scalars().first()
         if not integration:
@@ -370,9 +359,7 @@ class MetadataProviderService:
         has_credentials = False
         if update.should_update_secrets and definition.uses_secrets():
             result = await self._db.execute(
-                select(IntegrationSecret).where(
-                    IntegrationSecret.integration_id == integration.id
-                )
+                select(IntegrationSecret).where(IntegrationSecret.integration_id == integration.id)
             )
             secret = result.scalars().first()
             if update.has_required_secrets:
@@ -393,9 +380,7 @@ class MetadataProviderService:
         else:
             if definition.uses_secrets():
                 result = await self._db.execute(
-                    select(IntegrationSecret.integration_id).where(
-                        IntegrationSecret.integration_id == integration.id
-                    )
+                    select(IntegrationSecret.integration_id).where(IntegrationSecret.integration_id == integration.id)
                 )
                 has_credentials = result.scalar_one_or_none() is not None
             else:
@@ -415,9 +400,7 @@ class MetadataProviderService:
         definition = self._registry.get(provider)
         if not definition:
             return None
-        integration, secret_data = await load_integration_with_secrets(
-            self._db, self._user_id, provider
-        )
+        integration, secret_data = await load_integration_with_secrets(self._db, self._user_id, provider)
         if not integration or not integration.config:
             return None
         if not _metadata_enabled_for_provider(provider, dict(integration.config or {})):
@@ -446,9 +429,7 @@ class MetadataProviderService:
     async def _load_context(self) -> ProviderContext:
         if self._context:
             return self._context
-        result = await self._db.execute(
-            select(User.include_adult_in_search).where(User.id == self._user_id)
-        )
+        result = await self._db.execute(select(User.include_adult_in_search).where(User.id == self._user_id))
         include_adult = bool(result.scalar_one_or_none())
         self._context = ProviderContext(user_id=self._user_id, include_adult=include_adult)
         return self._context
@@ -478,7 +459,7 @@ async def load_random_provider(
         candidates.append(integration.user_id)
     if not candidates:
         return None
-    user_id = random.choice(candidates)
+    user_id = random.choice(candidates)  # noqa: S311 - load spreading, not security
     integration, secret_data = await load_integration_with_secrets(db, user_id, provider)
     if not integration or not integration.config:
         return None
@@ -486,9 +467,7 @@ async def load_random_provider(
         return None
     if definition.uses_secrets() and not secret_data:
         return None
-    result = await db.execute(
-        select(User.include_adult_in_search).where(User.id == user_id)
-    )
+    result = await db.execute(select(User.include_adult_in_search).where(User.id == user_id))
     include_adult = bool(result.scalar_one_or_none())
     context = ProviderContext(user_id=user_id, include_adult=include_adult)
     factory = MetadataProviderFactory(active_registry)

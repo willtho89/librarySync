@@ -5,7 +5,7 @@
       "label": "uv: sync",
       "type": "shell",
       "command": "uv",
-      "args": ["sync", "--all"],
+      "args": ["sync", "--all-packages"],
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -25,7 +25,7 @@
       "label": "ruff: lint (worker)",
       "type": "shell",
       "command": "uv",
-      "args": ["run", "ruff", "check", "worker/src"],
+      "args": ["run", "ruff", "check", "backend/src/librarysync/worker.py"],
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -45,7 +45,7 @@
       "label": "ruff: format (worker)",
       "type": "shell",
       "command": "uv",
-      "args": ["run", "ruff", "format", "worker/src"],
+      "args": ["run", "ruff", "format", "backend/src/librarysync/worker.py"],
       "options": {
         "cwd": "${workspaceFolder}"
       },

@@ -142,9 +142,7 @@ def test_ensure_show_watchlist_item_returns_existing_without_ids() -> None:
 
     with (
         patch("librarysync.core.watchlist.upsert_watchlist_item", new_callable=AsyncMock) as upsert,
-        patch(
-            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch("librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
     ):
         result = asyncio.run(
             watchlist.ensure_show_watchlist_item(
@@ -168,9 +166,7 @@ def test_ensure_show_watchlist_item_creates_missing_without_ids() -> None:
 
     with (
         patch("librarysync.core.watchlist.log_watchlist_event", new_callable=AsyncMock) as log_event,
-        patch(
-            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch("librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
         patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
     ):
         item, evaluated = asyncio.run(
@@ -223,9 +219,7 @@ def test_ensure_show_watchlist_item_recovers_from_insert_race() -> None:
 
     with (
         patch("librarysync.core.watchlist.log_watchlist_event", new_callable=AsyncMock),
-        patch(
-            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch("librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
         patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
     ):
         item, evaluated = asyncio.run(
@@ -283,9 +277,7 @@ def test_upsert_watchlist_item_recovers_from_insert_race() -> None:
 
     with (
         patch("librarysync.core.watchlist.log_watchlist_event", new_callable=AsyncMock),
-        patch(
-            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch("librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
         patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
     ):
         result = asyncio.run(
@@ -349,9 +341,7 @@ def test_upsert_watchlist_item_enqueues_sync_on_create_when_requested() -> None:
 
     with (
         patch("librarysync.core.watchlist.log_watchlist_event", new_callable=AsyncMock),
-        patch(
-            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch("librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
         patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
     ):
         item, status = asyncio.run(
@@ -430,9 +420,7 @@ def test_upsert_watchlist_item_enqueues_sync_on_restore_when_requested() -> None
 
     with (
         patch("librarysync.core.watchlist.log_watchlist_event", new_callable=AsyncMock),
-        patch(
-            "librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch("librarysync.core.watchlist.evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
         patch("librarysync.core.watchlist._enqueue_watchlist_sync", new_callable=AsyncMock) as sync,
     ):
         item, status = asyncio.run(

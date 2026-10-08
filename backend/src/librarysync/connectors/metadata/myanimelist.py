@@ -41,9 +41,7 @@ def _poster_url(images: dict[str, Any] | None) -> str | None:
 
 
 def _normalize_title(raw: dict[str, Any]) -> str | None:
-    return (
-        raw.get("title_english") or raw.get("title") or raw.get("title_japanese") or None
-    )
+    return raw.get("title_english") or raw.get("title") or raw.get("title_japanese") or None
 
 
 class MyAnimeListMetadataProvider(MetadataProvider[MyAnimeListConfig, None]):
@@ -71,9 +69,7 @@ class MyAnimeListMetadataProvider(MetadataProvider[MyAnimeListConfig, None]):
         items = payload.get("data") or []
         return [self._normalize_candidate(item) for item in items]
 
-    async def find_by_external_id(
-        self, external_id: str, scope: str = "all"
-    ) -> list[MediaCandidate]:
+    async def find_by_external_id(self, external_id: str, scope: str = "all") -> list[MediaCandidate]:
         if scope not in (MEDIA_TYPE_ANIME, MEDIA_SCOPE_ALL):
             return []
         return []

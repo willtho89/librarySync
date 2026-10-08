@@ -1,6 +1,6 @@
 const lookupState = {
   id: null,
-  timer: null,
+  pollController: null,
   candidates: [],
   externalCache: new Map(),
   localCache: new Map(),
@@ -19,10 +19,10 @@ const episodeState = {
 };
 const LOCAL_PAGE_LIMIT = 8;
 
-function clearLookupTimer() {
-  if (lookupState.timer) {
-    window.clearTimeout(lookupState.timer);
-    lookupState.timer = null;
+function cancelLookupPolling() {
+  if (lookupState.pollController) {
+    lookupState.pollController.abort();
+    lookupState.pollController = null;
   }
 }
 
@@ -229,7 +229,7 @@ async function startLocalLookup(query, searchScope, options = {}) {
     resetLookupUI();
     return;
   }
-  clearLookupTimer();
+  cancelLookupPolling();
   clearLookupSearchTimer();
   lookupState.lastQuery = query;
   lookupState.lastScope = searchScope;
@@ -297,7 +297,7 @@ async function startExternalLookup(query, searchScope, options = {}) {
   const cached = readLookupCache(cacheKey);
   const cacheFresh = cached && cached.ageMs < 2 * 60 * 1000;
 
-  clearLookupTimer();
+  cancelLookupPolling();
   clearLookupSearchTimer();
   lookupState.lastQuery = query;
   lookupState.lastScope = searchScope;
@@ -323,6 +323,9 @@ async function startExternalLookup(query, searchScope, options = {}) {
       method: "POST",
       body: JSON.stringify({ query, search_scope: searchScope }),
     });
+    if (lookupState.requestVersion !== requestVersion) {
+      return;
+    }
     lookupState.id = response.lookup_id;
     await pollLookupStatus(response.lookup_id, requestVersion, cacheKey);
   } catch (error) {
@@ -357,38 +360,42 @@ async function handleLookupSubmit(data) {
 }
 
 async function pollLookupStatus(lookupId, requestVersion, cacheKey) {
+  cancelLookupPolling();
+  const controller = new AbortController();
+  lookupState.pollController = controller;
+  const isCurrent = () =>
+    lookupState.requestVersion === requestVersion && lookupState.id === lookupId;
   try {
-    const data = await requestJSON(`/api/metadata/lookup/${lookupId}`);
-    if (lookupState.requestVersion !== requestVersion || lookupState.id !== lookupId) {
+    const data = await pollMetadataLookup(lookupId, {
+      signal: controller.signal,
+      onUpdate: (pending) => {
+        const partial = (pending && pending.candidates) || [];
+        if (isCurrent() && partial.length) {
+          renderCandidates(partial);
+          writeLookupCache(cacheKey, partial);
+        }
+      },
+    });
+    if (!isCurrent()) {
       return;
     }
     const candidates = data.candidates || [];
-    if (data.status === "completed") {
-      renderCandidates(candidates);
-      writeLookupCache(cacheKey, candidates);
-      lookupState.externalPending = false;
-      lookupState.externalLoaded = true;
-      updateLookupActions();
-      return;
-    }
-    if (data.status === "failed") {
-      setMessage("lookup-message", data.error || "Lookup failed.", true);
-      lookupState.externalPending = false;
-      updateLookupActions();
-      return;
-    }
-    if (candidates.length) {
-      renderCandidates(candidates);
-      writeLookupCache(cacheKey, candidates);
-    }
-    lookupState.timer = window.setTimeout(
-      () => pollLookupStatus(lookupId, requestVersion, cacheKey),
-      1200,
-    );
+    renderCandidates(candidates);
+    writeLookupCache(cacheKey, candidates);
+    lookupState.externalPending = false;
+    lookupState.externalLoaded = true;
+    updateLookupActions();
   } catch (error) {
+    if (isAbortError(error) || !isCurrent()) {
+      return;
+    }
     lookupState.externalPending = false;
     updateLookupActions();
     setMessage("lookup-message", error.message, true);
+  } finally {
+    if (lookupState.pollController === controller) {
+      lookupState.pollController = null;
+    }
   }
 }
 

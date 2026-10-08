@@ -92,9 +92,7 @@ def apply_catalog_ordering(
 
 
 def _build_last_watched_subquery(user_id: str):
-    media_item_id = func.coalesce(
-        WatchedItem.media_item_id, EpisodeItem.show_media_item_id
-    ).label("media_item_id")
+    media_item_id = func.coalesce(WatchedItem.media_item_id, EpisodeItem.show_media_item_id).label("media_item_id")
     return (
         select(
             media_item_id,
