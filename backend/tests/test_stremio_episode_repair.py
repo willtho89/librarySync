@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from librarysync.db.models import Base, OutboxJob, WatchedItem, WatchEvent, WatchSync
 from librarysync.jobs.merge_history import merge_history_for_user
-from sqlalchemy import create_engine, insert, select
+from sqlalchemy import create_engine, delete, insert, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from test_stremio_episode_repair_migration_postgres import _seed
 
@@ -109,23 +109,71 @@ def test_repair_is_idempotent(database):
     assert _state(engine) == first
 
 
-def test_watches_the_user_deleted_are_not_recreated(database):
-    engine, async_url = database
-    _merge(async_url)
+SEEDED_AT = datetime(2026, 1, 10, 20, 0, tzinfo=timezone.utc)
+
+
+def _delete_watch(engine, watched_id: str, linked_episode: str, previous_watched_at=SEEDED_AT, deleted_at=None) -> None:
+    """What the history routes do: delete the watch and record an audit event against its linked episode."""
     with engine.begin() as connection:
+        connection.execute(delete(WatchSync).where(WatchSync.watched_item_id == watched_id))
+        connection.execute(delete(WatchedItem).where(WatchedItem.id == watched_id))
         connection.execute(
             insert(WatchEvent).values(
-                id="deleted-ep2",
+                id=f"deleted-{watched_id}",
                 user_id="u",
-                episode_item_id="ep2",
+                episode_item_id=linked_episode,
                 event_type="manual_watched_deleted",
-                occurred_at=datetime.now(timezone.utc),
-                raw={},
+                occurred_at=deleted_at or datetime.now(timezone.utc),
+                raw={"watched_id": watched_id, "previous_watched_at": previous_watched_at.isoformat()},
             )
         )
 
+
+def _episodes(engine) -> list[str]:
+    watches, _, _, _ = _state(engine)
+    return sorted(episode_id for _, episode_id in watches)
+
+
+def test_deleted_unmerged_watch_is_not_recreated_on_its_real_episode(database):
+    engine, _ = database
+    _delete_watch(engine, "w1", "ep3")
+
     _repair(engine)
 
-    watches, _, events, _ = _state(engine)
-    assert "ep2" not in {episode_id for _, episode_id in watches}
-    assert events["event-w2"] == "ep2"
+    watches, _, events, jobs = _state(engine)
+    assert dict(watches) == {"w2": "ep2", "w3": "ep3", "w-lone": "other-ep2"}
+    assert jobs == ["w2"]
+    # The event still moves, so a later import does not bring the deleted watch back.
+    assert events["event-w1"] == "ep1"
+
+
+def test_deleted_merge_survivor_is_not_recreated(database):
+    engine, async_url = database
+    _merge(async_url)
+    [survivor] = [watched_id for watched_id, episode_id in _state(engine)[0] if episode_id == "ep3"]
+    _delete_watch(engine, survivor, "ep3")
+
+    _repair(engine)
+
+    assert _episodes(engine) == ["other-ep2"]
+    assert _state(engine)[3] == []
+
+
+def test_older_deletion_of_the_episode_does_not_block_the_repair(database):
+    engine, async_url = database
+    with engine.begin() as connection:
+        connection.execute(
+            insert(WatchEvent).values(
+                id="deleted-2025",
+                user_id="u",
+                episode_item_id="ep2",
+                event_type="manual_watched_deleted",
+                occurred_at=datetime(2025, 5, 1, tzinfo=timezone.utc),
+                raw={"watched_id": "old", "previous_watched_at": "2025-04-30T20:00:00+00:00"},
+            )
+        )
+    _merge(async_url)
+
+    _repair(engine)
+
+    assert _episodes(engine) == ["ep1", "ep2", "ep3", "other-ep2"]

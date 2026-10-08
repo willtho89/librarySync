@@ -19,8 +19,11 @@ names a different, existing episode of the same show. Per group:
   (unmerged case) and moves it, or gets a new watch, Stremio sync and
   ``new_item_added`` job (merged case). Moved watches lose their stale
   downstream sync rows and queued jobs and are re-delivered;
-- watches the user deleted by hand or cleared through Watch State are not
-  recreated;
+- explicit removals are preserved: a deletion audit event for this occurrence
+  (same linked or target episode, ``previous_watched_at`` equal to the import
+  timestamp, recorded after the import) stops any watch from being recreated or
+  reassigned for it, as does a later Watch State "unplayed" clear. Older
+  deletions of the same episode do not count;
 - the events are repointed to the episode they describe.
 """
 
@@ -49,6 +52,7 @@ watch_events = sa.table(
     sa.column("event_type", sa.String),
     sa.column("occurred_at", sa.DateTime(timezone=True)),
     sa.column("raw", sa.JSON),
+    sa.column("created_at", sa.DateTime(timezone=True)),
 )
 episode_items = sa.table(
     "episode_items",
@@ -134,6 +138,7 @@ def repair(bind: sa.Connection) -> int:
             watch_events.c.episode_item_id,
             watch_events.c.occurred_at,
             watch_events.c.raw,
+            watch_events.c.created_at,
             episode_items.c.show_media_item_id,
             episode_items.c.season_number,
             episode_items.c.episode_number,
@@ -162,8 +167,48 @@ def repair(bind: sa.Connection) -> int:
             ImportEvent(row.id, video_id, _episode_id(bind, row.show_media_item_id, int(m[1]), int(m[2])))
             for row, video_id, m in members
         ]
-        repointed += _repair_group(bind, user_id, current_id, occurred_at, events, now)
+        imported_at = min((row.created_at for row, _, _ in members if row.created_at), default=None)
+        repointed += _repair_group(bind, user_id, current_id, occurred_at, imported_at, events, now)
     return repointed
+
+
+def _utc(value: datetime | str | None) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _occurrence_deleted(
+    bind: sa.Connection, user_id: str, episode_id: str, occurred_at: datetime, imported_at: datetime | None
+) -> bool:
+    """True when the user deleted the watch of this exact occurrence after it was imported.
+
+    Deletion audit events record the episode the watch was linked to at the time
+    and its watched_at as ``previous_watched_at``; deletions of other occurrences of
+    the same episode (other timestamps, or before the import) do not count.
+    """
+    rows = bind.execute(
+        sa.select(watch_events.c.raw, watch_events.c.occurred_at).where(
+            watch_events.c.user_id == user_id,
+            watch_events.c.episode_item_id == episode_id,
+            watch_events.c.event_type == "manual_watched_deleted",
+        )
+    ).all()
+    target_at = _utc(occurred_at)
+    imported = _utc(imported_at)
+    for raw, deleted_at in rows:
+        raw = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(raw, dict) or _utc(raw.get("previous_watched_at")) != target_at:
+            continue
+        if imported is not None and (_utc(deleted_at) or imported) < imported:
+            continue
+        return True
+    return False
 
 
 def _episode_id(bind: sa.Connection, show_id: str, season: int, episode: int) -> str | None:
@@ -181,6 +226,7 @@ def _repair_group(
     user_id: str,
     current_id: str,
     occurred_at: datetime,
+    imported_at: datetime | None,
     events: list[ImportEvent],
     now: datetime,
 ) -> int:
@@ -213,11 +259,15 @@ def _repair_group(
         return None
 
     resolvable = [event for event in events if event.target_id is not None]
+    # Deleting one of this group's (misattributed) watches is recorded against the
+    # linked episode, so it cannot be told apart per event: then only exact video-id
+    # moves happen and nothing is reassigned or recreated.
+    group_deleted = _occurrence_deleted(bind, user_id, current_id, occurred_at, imported_at)
     # Events that belong to the linked episode keep a watch there first, so the merge
     # survivor (whose downstream deliveries were made for this episode) stays put.
     for event in [event for event in resolvable if event.target_id == current_id]:
         watched_id = take(event.video_id)
-        if watched_id is None and available:
+        if watched_id is None and available and not group_deleted:
             watched_id = next(iter(available))
             del available[watched_id]
             bind.execute(
@@ -229,7 +279,7 @@ def _repair_group(
         watched_id = take(event.video_id)
         if watched_id is not None:
             _move_watch(bind, user_id, watched_id, event.target_id, now)
-        elif _may_create_watch(bind, user_id, event.target_id, occurred_at):
+        elif not group_deleted and _may_create_watch(bind, user_id, event.target_id, occurred_at, imported_at):
             _create_watch(bind, user_id, event, occurred_at, now)
     for event in resolvable:
         bind.execute(
@@ -267,7 +317,9 @@ def _move_watch(bind: sa.Connection, user_id: str, watched_id: str, target_id: s
     _enqueue_delivery(bind, user_id, watched_id, now)
 
 
-def _may_create_watch(bind: sa.Connection, user_id: str, target_id: str, occurred_at: datetime) -> bool:
+def _may_create_watch(
+    bind: sa.Connection, user_id: str, target_id: str, occurred_at: datetime, imported_at: datetime | None
+) -> bool:
     exists = bind.execute(
         sa.select(watched_items.c.id).where(
             watched_items.c.user_id == user_id,
@@ -277,14 +329,7 @@ def _may_create_watch(bind: sa.Connection, user_id: str, target_id: str, occurre
     ).first()
     if exists is not None:
         return False
-    deleted = bind.execute(
-        sa.select(watch_events.c.id).where(
-            watch_events.c.user_id == user_id,
-            watch_events.c.episode_item_id == target_id,
-            watch_events.c.event_type == "manual_watched_deleted",
-        )
-    ).first()
-    if deleted is not None:
+    if _occurrence_deleted(bind, user_id, target_id, occurred_at, imported_at):
         return False
     # Respect an explicit Watch State "unplayed" clear made after this watch.
     cleared = bind.execute(
