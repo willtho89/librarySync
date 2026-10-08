@@ -49,6 +49,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
+# Dependencies are already installed in the builder. Drop the base image's
+# unused installer and its bundled copy, including vulnerable vendored libraries.
+RUN /usr/local/bin/python -m pip uninstall --yes pip && \
+    /usr/local/bin/python -c "import pathlib, ensurepip, shutil; shutil.rmtree(pathlib.Path(ensurepip.__file__).parent)"
+
 RUN groupadd --system --gid 10001 app && \
     useradd --system --uid 10001 --gid app --create-home --home-dir /home/app app
 
