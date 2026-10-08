@@ -11,7 +11,7 @@ COPY backend/src/librarysync/static/*.js /app/backend/src/librarysync/static/
 
 RUN npm run build
 
-FROM ghcr.io/astral-sh/uv:0.12.19 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.23 AS uv
 
 FROM python:3.14-slim AS builder
 
