@@ -527,21 +527,37 @@ async def process_outbox_once(limit: int = 50) -> int:
         return len(jobs)
 
 
-async def _watch_was_deleted(db: AsyncSession, job: OutboxJob) -> bool:
-    """True for a watch push whose watch no longer exists.
-
-    cancel_queued_pushes only reaches waiting jobs; a push already claimed when the
-    watch was deleted (or retried afterwards) is caught here so delivering its stored
-    payload cannot recreate history the user removed.
-    """
+def _pushed_watch_id(job: OutboxJob) -> str | None:
     if job.job_type not in WATCH_PUSH_JOB_TYPES:
-        return False
+        return None
     watched_item_id = (job.payload or {}).get("watched_item_id")
-    if not watched_item_id:
-        return False
-    # Query instead of db.get: the identity map may still hold a row deleted elsewhere.
-    result = await db.execute(select(WatchedItem.id).where(WatchedItem.id == str(watched_item_id)))
-    return result.first() is None
+    return str(watched_item_id) if watched_item_id else None
+
+
+async def _lock_live_watches(db: AsyncSession, jobs: list[OutboxJob]) -> set[str]:
+    """Share-lock the watches these jobs push and return the ids that still exist.
+
+    The lock is held until the job's transaction commits after the provider write,
+    so a concurrent deletion waits for an in-flight push and then queues its provider
+    removal behind it; a deletion that committed first leaves the watch missing here
+    and the push is skipped. cancel_queued_pushes covers jobs that are still waiting.
+    """
+    watched_ids = sorted({watched_id for job in jobs if (watched_id := _pushed_watch_id(job))})
+    if not watched_ids:
+        return set()
+    # A query (not db.get): the identity map may still hold a row deleted elsewhere.
+    result = await db.execute(
+        select(WatchedItem.id)
+        .where(WatchedItem.id.in_(watched_ids))
+        .order_by(WatchedItem.id)
+        .with_for_update(read=True)
+    )
+    return set(result.scalars().all())
+
+
+def _pushes_missing_watch(job: OutboxJob, existing: set[str]) -> bool:
+    watched_id = _pushed_watch_id(job)
+    return watched_id is not None and watched_id not in existing
 
 
 def _retire_for_deleted_watch(job: OutboxJob, now: datetime) -> None:
@@ -737,16 +753,17 @@ async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
     if not jobs:
         return
     now = datetime.now(timezone.utc)
+    # Locks the batch's watches until the commit below (see _lock_live_watches).
+    existing = await _lock_live_watches(db, jobs)
     live_jobs: list[OutboxJob] = []
     for job in jobs:
-        if await _watch_was_deleted(db, job):
+        if _pushes_missing_watch(job, existing):
             _retire_for_deleted_watch(job, now)
         else:
             live_jobs.append(job)
-    if len(live_jobs) != len(jobs):
-        await db.commit()
     jobs = live_jobs
     if not jobs:
+        await db.commit()
         return
     # A batch is one provider request, so it costs one rate-limit token.
     rate_decision = await RATE_LIMITER.try_acquire(db, jobs[0].user_id, jobs[0].target_provider, now=now)
@@ -884,7 +901,8 @@ async def _lock_fair_batch(db: AsyncSession, filters: list[Any], limit: int) -> 
 
 async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     now = datetime.now(timezone.utc)
-    if await _watch_was_deleted(db, job):
+    # Locks the watch until this job's commit (see _lock_live_watches).
+    if _pushes_missing_watch(job, await _lock_live_watches(db, [job])):
         _retire_for_deleted_watch(job, now)
         await db.commit()
         return

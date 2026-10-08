@@ -137,3 +137,74 @@ async def test_token_refresh_leaves_the_callers_transaction_open(factory):
         await db.rollback()
     async with factory() as db:
         assert (await db.get(User, "u")).username == "u"
+
+
+async def _seed_watch_pushes(factory, watched_ids: list[str]) -> None:
+    from librarysync.db.models import MediaItem, WatchedItem
+
+    async with factory() as db:
+        db.add(MediaItem(id="movie", media_type="movie", title="Movie"))
+        await db.commit()
+        for watched_id in watched_ids:
+            db.add(
+                WatchedItem(id=watched_id, user_id="u", media_item_id="movie", watched_at=datetime.now(timezone.utc))
+            )
+        await db.commit()
+        for watched_id in watched_ids:
+            await enqueue_outbox_job(
+                db,
+                user_id="u",
+                target_provider="trakt",
+                job_type="push_watched",
+                payload={"watched_item_id": watched_id},
+            )
+        await db.commit()
+
+
+async def _try_delete_watch(factory, watched_id: str) -> bool:
+    """Delete the watch from another session; False when it has to wait for a lock."""
+    from librarysync.db.models import WatchedItem
+    from sqlalchemy import delete
+
+    async with factory() as other:
+        try:
+            await other.execute(text("SET LOCAL lock_timeout = '300ms'"))
+            await other.execute(delete(WatchedItem).where(WatchedItem.id == watched_id))
+            await other.commit()
+            return True
+        except DBAPIError:
+            await other.rollback()
+            return False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batched", [False, True])
+async def test_deletion_waits_for_an_in_flight_push(factory, monkeypatch, batched):
+    watched_ids = ["w1", "w2"] if batched else ["w1"]
+    await _seed_watch_pushes(factory, watched_ids)
+    deletion_during_delivery: list[bool] = []
+
+    async def _rate_limit(*_args, **_kwargs):
+        # The user deletes the watch while the worker is about to deliver it.
+        deletion_during_delivery.append(await _try_delete_watch(factory, "w1"))
+        return None
+
+    monkeypatch.setattr(process_outbox, "load_blocked_outbox_users", AsyncMock(return_value=set()))
+    monkeypatch.setattr(process_outbox.RATE_LIMITER, "try_acquire", _rate_limit)
+    deliver = AsyncMock(return_value=SimpleNamespace(response_code=201, external_id=None, resolved_rewatch=None))
+    deliver_batch = AsyncMock(return_value=201)
+    monkeypatch.setattr(process_outbox.OUTBOX_DISPATCHER, "deliver", deliver)
+    monkeypatch.setattr(process_outbox, "_deliver_batch", deliver_batch)
+
+    async with factory() as worker_db:
+        claimed = await process_outbox._claim_jobs(worker_db, 50)
+        if batched:
+            await process_outbox._process_job_batch(worker_db, claimed)
+        else:
+            await process_outbox._process_job(worker_db, claimed[0])
+
+    # The deletion could not slip in between the existence check and the provider write.
+    assert deletion_during_delivery == [False]
+    assert (deliver_batch if batched else deliver).await_count == 1
+    # Once the push is committed the deletion goes through (and would queue the removal after it).
+    assert await _try_delete_watch(factory, "w1") is True
