@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -99,6 +99,7 @@ class EpisodeSummary:
     tmdb_id: str | None
     tvdb_id: str | None
     simkl_id: str | None
+    air_date: date | None
     raw: dict[str, Any]
 
 
@@ -307,6 +308,15 @@ def _extract_activity_timestamp(payload: dict[str, Any] | None) -> datetime | No
             if parsed:
                 return parsed
     return None
+
+
+def _parse_date_value(value: object) -> date | None:
+    if isinstance(value, datetime):
+        return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).date()
+    if isinstance(value, date):
+        return value
+    parsed = parse_datetime(value)
+    return parsed.astimezone(timezone.utc).date() if parsed else None
 
 
 def _extract_activity_block_timestamp(payload: dict[str, Any] | None, key: str) -> datetime | None:
@@ -1225,6 +1235,7 @@ async def _get_or_create_episode_item(
         season_number=episode.season_number,
         episode_number=episode.episode_number,
         title=episode.title,
+        air_date=episode.air_date,
         tmdb_id=episode.tmdb_id,
         tvdb_id=episode.tvdb_id,
         imdb_id=episode.imdb_id,
@@ -1344,6 +1355,8 @@ async def _apply_episode_updates(
     await _maybe_set_episode_id(db, item, "tvdb_id", episode.tvdb_id)
     if episode.title and not item.title:
         item.title = episode.title
+    if episode.air_date and item.air_date != episode.air_date:
+        item.air_date = episode.air_date
     item.raw = _merge_episode_raw(item.raw, episode.simkl_id, episode.raw)
 
 
@@ -1678,6 +1691,10 @@ def _extract_show_summary(entry: dict[str, Any]) -> ShowSummary | None:
 
 def _extract_episode_summary(entry: dict[str, Any]) -> EpisodeSummary | None:
     payload = entry.get("episode")
+    if isinstance(payload, dict):
+        # Calendar v2 keeps the airing timestamp and finale marker on the airing,
+        # rather than inside its nested episode object.
+        payload = {**{key: entry[key] for key in ("date", "finale_type") if key in entry}, **payload}
     if isinstance(payload, (int, str)):
         payload = {
             "season": entry.get("season") or entry.get("season_number"),
@@ -1702,13 +1719,22 @@ def _extract_episode_summary(entry: dict[str, Any]) -> EpisodeSummary | None:
         tmdb_id=_coerce_str(ids.get("tmdb")),
         tvdb_id=_coerce_str(ids.get("tvdb")),
         simkl_id=_coerce_str(ids.get("simkl")),
+        air_date=_extract_episode_air_date(payload),
         raw=_sanitize_simkl_payload(payload),
     )
 
 
+def _extract_episode_air_date(payload: dict[str, Any]) -> date | None:
+    for key in ("air_date", "aired", "date", "release_date"):
+        parsed = _parse_date_value(payload.get(key))
+        if parsed:
+            return parsed
+    return None
+
+
 def _sanitize_simkl_payload(payload: dict[str, Any]) -> dict[str, Any]:
     keep: dict[str, Any] = {}
-    for key in ("title", "year", "season", "episode", "number"):
+    for key in ("title", "year", "season", "episode", "number", "air_date", "aired", "date", "finale_type"):
         if key in payload:
             keep[key] = payload[key]
     ids = payload.get("ids")

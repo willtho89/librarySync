@@ -145,6 +145,7 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - **`metadata_lookup`**: Resolves lookup requests into candidates (stale in-progress lookups are reclaimed after five minutes)
 - **`metadata_cache`**: Scans recent candidates and seeds `media_items` to accelerate search
 - **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history and episode lists that are missing posters or identifiers
+- **SIMKL calendar v2**: The `metadata_backfill` loop refreshes public TV/anime rolling and recent monthly calendars every six hours when `SIMKL_CLIENT_ID` is configured. It only updates local shows matched by identifiers, stores dates/finale markers in `EpisodeItem.raw.simkl_calendar`, and never imports watches. Absolute anime numbering only updates existing episodes in an unambiguous single-season catalog.
 
 #### Import Jobs
 - **`quick_import`**: Runs 7-day import window on the user's configured schedule (30 min to 7 days). Due runs are selected from an unlocked scan, then locked. Per-user runs are single-flight via a lease stored in the integration config (10-minute expiry). The lease owner is unique per claim (so loops of one process exclude each other too) and is released after every provider step; an expired lease lets any worker resume a stuck run from its saved queue index

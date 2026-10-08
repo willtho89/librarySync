@@ -24,6 +24,7 @@ from librarysync.db.models import (
     WatchedItem,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
+from librarysync.jobs.simkl_calendar import process_simkl_calendar_once
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ METADATA_BACKFILL_SAMPLE_RATE = 0.10
 
 
 async def process_metadata_backfill_once() -> int:
+    calendar_processed = await process_simkl_calendar_once()
     init_session_factory()
     async with SessionLocal() as db:
         job = await claim_scheduled_job(
@@ -57,7 +59,7 @@ async def process_metadata_backfill_once() -> int:
                 METADATA_BACKFILL_LEASE,
             )
         if not job:
-            return 0
+            return calendar_processed
         job_name = job.name
         try:
             await run_metadata_backfill(
@@ -69,10 +71,10 @@ async def process_metadata_backfill_once() -> int:
         except Exception:
             logger.exception("Metadata backfill failed")
             await fail_scheduled_job(db, job_name, METADATA_BACKFILL_RETRY_DELAY)
-            return 0
+            return calendar_processed
         interval = METADATA_BACKFILL_FORCE_INTERVAL if force_refresh else METADATA_BACKFILL_INTERVAL
         await complete_scheduled_job(db, job, interval)
-    return 1
+    return 1 + calendar_processed
 
 
 async def run_metadata_backfill(

@@ -78,7 +78,11 @@ Failed logins are throttled per username and per client address (HTTP 429 with `
 ### OAuth
 - `TRAKT_CLIENT_ID` (default `your_trakt_client_id`): Trakt OAuth app client ID.
 - `TRAKT_CLIENT_SECRET` (default `your_trakt_client_secret`): Trakt OAuth app secret.
-- `SIMKL_CLIENT_ID` (default `your_simkl_client_id`): SIMKL OAuth app client ID.
+- `SIMKL_CLIENT_ID` (default `your_simkl_client_id`): SIMKL app client ID. Also enables the public
+  SIMKL calendar v2 refresh for local shows, including finale badges in Up Next. The
+  `metadata_backfill` worker refreshes TV/anime calendars every six hours using the rolling,
+  current-month and previous-month files. No connected SIMKL account is needed for calendar data.
+  Anime airings with absolute numbering only update existing episodes in a single-season catalog.
 - `SIMKL_CLIENT_SECRET` (default `your_simkl_client_secret`): SIMKL OAuth app secret.
 - `ANILIST_CLIENT_ID` / `ANILIST_CLIENT_SECRET`: AniList OAuth app credentials.
 
