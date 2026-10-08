@@ -290,6 +290,7 @@ class SyncCoordinator:
 
 # Queued jobs that would (re)create a watch at a provider.
 WATCH_PUSH_JOB_TYPES = ("new_item_added", "push_watched", "push_rating", "update_history", "update_log_entry")
+WATCH_DELETED_ERROR = "Cancelled because the watch was deleted"
 
 
 async def cancel_queued_pushes(db: AsyncSession, user_id: str, watched_item_ids: list[str] | None = None) -> int:
@@ -314,7 +315,7 @@ async def cancel_queued_pushes(db: AsyncSession, user_id: str, watched_item_ids:
         job.status = "superseded"
         job.dedupe_key = None
         job.run_after = None
-        job.last_error = "Cancelled because the watch was deleted"
+        job.last_error = WATCH_DELETED_ERROR
         job.updated_at = now
     return len(jobs)
 

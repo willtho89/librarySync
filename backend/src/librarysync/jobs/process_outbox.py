@@ -67,7 +67,12 @@ from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.core.ratings import coerce_star_rating
 from librarysync.core.shutdown import shutdown_requested
-from librarysync.core.watch_pipeline import process_new_item_job, process_watchlist_update_job
+from librarysync.core.watch_pipeline import (
+    WATCH_DELETED_ERROR,
+    WATCH_PUSH_JOB_TYPES,
+    process_new_item_job,
+    process_watchlist_update_job,
+)
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
@@ -522,6 +527,32 @@ async def process_outbox_once(limit: int = 50) -> int:
         return len(jobs)
 
 
+async def _watch_was_deleted(db: AsyncSession, job: OutboxJob) -> bool:
+    """True for a watch push whose watch no longer exists.
+
+    cancel_queued_pushes only reaches waiting jobs; a push already claimed when the
+    watch was deleted (or retried afterwards) is caught here so delivering its stored
+    payload cannot recreate history the user removed.
+    """
+    if job.job_type not in WATCH_PUSH_JOB_TYPES:
+        return False
+    watched_item_id = (job.payload or {}).get("watched_item_id")
+    if not watched_item_id:
+        return False
+    # Query instead of db.get: the identity map may still hold a row deleted elsewhere.
+    result = await db.execute(select(WatchedItem.id).where(WatchedItem.id == str(watched_item_id)))
+    return result.first() is None
+
+
+def _retire_for_deleted_watch(job: OutboxJob, now: datetime) -> None:
+    job.status = SUPERSEDED_STATUS
+    job.dedupe_key = None
+    job.run_after = None
+    job.last_error = WATCH_DELETED_ERROR
+    job.updated_at = now
+    logger.info("Outbox job %s %s skipped: its watch was deleted", job.id, f"{job.target_provider}:{job.job_type}")
+
+
 async def _has_waiting_successor(db: AsyncSession, job: OutboxJob) -> bool:
     if not job.dedupe_key:
         return False
@@ -706,6 +737,17 @@ async def _process_job_batch(db: AsyncSession, jobs: list[OutboxJob]) -> None:
     if not jobs:
         return
     now = datetime.now(timezone.utc)
+    live_jobs: list[OutboxJob] = []
+    for job in jobs:
+        if await _watch_was_deleted(db, job):
+            _retire_for_deleted_watch(job, now)
+        else:
+            live_jobs.append(job)
+    if len(live_jobs) != len(jobs):
+        await db.commit()
+    jobs = live_jobs
+    if not jobs:
+        return
     # A batch is one provider request, so it costs one rate-limit token.
     rate_decision = await RATE_LIMITER.try_acquire(db, jobs[0].user_id, jobs[0].target_provider, now=now)
     if rate_decision and not rate_decision.allowed:
@@ -842,6 +884,10 @@ async def _lock_fair_batch(db: AsyncSession, filters: list[Any], limit: int) -> 
 
 async def _process_job(db: AsyncSession, job: OutboxJob) -> None:
     now = datetime.now(timezone.utc)
+    if await _watch_was_deleted(db, job):
+        _retire_for_deleted_watch(job, now)
+        await db.commit()
+        return
     rate_decision = await RATE_LIMITER.try_acquire(
         db,
         job.user_id,

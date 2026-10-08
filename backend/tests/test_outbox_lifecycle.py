@@ -11,7 +11,7 @@ import pytest_asyncio
 from librarysync.connectors.services.trakt import TraktError
 from librarysync.core import shutdown
 from librarysync.core.watch_pipeline import enqueue_outbox_job
-from librarysync.db.models import Base, OutboxJob, User
+from librarysync.db.models import Base, MediaItem, OutboxJob, User, WatchedItem
 from librarysync.jobs import process_outbox
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -27,6 +27,13 @@ async def factory():
     session_factory = async_sessionmaker(engine, autoflush=False, expire_on_commit=False)
     async with session_factory() as db:
         db.add(User(id=USER, username="one", password_hash="unused"))
+        db.add(MediaItem(id="movie", media_type="movie", title="Movie"))
+        await db.commit()
+        # Watch pushes are only delivered while their watch exists.
+        for watched_id in ("w1", "w2", "w3"):
+            db.add(
+                WatchedItem(id=watched_id, user_id=USER, media_item_id="movie", watched_at=datetime.now(timezone.utc))
+            )
         await db.commit()
     yield session_factory
     await engine.dispose()
@@ -368,3 +375,47 @@ async def test_claims_interleave_users_instead_of_draining_one_backlog(factory):
 
     assert "b0" in {job.id for job in claimed}
     assert len(claimed) == 4
+
+
+async def _delete_watch(factory, watched_id: str) -> None:
+    from librarysync.core.watch_pipeline import cancel_queued_pushes
+
+    async with factory() as db:
+        await cancel_queued_pushes(db, USER, [watched_id])
+        await db.delete(await db.get(WatchedItem, watched_id))
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_push_claimed_before_its_watch_was_deleted_is_not_delivered(factory):
+    await _enqueue(factory, "push_watched", {"watched_item_id": "w1"})
+    deliver = AsyncMock(return_value=SimpleNamespace(response_code=201, external_id=None, resolved_rewatch=None))
+
+    with _outbox_patches(factory, deliver=deliver):
+        async with factory() as worker_db:
+            [claimed] = await process_outbox._claim_jobs(worker_db, 50)
+            await _delete_watch(factory, "w1")
+            await process_outbox._process_job(worker_db, claimed)
+
+    deliver.assert_not_awaited()
+    job = (await _jobs(factory))[0]
+    assert job.status == process_outbox.SUPERSEDED_STATUS
+    assert job.last_error == "Cancelled because the watch was deleted"
+
+
+@pytest.mark.asyncio
+async def test_batch_skips_jobs_whose_watch_was_deleted_after_claim(factory):
+    for watched_id in ("w1", "w2"):
+        await _enqueue(factory, "push_watched", {"watched_item_id": watched_id})
+    deliver_batch = AsyncMock(return_value=201)
+
+    with _outbox_patches(factory, deliver_batch=deliver_batch):
+        async with factory() as worker_db:
+            claimed = await process_outbox._claim_jobs(worker_db, 50)
+            await _delete_watch(factory, "w1")
+            await process_outbox._process_job_batch(worker_db, claimed)
+
+    delivered = deliver_batch.await_args.args[1]
+    assert [job.payload["watched_item_id"] for job in delivered] == ["w2"]
+    statuses = {job.payload["watched_item_id"]: job.status for job in await _jobs(factory)}
+    assert statuses == {"w1": process_outbox.SUPERSEDED_STATUS, "w2": "succeeded"}
