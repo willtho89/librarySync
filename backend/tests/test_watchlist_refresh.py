@@ -55,15 +55,9 @@ def test_refresh_dispatches_anime_to_show_status_evaluation() -> None:
     job = SimpleNamespace(last_run_at=None)
 
     with (
-        patch.object(
-            watchlist_refresh, "_load_watchlist_rows_for_refresh", new_callable=AsyncMock
-        ) as load_rows,
-        patch.object(
-            watchlist_refresh, "_backfill_missing_show_episodes", new_callable=AsyncMock
-        ),
-        patch.object(
-            watchlist_refresh, "evaluate_show_watchlist_status", new_callable=AsyncMock
-        ) as evaluate,
+        patch.object(watchlist_refresh, "_load_watchlist_rows_for_refresh", new_callable=AsyncMock) as load_rows,
+        patch.object(watchlist_refresh, "_backfill_missing_show_episodes", new_callable=AsyncMock),
+        patch.object(watchlist_refresh, "evaluate_show_watchlist_status", new_callable=AsyncMock) as evaluate,
         patch.object(watchlist_refresh, "_refresh_movie_status", new_callable=AsyncMock) as refresh_movie,
         patch.object(watchlist_refresh, "extend_scheduled_job", new_callable=AsyncMock),
     ):
@@ -104,8 +98,7 @@ def test_load_rows_episode_queries_treat_anime_like_tv() -> None:
 
     assert result == []
     compiled_queries = [
-        str(call.args[0].compile(compile_kwargs={"literal_binds": True})).lower()
-        for call in execute.await_args_list
+        str(call.args[0].compile(compile_kwargs={"literal_binds": True})).lower() for call in execute.await_args_list
     ]
     assert compiled_queries
     for compiled in compiled_queries:

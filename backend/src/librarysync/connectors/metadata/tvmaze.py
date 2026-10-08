@@ -64,9 +64,7 @@ class TvmazeMetadataProvider(MetadataProvider[TvmazeConfig, None]):
             candidates.append(self._normalize_candidate(show))
         return candidates
 
-    async def find_by_external_id(
-        self, external_id: str, scope: str = "all"
-    ) -> list[MediaCandidate]:
+    async def find_by_external_id(self, external_id: str, scope: str = "all") -> list[MediaCandidate]:
         if scope not in {"all", MEDIA_TYPE_TV}:
             return []
         if not external_id.lower().startswith("tt"):

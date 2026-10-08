@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import ClassVar, Iterable
+from typing import ClassVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
 

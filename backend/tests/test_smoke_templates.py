@@ -14,6 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 def mock_lifespan():
     with (
         patch("librarysync.main.run_migrations"),
+        patch("librarysync.main.validate_security_settings"),
         patch("librarysync.main.init_session_factory"),
     ):
         yield
@@ -114,9 +115,7 @@ class TestTemplateResponseSignature:
 
         assert isinstance(request, Request), f"First arg should be Request, got {type(request)}"
         assert isinstance(name, str), f"Second arg should be template name (str), got {type(name)}"
-        assert isinstance(context, dict) or context is None, (
-            f"Third arg should be context (dict), got {type(context)}"
-        )
+        assert isinstance(context, dict) or context is None, f"Third arg should be context (dict), got {type(context)}"
 
     def test_no_type_error_from_dict_key(self, client):
         response = client.get("/")
@@ -133,3 +132,45 @@ class TestStaticAssets:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestSecurityHeaders:
+    def test_pages_send_csp_that_allows_their_inline_scripts(self, client):
+        import base64
+        import hashlib
+        import re
+
+        response = client.get("/login")
+        assert response.status_code == 200
+        csp = response.headers["content-security-policy"]
+        assert "frame-ancestors 'none'" in csp
+        assert "'unsafe-inline'" not in csp.split("script-src", 1)[1].split(";", 1)[0]
+        inline_scripts = re.findall(r"<script>(.*?)</script\s*>", response.text, re.DOTALL | re.IGNORECASE)
+        assert inline_scripts, "expected the pre-paint theme script"
+        for body in inline_scripts:
+            digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
+            assert f"'sha256-{digest}'" in csp
+
+    def test_common_headers_on_api_responses(self, client):
+        response = client.get("/health")
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["x-frame-options"] == "DENY"
+        assert "content-security-policy" not in response.headers
+
+
+@pytest.mark.parametrize("route", ["/docs", "/redoc", "/docs/oauth2-redirect"])
+def test_api_documentation_pages_are_allowed_by_their_csp(client, route):
+    import base64
+    import hashlib
+    import re
+    from urllib.parse import urlparse
+
+    response = client.get(route)
+    assert response.status_code == 200
+    policy = response.headers["content-security-policy"]
+    script_src = next(d.strip() for d in policy.split(";") if d.strip().startswith("script-src "))
+    external = [urlparse(src).netloc for src in re.findall(r'<script[^>]+src="([^"]+)"', response.text)]
+    assert all(host in script_src for host in external if host), (external, script_src)
+    for body in re.findall(r"<script>(.*?)</script\s*>", response.text, re.DOTALL | re.IGNORECASE):
+        digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
+        assert f"'sha256-{digest}'" in script_src

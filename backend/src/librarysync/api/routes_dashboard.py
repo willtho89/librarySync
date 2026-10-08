@@ -9,6 +9,8 @@ from librarysync.config import settings
 from librarysync.core.next_episode import episode_to_payload, find_next_episodes_bulk
 from librarysync.db.models import EpisodeItem, MediaItem, User, WatchedItem
 
+MIN_COMPARISON_USERS = 3
+
 router = APIRouter(
     prefix="/api/dashboard",
     tags=["dashboard"],
@@ -61,9 +63,7 @@ async def get_up_next(
         .limit(UP_NEXT_CANDIDATE_LIMIT)
         .subquery()
     )
-    result = await db.execute(
-        select(last_watched_subq.c.media_item_id, last_watched_subq.c.last_watched_at)
-    )
+    result = await db.execute(select(last_watched_subq.c.media_item_id, last_watched_subq.c.last_watched_at))
     rows = result.all()
     if not rows:
         return {"items": []}
@@ -71,9 +71,7 @@ async def get_up_next(
     next_episodes = await find_next_episodes_bulk(db, current_user.id, show_ids, now_date)
     if not next_episodes:
         return {"items": []}
-    media_result = await db.execute(
-        select(MediaItem).where(MediaItem.id.in_(list(next_episodes.keys())))
-    )
+    media_result = await db.execute(select(MediaItem).where(MediaItem.id.in_(list(next_episodes.keys()))))
     media_by_id = {media.id: media for media in media_result.scalars().all()}
     items = []
     for row in rows:
@@ -81,9 +79,7 @@ async def get_up_next(
         media = media_by_id.get(row.media_item_id)
         if not episode or not media:
             continue
-        is_new_release = bool(
-            episode.air_date and episode.air_date > row.last_watched_at.date()
-        )
+        is_new_release = bool(episode.air_date and episode.air_date > row.last_watched_at.date())
         items.append(
             {
                 "media_item_id": media.id,
@@ -116,13 +112,10 @@ async def get_dashboard_stats(
     - Integration summary
     - System statistics
     """
-    
+
     # Check if dashboard stats are enabled
     if not settings.enable_dashboard_stats:
-        raise HTTPException(
-            status_code=403,
-            detail="Dashboard statistics are disabled by the administrator"
-        )
+        raise HTTPException(status_code=403, detail="Dashboard statistics are disabled by the administrator")
 
     # Get user watch statistics
     watch_stats_query = text("""
@@ -138,9 +131,7 @@ async def get_dashboard_stats(
         FROM user_watch_stats
         WHERE user_id = :user_id
     """)
-    watch_stats_result = await db.execute(
-        watch_stats_query, {"user_id": current_user.id}
-    )
+    watch_stats_result = await db.execute(watch_stats_query, {"user_id": current_user.id})
     watch_stats_row = watch_stats_result.fetchone()
 
     if watch_stats_row:
@@ -176,9 +167,7 @@ async def get_dashboard_stats(
         WHERE user_id = :user_id
         ORDER BY watch_date ASC
     """)
-    daily_activity_result = await db.execute(
-        daily_activity_query, {"user_id": current_user.id}
-    )
+    daily_activity_result = await db.execute(daily_activity_query, {"user_id": current_user.id})
     daily_activity = [
         {
             "date": row.watch_date.isoformat(),
@@ -197,12 +186,9 @@ async def get_dashboard_stats(
         WHERE user_id = :user_id
         ORDER BY rating_bucket
     """)
-    rating_dist_result = await db.execute(
-        rating_dist_query, {"user_id": current_user.id}
-    )
+    rating_dist_result = await db.execute(rating_dist_query, {"user_id": current_user.id})
     rating_distribution = [
-        {"rating": float(row.rating_bucket), "count": row.count}
-        for row in rating_dist_result.fetchall()
+        {"rating": float(row.rating_bucket), "count": row.count} for row in rating_dist_result.fetchall()
     ]
 
     # Get integration summary
@@ -214,9 +200,7 @@ async def get_dashboard_stats(
         FROM user_integration_summary
         WHERE user_id = :user_id
     """)
-    integration_result = await db.execute(
-        integration_query, {"user_id": current_user.id}
-    )
+    integration_result = await db.execute(integration_query, {"user_id": current_user.id})
     integration_row = integration_result.fetchone()
 
     if integration_row:
@@ -281,62 +265,65 @@ async def get_dashboard_stats(
         WHERE user_id = :user_id
         AND watched_at >= :since
     """)
-    
-    last_7_days_result = await db.execute(
-        recent_activity_query, 
-        {"user_id": current_user.id, "since": seven_days_ago}
-    )
+
+    last_7_days_result = await db.execute(recent_activity_query, {"user_id": current_user.id, "since": seven_days_ago})
     last_7_days_count = last_7_days_result.scalar() or 0
 
     last_30_days_result = await db.execute(
-        recent_activity_query,
-        {"user_id": current_user.id, "since": thirty_days_ago}
+        recent_activity_query, {"user_id": current_user.id, "since": thirty_days_ago}
     )
     last_30_days_count = last_30_days_result.scalar() or 0
 
-    # Get overall daily activity (last 30 days) excluding current user for comparison
-    overall_daily_activity_query = text("""
-        SELECT
-            DATE(w.watched_at AT TIME ZONE 'UTC') as watch_date,
-            COUNT(DISTINCT CASE WHEN m.media_type = 'movie' THEN w.id END) as movies_count,
-            COUNT(DISTINCT CASE WHEN w.episode_item_id IS NOT NULL THEN w.id END) as episodes_count
-        FROM watched_items w
-        LEFT JOIN media_items m ON w.media_item_id = m.id
-        WHERE w.watched_at >= NOW() - INTERVAL '30 days'
-        AND w.user_id != :user_id
-        GROUP BY DATE(w.watched_at AT TIME ZONE 'UTC')
-        ORDER BY watch_date ASC
+    # Comparison aggregates over other users are only shown when enough users
+    # contribute; on a two-person instance they would expose the other person's
+    # daily activity and ratings.
+    other_users_query = text("""
+        SELECT COUNT(DISTINCT user_id)
+        FROM watched_items
+        WHERE user_id != :user_id
     """)
-    overall_daily_activity_result = await db.execute(
-        overall_daily_activity_query, {"user_id": current_user.id}
-    )
-    overall_daily_activity = [
-        {
-            "date": row.watch_date.isoformat(),
-            "movies": row.movies_count or 0,
-            "episodes": row.episodes_count or 0,
-        }
-        for row in overall_daily_activity_result.fetchall()
-    ]
+    other_users = (await db.execute(other_users_query, {"user_id": current_user.id})).scalar() or 0
+    overall_daily_activity: list[dict] = []
+    overall_rating_distribution: list[dict] = []
+    if other_users >= MIN_COMPARISON_USERS:
+        # Get overall daily activity (last 30 days) excluding current user for comparison
+        overall_daily_activity_query = text("""
+            SELECT
+                DATE(w.watched_at AT TIME ZONE 'UTC') as watch_date,
+                COUNT(DISTINCT CASE WHEN m.media_type = 'movie' THEN w.id END) as movies_count,
+                COUNT(DISTINCT CASE WHEN w.episode_item_id IS NOT NULL THEN w.id END) as episodes_count
+            FROM watched_items w
+            LEFT JOIN media_items m ON w.media_item_id = m.id
+            WHERE w.watched_at >= NOW() - INTERVAL '30 days'
+            AND w.user_id != :user_id
+            GROUP BY DATE(w.watched_at AT TIME ZONE 'UTC')
+            ORDER BY watch_date ASC
+        """)
+        overall_daily_activity_result = await db.execute(overall_daily_activity_query, {"user_id": current_user.id})
+        overall_daily_activity = [
+            {
+                "date": row.watch_date.isoformat(),
+                "movies": row.movies_count or 0,
+                "episodes": row.episodes_count or 0,
+            }
+            for row in overall_daily_activity_result.fetchall()
+        ]
 
-    # Get overall rating distribution for comparison excluding current user
-    overall_rating_dist_query = text("""
-        SELECT
-            FLOOR(w.rating * 2) / 2 as rating_bucket,
-            COUNT(*) as count
-        FROM watched_items w
-        WHERE w.rating IS NOT NULL
-        AND w.user_id != :user_id
-        GROUP BY FLOOR(w.rating * 2) / 2
-        ORDER BY rating_bucket
-    """)
-    overall_rating_dist_result = await db.execute(
-        overall_rating_dist_query, {"user_id": current_user.id}
-    )
-    overall_rating_distribution = [
-        {"rating": float(row.rating_bucket), "count": row.count}
-        for row in overall_rating_dist_result.fetchall()
-    ]
+        # Get overall rating distribution for comparison excluding current user
+        overall_rating_dist_query = text("""
+            SELECT
+                FLOOR(w.rating * 2) / 2 as rating_bucket,
+                COUNT(*) as count
+            FROM watched_items w
+            WHERE w.rating IS NOT NULL
+            AND w.user_id != :user_id
+            GROUP BY FLOOR(w.rating * 2) / 2
+            ORDER BY rating_bucket
+        """)
+        overall_rating_dist_result = await db.execute(overall_rating_dist_query, {"user_id": current_user.id})
+        overall_rating_distribution = [
+            {"rating": float(row.rating_bucket), "count": row.count} for row in overall_rating_dist_result.fetchall()
+        ]
 
     return {
         "user_stats": watch_stats,

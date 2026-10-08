@@ -23,7 +23,7 @@ function formatIntegrationName(value) {
     return "Stremio";
   }
   if (normalized === "aiostreams") {
-    return "AIOStreams Proxy";
+    return "AIOStreams";
   }
   if (normalized === "anilist") {
     return "AniList";

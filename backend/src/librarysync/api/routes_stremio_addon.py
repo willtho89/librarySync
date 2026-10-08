@@ -83,6 +83,7 @@ class StremioCatalogUpdate(BaseModel):
 
 class StremioAddonConfigUpdate(BaseModel):
     is_enabled: bool | None = None
+    watch_state_enabled: bool | None = None
     catalogs: list[StremioCatalogUpdate] | None = None
 
 
@@ -187,14 +188,10 @@ async def _build_unique_slug(
 ) -> str:
     base_slug = _truncate_slug(_slugify(value))
     custom_result = await db.execute(
-        select(StremioCustomCatalog.id, StremioCustomCatalog.slug).where(
-            StremioCustomCatalog.user_id == user_id
-        )
+        select(StremioCustomCatalog.id, StremioCustomCatalog.slug).where(StremioCustomCatalog.user_id == user_id)
     )
     external_result = await db.execute(
-        select(StremioExternalCatalog.id, StremioExternalCatalog.slug).where(
-            StremioExternalCatalog.user_id == user_id
-        )
+        select(StremioExternalCatalog.id, StremioExternalCatalog.slug).where(StremioExternalCatalog.user_id == user_id)
     )
     existing = {
         slug
@@ -205,8 +202,7 @@ async def _build_unique_slug(
         {
             slug
             for catalog_id, slug in external_result.all()
-            if slug
-            and (not exclude_external_catalog_id or catalog_id != exclude_external_catalog_id)
+            if slug and (not exclude_external_catalog_id or catalog_id != exclude_external_catalog_id)
         }
     )
     if base_slug not in existing:
@@ -243,9 +239,7 @@ def _custom_catalog_out(catalog: StremioCustomCatalog) -> dict:
     }
 
 
-def _custom_catalog_item_out(
-    item: StremioCustomCatalogItem, media_item: MediaItem
-) -> dict[str, object]:
+def _custom_catalog_item_out(item: StremioCustomCatalogItem, media_item: MediaItem) -> dict[str, object]:
     return {
         "media_item_id": media_item.id,
         "position": item.position,
@@ -371,9 +365,7 @@ async def _resolve_custom_media_item(
     if payload.media_item_id:
         media_item = await db.get(MediaItem, payload.media_item_id)
         if not media_item:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found")
         if media_item.media_type != catalog.media_type:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -527,13 +519,12 @@ async def get_stremio_addon_config(
         .where(StremioExternalCatalog.user_id == current_user.id)
         .order_by(StremioExternalCatalog.created_at.asc())
     )
-    external_catalogs = [
-        external_catalog_out(catalog) for catalog in external_result.scalars().all()
-    ]
+    external_catalogs = [external_catalog_out(catalog) for catalog in external_result.scalars().all()]
 
     return {
         "addon_id": config.id,
         "is_enabled": bool(config.is_enabled),
+        "watch_state_enabled": bool(config.watch_state_enabled),
         "catalogs": catalogs,
         "external_catalogs": external_catalogs,
         "custom_catalogs": custom_catalogs,
@@ -557,6 +548,9 @@ async def update_stremio_addon_config(
     if "is_enabled" in payload.model_fields_set:
         config.is_enabled = bool(payload.is_enabled)
 
+    if "watch_state_enabled" in payload.model_fields_set:
+        config.watch_state_enabled = bool(payload.watch_state_enabled)
+
     if payload.catalogs:
         catalogs = _merge_catalog_updates(catalogs, payload.catalogs)
         config.default_catalogs = catalogs
@@ -569,6 +563,7 @@ async def update_stremio_addon_config(
 
     return {
         "is_enabled": config.is_enabled,
+        "watch_state_enabled": config.watch_state_enabled,
         "catalogs": config.default_catalogs,
     }
 
@@ -617,9 +612,7 @@ async def list_external_catalogs(
         .where(StremioExternalCatalog.user_id == current_user.id)
         .order_by(StremioExternalCatalog.created_at.asc())
     )
-    return {
-        "external_catalogs": [external_catalog_out(catalog) for catalog in result.scalars().all()]
-    }
+    return {"external_catalogs": [external_catalog_out(catalog) for catalog in result.scalars().all()]}
 
 
 @router.post(
@@ -640,11 +633,7 @@ async def create_external_catalog(
     source_provider = normalize_external_source_provider(payload.source_provider)
     source_url = (payload.source_url or payload.manifest_url or "").strip()
     try:
-        manifest_url = (
-            await normalize_external_manifest_url(source_url)
-            if source_kind == "manifest"
-            else source_url
-        )
+        manifest_url = await normalize_external_manifest_url(source_url) if source_kind == "manifest" else source_url
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if not manifest_url:
@@ -682,9 +671,7 @@ async def create_external_catalog(
             payload.media_type,
         ),
         enabled=True if payload.enabled is None else bool(payload.enabled),
-        filters=normalize_external_filters(
-            payload.filters.model_dump(exclude_none=True) if payload.filters else None
-        ),
+        filters=normalize_external_filters(payload.filters.model_dump(exclude_none=True) if payload.filters else None),
         order_by=normalize_external_order_by(payload.order_by),
         order_dir=normalize_external_order_dir(payload.order_dir),
         page_size=normalize_external_page_size(payload.page_size),
@@ -850,21 +837,15 @@ async def update_custom_catalog(
         if not name:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is required")
         if name != catalog.name:
-            catalog.slug = await _build_unique_slug(
-                db, current_user.id, name, exclude_custom_catalog_id=catalog.id
-            )
+            catalog.slug = await _build_unique_slug(db, current_user.id, name, exclude_custom_catalog_id=catalog.id)
         catalog.name = name
 
     if "media_type" in fields and payload.media_type:
         if payload.media_type not in CUSTOM_MEDIA_TYPES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid media type"
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid media type")
         if payload.media_type != catalog.media_type:
             item_count_result = await db.execute(
-                select(func.count(StremioCustomCatalogItem.id)).where(
-                    StremioCustomCatalogItem.catalog_id == catalog.id
-                )
+                select(func.count(StremioCustomCatalogItem.id)).where(StremioCustomCatalogItem.catalog_id == catalog.id)
             )
             if int(item_count_result.scalar_one() or 0) > 0:
                 raise HTTPException(
@@ -1005,9 +986,7 @@ async def reorder_custom_catalog(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     catalog = await _load_custom_catalog(db, current_user.id, catalog_id)
-    result = await db.execute(
-        select(StremioCustomCatalogItem).where(StremioCustomCatalogItem.catalog_id == catalog.id)
-    )
+    result = await db.execute(select(StremioCustomCatalogItem).where(StremioCustomCatalogItem.catalog_id == catalog.id))
     items = result.scalars().all()
     existing_ids = [item.media_item_id for item in items]
     reorder_map = _build_reorder_map(existing_ids, payload.media_item_ids)

@@ -6,11 +6,30 @@ the User-Agent header to "librarySync Version/<version>" for all
 outbound HTTP requests.
 """
 
+import logging
+import re
+from functools import lru_cache
 from importlib import metadata
 
 import httpx
 
+_SECRET_QUERY_RE = re.compile(
+    r"(?i)\b(api_key|apikey|access_token|refresh_token|client_secret|token|password)=([^&\s'\"]+)"
+)
 
+
+def redact_secrets(text: str) -> str:
+    """Mask credentials passed as URL query parameters (e.g. in httpx error messages)."""
+    return _SECRET_QUERY_RE.sub(r"\1=REDACTED", text)
+
+
+def quiet_http_request_logging() -> None:
+    """httpx logs every request URL at INFO, including keys some APIs require in the query."""
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+@lru_cache(maxsize=1)
 def get_app_version() -> str:
     """Get the application version from package metadata."""
     try:

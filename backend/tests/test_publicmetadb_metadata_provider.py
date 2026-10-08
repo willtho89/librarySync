@@ -54,9 +54,7 @@ class TestPublicMetaDbMetadataProvider(unittest.TestCase):
 
     def test_find_by_external_id_rejects_non_id_query(self) -> None:
         with patch.object(self.provider, "_get", new=AsyncMock()) as mocked_get:
-            candidates = asyncio.run(
-                self.provider.find_by_external_id("the matrix", MEDIA_TYPE_MOVIE)
-            )
+            candidates = asyncio.run(self.provider.find_by_external_id("the matrix", MEDIA_TYPE_MOVIE))
         self.assertEqual(candidates, [])
         mocked_get.assert_not_awaited()
 

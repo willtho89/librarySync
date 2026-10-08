@@ -11,9 +11,7 @@ def normalize_star_rating(value: object | None) -> float | None:
     try:
         rating = float(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "Rating must be a number between 0.5 and 5.0 in 0.5 steps"
-        ) from exc
+        raise ValueError("Rating must be a number between 0.5 and 5.0 in 0.5 steps") from exc
     if not math.isfinite(rating):
         raise ValueError("Rating must be a finite number between 0.5 and 5.0")
     if rating < 0.5 or rating > 5.0:

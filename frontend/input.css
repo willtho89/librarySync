@@ -15,12 +15,18 @@
   --color-elevated: rgb(241 245 248);
   --color-line: rgb(214 223 230);
   --color-ink: rgb(24 32 45);
-  --color-muted: rgb(100 116 139);
+  --color-muted: rgb(96 111 133);
   --color-primary: rgb(13 120 211);
   --color-accent: rgb(20 144 228);
   --color-teal: rgb(11 138 155);
   --color-steel: rgb(139 152 161);
   --color-slate: rgb(15 27 36);
+
+  /* Solid fills behind white text (primary buttons). Shared by both themes so
+     white labels keep >= 4.5:1 contrast; the dark theme's brighter --color-primary
+     is only 3.4:1 against white. */
+  --color-primary-strong: rgb(13 120 211);
+  --color-primary-strong-hover: rgb(12 108 191);
 
   /* Font families */
   --font-display: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
@@ -99,7 +105,7 @@
     --color-elevated: rgb(241 245 248);
     --color-line: rgb(214 223 230);
     --color-ink: rgb(24 32 45);
-    --color-muted: rgb(100 116 139);
+    --color-muted: rgb(96 111 133);
     --color-primary: rgb(13 120 211);
     --color-accent: rgb(20 144 228);
     --color-teal: rgb(11 138 155);
@@ -211,7 +217,7 @@
   }
 
   .btn-primary {
-    @apply bg-primary text-white shadow-glow hover:bg-accent;
+    @apply bg-primary-strong text-white shadow-glow hover:bg-primary-strong-hover;
   }
 
   .btn-secondary {
@@ -480,6 +486,11 @@
     @apply rounded-2xl border-transparent bg-transparent px-3 py-2 text-sm shadow-none focus:border-transparent focus:ring-0;
   }
 
+  /* The search input itself is borderless, so show keyboard focus on the bar around it. */
+  .history-search-bar:focus-within {
+    @apply border-primary ring-2 ring-primary/30;
+  }
+
   .history-toolbar {
     @apply bg-surface/90 p-4 md:p-5 backdrop-blur;
   }
@@ -710,7 +721,7 @@
   }
 
   .modal {
-    @apply fixed inset-0 z-50 flex items-center justify-center p-6;
+    @apply fixed inset-0 z-[70] flex items-center justify-center p-6;
   }
 
   .modal-backdrop {
@@ -861,6 +872,14 @@
 
   .import-queue-index {
     @apply text-xs text-muted;
+  }
+
+  .import-queue-controls {
+    @apply flex items-center gap-1;
+  }
+
+  .import-queue-controls .import-queue-index {
+    @apply mr-1;
   }
 
   .import-queue-handle {

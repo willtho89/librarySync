@@ -171,9 +171,7 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
         except Exception as exc:
             raise ValueError(f"AniList API is not accessible: {exc}") from exc
 
-    async def find_by_external_id(
-        self, external_id: str, scope: str = "all"
-    ) -> list[MediaCandidate]:
+    async def find_by_external_id(self, external_id: str, scope: str = "all") -> list[MediaCandidate]:
         if scope not in (MEDIA_TYPE_ANIME, MEDIA_SCOPE_ALL):
             return []
         mal_id = _parse_mal_id(external_id)
@@ -273,10 +271,7 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
                 body = response.text.strip()
                 if len(body) > 300:
                     body = f"{body[:300]}..."
-                raise ValueError(
-                    f"AniList API error: {response.status_code}"
-                    + (f" (body={body})" if body else "")
-                )
+                raise ValueError(f"AniList API error: {response.status_code}" + (f" (body={body})" if body else ""))
             result = response.json()
 
             if "errors" in result:

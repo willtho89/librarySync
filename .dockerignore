@@ -1,23 +1,50 @@
+# The image only needs: pyproject.toml, uv.lock, backend/pyproject.toml,
+# backend/src/ and frontend/{package.json,package-lock.json,input.css}.
+
+# VCS / editors / agent tooling
 .git
 .gitignore
+.github
 .vscode
-__pycache__
-*.py[cod]
-*.pyd
-*.pyo
-*.so
-*.egg-info
-dist
-build
-.pytest_cache
-.mypy_cache
-.ruff_cache
+.idea
+.claude
+.worktrees
+.DS_Store
+
+# Python caches and environments
+**/__pycache__
+**/*.py[cod]
+**/*.pyd
+**/*.pyo
+**/*.so
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
 .coverage
 .coverage.*
 .venv
 venv
 __pypackages__
+.uv-cache
+dist
+build
+backend/build
+backend/tests
+**/*test-output.xml
+
+# Node
+**/node_modules
+frontend/node_modules
+
+# Secrets
 .env
 .env.*
-node_modules
-.DS_Store
+
+# Repo assets and docs not used by the image
+.img
+logo.png
+docs
+external-api-docs
+scripts
+worker

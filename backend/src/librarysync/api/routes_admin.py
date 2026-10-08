@@ -47,7 +47,6 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
 
 IMPORT_EVENT_PROVIDERS = {
-    "aiostreams",
     "anilist",
     "letterboxd",
     "simkl",
@@ -232,9 +231,7 @@ def _merge_watchlist_source_item_fields(
         target.external_item_id = source.external_item_id
     if source.added_at and (not target.added_at or source.added_at < target.added_at):
         target.added_at = source.added_at
-    if source.last_seen_at and (
-        not target.last_seen_at or source.last_seen_at > target.last_seen_at
-    ):
+    if source.last_seen_at and (not target.last_seen_at or source.last_seen_at > target.last_seen_at):
         target.last_seen_at = source.last_seen_at
 
 
@@ -313,9 +310,7 @@ def _build_anilist_sync_payload(
         return payload
 
     if job_type == "push_rating":
-        entry_id = current_payload.get("entry_id") or (
-            watch_sync.external_id if watch_sync else None
-        )
+        entry_id = current_payload.get("entry_id") or (watch_sync.external_id if watch_sync else None)
         if not entry_id or not media_item.anilist_id or watched.rating is None:
             return None
         payload = {
@@ -327,9 +322,7 @@ def _build_anilist_sync_payload(
         return payload
 
     if job_type == "remove_history":
-        entry_id = current_payload.get("entry_id") or (
-            watch_sync.external_id if watch_sync else None
-        )
+        entry_id = current_payload.get("entry_id") or (watch_sync.external_id if watch_sync else None)
         payload = {"watched_item_id": watched.id}
         if entry_id:
             payload["entry_id"] = entry_id
@@ -412,11 +405,7 @@ async def _rebuild_active_sync_job_payload(
         return None
 
     watch_sync_id = payload.get("watch_sync_id")
-    watch_sync_id_value = (
-        str(watch_sync_id)
-        if isinstance(watch_sync_id, str) and watch_sync_id
-        else None
-    )
+    watch_sync_id_value = str(watch_sync_id) if isinstance(watch_sync_id, str) and watch_sync_id else None
     watched, media_item, episode_item, watch_sync = await _load_watched_sync_context(
         db,
         watched_item_id,
@@ -617,9 +606,7 @@ async def _merge_episode_items(
     target: MediaItem,
     source: MediaItem,
 ) -> None:
-    result = await db.execute(
-        select(EpisodeItem).where(EpisodeItem.show_media_item_id.in_([target.id, source.id]))
-    )
+    result = await db.execute(select(EpisodeItem).where(EpisodeItem.show_media_item_id.in_([target.id, source.id])))
     episodes = result.scalars().all()
     target_by_key = {
         (episode.season_number, episode.episode_number): episode
@@ -663,13 +650,9 @@ async def _merge_watchlist_items(
     target: MediaItem,
     source: MediaItem,
 ) -> dict[str, str]:
-    result = await db.execute(
-        select(WatchlistItem).where(WatchlistItem.media_item_id.in_([target.id, source.id]))
-    )
+    result = await db.execute(select(WatchlistItem).where(WatchlistItem.media_item_id.in_([target.id, source.id])))
     items = result.scalars().all()
-    target_by_user = {
-        item.user_id: item for item in items if item.media_item_id == target.id
-    }
+    target_by_user = {item.user_id: item for item in items if item.media_item_id == target.id}
     source_items = [item for item in items if item.media_item_id == source.id]
     watchlist_item_id_map: dict[str, str] = {}
 
@@ -688,12 +671,8 @@ async def _merge_watchlist_items(
             )
         )
         source_rows = source_rows_result.scalars().all()
-        target_sources = {
-            row.source_id: row for row in source_rows if row.watchlist_item_id == target_item.id
-        }
-        duplicate_sources = [
-            row for row in source_rows if row.watchlist_item_id == source_item.id
-        ]
+        target_sources = {row.source_id: row for row in source_rows if row.watchlist_item_id == target_item.id}
+        duplicate_sources = [row for row in source_rows if row.watchlist_item_id == source_item.id]
         for source_row in duplicate_sources:
             existing = target_sources.get(source_row.source_id)
             if existing:
@@ -713,14 +692,10 @@ async def _merge_catalog_items(
     source: MediaItem,
 ) -> None:
     result = await db.execute(
-        select(StremioCustomCatalogItem).where(
-            StremioCustomCatalogItem.media_item_id.in_([target.id, source.id])
-        )
+        select(StremioCustomCatalogItem).where(StremioCustomCatalogItem.media_item_id.in_([target.id, source.id]))
     )
     items = result.scalars().all()
-    target_by_catalog = {
-        item.catalog_id: item for item in items if item.media_item_id == target.id
-    }
+    target_by_catalog = {item.catalog_id: item for item in items if item.media_item_id == target.id}
     source_items = [item for item in items if item.media_item_id == source.id]
     for source_item in source_items:
         target_item = target_by_catalog.get(source_item.catalog_id)
@@ -741,18 +716,14 @@ async def _repoint_active_watchlist_jobs(
         select(OutboxJob).where(
             OutboxJob.job_type == "watchlist_update",
             OutboxJob.status.in_(ACTIVE_OUTBOX_STATUSES),
-            OutboxJob.payload["media_item_id"]
-            .as_string()
-            .in_([source_media_item_id, target_media_item_id]),
+            OutboxJob.payload["media_item_id"].as_string().in_([source_media_item_id, target_media_item_id]),
         )
     )
     jobs = result.scalars().all()
     jobs_by_target_key = {
         job.dedupe_key: job
         for job in jobs
-        if isinstance(job.payload, dict)
-        and job.payload.get("media_item_id") == target_media_item_id
-        and job.dedupe_key
+        if isinstance(job.payload, dict) and job.payload.get("media_item_id") == target_media_item_id and job.dedupe_key
     }
     for job in jobs:
         if not isinstance(job.payload, dict):
@@ -807,9 +778,7 @@ async def _repoint_active_provider_watchlist_jobs(
         if payload_watchlist_item_id not in watchlist_item_id_map:
             continue
         target_watchlist_item_id = watchlist_item_id_map[payload_watchlist_item_id]
-        target_key = (
-            f"{job.user_id}:{job.target_provider}:{job.job_type}:{target_watchlist_item_id}"
-        )
+        target_key = f"{job.user_id}:{job.target_provider}:{job.job_type}:{target_watchlist_item_id}"
         existing = jobs_by_target_key.get(target_key)
         if existing and existing.id != job.id:
             await db.delete(job)
@@ -842,16 +811,8 @@ async def _merge_media_items(
     await _merge_catalog_items(db, target, source)
     await _repoint_active_watchlist_jobs(db, target.id, source.id)
 
-    await db.execute(
-        update(WatchedItem)
-        .where(WatchedItem.media_item_id == source.id)
-        .values(media_item_id=target.id)
-    )
-    await db.execute(
-        update(WatchEvent)
-        .where(WatchEvent.media_item_id == source.id)
-        .values(media_item_id=target.id)
-    )
+    await db.execute(update(WatchedItem).where(WatchedItem.media_item_id == source.id).values(media_item_id=target.id))
+    await db.execute(update(WatchEvent).where(WatchEvent.media_item_id == source.id).values(media_item_id=target.id))
     await db.execute(
         update(WatchlistSourceItem)
         .where(WatchlistSourceItem.media_item_id == source.id)
@@ -907,10 +868,7 @@ async def _refresh_media_item_metadata(
 @router.post(
     "/reset-outbox-jobs",
     summary="Reset stuck outbox jobs",
-    description=(
-        "Reset outbox jobs that have been in 'in_progress' status for longer "
-        "than the specified timeout."
-    ),
+    description=("Reset outbox jobs that have been in 'in_progress' status for longer than the specified timeout."),
 )
 async def reset_outbox_jobs(
     timeout_minutes: int = Query(10, description="Timeout in minutes for stuck jobs", ge=1),
@@ -956,17 +914,12 @@ async def reset_outbox_jobs(
 @router.delete(
     "/purge-jobs",
     summary="Purge outbox jobs",
-    description=(
-        "Delete outbox jobs matching the specified criteria. "
-        "Use with caution - this is irreversible."
-    ),
+    description=("Delete outbox jobs matching the specified criteria. Use with caution - this is irreversible."),
 )
 async def purge_jobs(
     status: str | None = Query(None, description="Filter by job status"),
     target_provider: str | None = Query(None, description="Filter by target provider"),
-    older_than_hours: int | None = Query(
-        None, description="Only delete jobs older than this many hours", ge=1
-    ),
+    older_than_hours: int | None = Query(None, description="Only delete jobs older than this many hours", ge=1),
     limit: int = Query(1000, description="Maximum number of jobs to delete", ge=1, le=10000),
     dry_run: bool = Query(False, description="If true, return count without deleting"),
     db: AsyncSession = Depends(get_db),
@@ -1081,9 +1034,7 @@ async def schedule_watchlist_refresh(
     _: str = Depends(get_admin_api_key),
 ) -> JSONResponse:
     now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(ScheduledJob).where(ScheduledJob.name == WATCHLIST_REFRESH_JOB)
-    )
+    result = await db.execute(select(ScheduledJob).where(ScheduledJob.name == WATCHLIST_REFRESH_JOB))
     job = result.scalars().first()
     if not job:
         job = ScheduledJob(name=WATCHLIST_REFRESH_JOB, next_run_at=now)
@@ -1137,7 +1088,7 @@ async def schedule_metadata_cache(
     description="Delete import history events for a provider to allow re-importing.",
 )
 async def reset_import_history(
-    provider: str = Query(..., description="Import provider (e.g., aiostreams)"),
+    provider: str = Query(..., description="Import provider (e.g., trakt)"),
     user_id: str | None = Query(
         None,
         description="Optional user id to scope the reset. Omit to reset all users.",
@@ -1258,9 +1209,7 @@ async def update_media_item_external_ids(
     description="Merge duplicate watched history entries for users to fix pagination issues.",
 )
 async def merge_history(
-    user_id: str | None = Query(
-        None, description="User ID to merge for. Omit to merge for all users."
-    ),
+    user_id: str | None = Query(None, description="User ID to merge for. Omit to merge for all users."),
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_admin_api_key),
 ) -> JSONResponse:

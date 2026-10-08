@@ -2,7 +2,7 @@
   "name": "librarysync-frontend",
   "private": true,
   "dependencies": {
-    "chart.js": "^4.4.1"
+    "chart.js": "^4.5.1"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",
@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "npm run build:css && npm run build:chart",
-    "build:css": "tailwindcss -i ./input.css -o ../backend/src/librarysync/static/styles.css",
+    "build:css": "tailwindcss -i ./input.css -o ../backend/src/librarysync/static/styles.css --minify",
     "watch:css": "tailwindcss -i ./input.css -o ../backend/src/librarysync/static/styles.css --watch",
     "build:chart": "cp node_modules/chart.js/dist/chart.umd.min.js ../backend/src/librarysync/static/chart.min.js && cp node_modules/chart.js/dist/chart.umd.min.js.map ../backend/src/librarysync/static/chart.umd.min.js.map"
   }

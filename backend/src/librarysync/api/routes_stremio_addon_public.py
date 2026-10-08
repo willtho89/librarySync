@@ -20,6 +20,9 @@ from librarysync.core.stremio_addon import (
     get_addon_config_by_id,
     normalize_default_catalogs,
 )
+from librarysync.core.stremio_addon import (
+    resolve_meta_id as _resolve_meta_id,
+)
 from librarysync.core.watchlist import (
     WATCHLIST_TERMINAL_STATUSES,
     apply_show_status_filter,
@@ -46,18 +49,6 @@ def _get_app_version() -> str:
         return metadata.version("librarysync")
     except metadata.PackageNotFoundError:
         return "unknown"
-
-
-def _resolve_meta_id(media_item: MediaItem) -> str | None:
-    raw = media_item.raw if isinstance(media_item.raw, dict) else {}
-    stremio_id = raw.get("stremio_id")
-
-    if not stremio_id:
-        stremio_payload = raw.get("stremio")
-        if isinstance(stremio_payload, dict):
-            stremio_id = stremio_payload.get("id") or stremio_payload.get("_id")
-
-    return str(stremio_id) if stremio_id else media_item.imdb_id
 
 
 def _resolve_stremio_type(media_type: str) -> Literal["movie", "series"] | None:
@@ -139,15 +130,9 @@ def _resolve_pagination(
     request: Request,
     extra_overrides: dict[str, str] | None = None,
 ) -> tuple[int, int, str | None]:
-    search = _extract_extra_param(request, "search") or (
-        extra_overrides.get("search") if extra_overrides else None
-    )
-    skip_value = _extract_extra_param(request, "skip") or (
-        extra_overrides.get("skip") if extra_overrides else None
-    )
-    limit_value = _extract_extra_param(request, "limit") or (
-        extra_overrides.get("limit") if extra_overrides else None
-    )
+    search = _extract_extra_param(request, "search") or (extra_overrides.get("search") if extra_overrides else None)
+    skip_value = _extract_extra_param(request, "skip") or (extra_overrides.get("skip") if extra_overrides else None)
+    limit_value = _extract_extra_param(request, "limit") or (extra_overrides.get("limit") if extra_overrides else None)
 
     skip = max(0, _parse_int_param(skip_value, 0))
     limit = _parse_int_param(limit_value, 50)
@@ -229,6 +214,7 @@ def _build_manifest(
     catalogs: list[dict],
     external_catalogs: list[StremioExternalCatalog],
     custom_catalogs: list[StremioCustomCatalog],
+    watch_state_enabled: bool = False,
 ) -> dict[str, Any]:
     manifest_catalogs: list[dict[str, Any]] = []
     seen_types: set[str] = set()
@@ -279,7 +265,7 @@ def _build_manifest(
         )
         seen_types.add(stremio_type)
 
-    return {
+    manifest = {
         "id": "org.librarysync.catalogs",
         "version": _get_app_version(),
         "name": "librarySync Watchlists",
@@ -288,6 +274,31 @@ def _build_manifest(
         "types": sorted(seen_types) if seen_types else ["movie", "series"],
         "catalogs": manifest_catalogs,
     }
+    if watch_state_enabled:
+        manifest["types"] = ["movie", "series"]
+        manifest["resources"].append({"name": "watch_state", "types": ["movie", "series"]})
+        manifest["watchState"] = {
+            "version": 2,
+            "push": {
+                "events": [
+                    "start",
+                    "pause",
+                    "stop",
+                    "played",
+                    "unplayed",
+                    "watchlisted",
+                    "unwatchlisted",
+                    "dropped",
+                    "undropped",
+                    "rated",
+                    "unrated",
+                ],
+                "bulk": True,
+            },
+            "pull": {"items": True, "watched": True, "watchlist": True, "ratings": True, "ttlSeconds": 300},
+            "viewers": True,
+        }
+    return manifest
 
 
 async def _build_watchlist_query(
@@ -323,13 +334,9 @@ async def _build_watchlist_query(
                 apply_filter=False,
             )
             if status_clauses:
-                query = query.where(
-                    or_(WatchlistItem.rewatch_requested.is_(True), or_(*status_clauses))
-                )
+                query = query.where(or_(WatchlistItem.rewatch_requested.is_(True), or_(*status_clauses)))
         else:
-            query = query.where(
-                or_(WatchlistItem.rewatch_requested.is_(True), WatchlistItem.status.in_(statuses))
-            )
+            query = query.where(or_(WatchlistItem.rewatch_requested.is_(True), WatchlistItem.status.in_(statuses)))
     else:
         query = query.where(WatchlistItem.rewatch_requested.is_(True))
     if search:
@@ -500,7 +507,7 @@ async def stremio_addon_manifest(
         .order_by(StremioExternalCatalog.created_at.asc())
     )
     external_catalogs = external_result.scalars().all()
-    return _build_manifest(catalogs, external_catalogs, custom_catalogs)
+    return _build_manifest(catalogs, external_catalogs, custom_catalogs, config.watch_state_enabled)
 
 
 @router.get("/{addon_id}/catalog/{catalog_type}/{catalog_id}.json", include_in_schema=False)
@@ -617,9 +624,7 @@ async def _serve_catalog(
         order_by = custom_catalog.order_by or "manual"
         order_dir = custom_catalog.order_dir or "asc"
         if order_by == "manual":
-            query = query.order_by(
-                StremioCustomCatalogItem.position.asc(), StremioCustomCatalogItem.created_at.asc()
-            )
+            query = query.order_by(StremioCustomCatalogItem.position.asc(), StremioCustomCatalogItem.created_at.asc())
         else:
             release_date_expr = func.coalesce(MediaItem.release_date, MediaItem.first_air_date)
             query = _apply_ordering(
@@ -665,10 +670,6 @@ async def _serve_catalog(
     else:
         media_items = result.scalars().all()
         has_more = len(media_items) > limit
-        metas = [
-            meta
-            for media in media_items[:limit]
-            if (meta := _build_meta(media, catalog_type)) is not None
-        ]
+        metas = [meta for media in media_items[:limit] if (meta := _build_meta(media, catalog_type)) is not None]
 
     return {"metas": metas, "hasMore": has_more} if has_more else {"metas": metas}

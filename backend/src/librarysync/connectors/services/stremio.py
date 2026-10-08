@@ -50,9 +50,7 @@ def normalize_login_payload(payload: Mapping[str, Any]) -> StremioLogin:
     auth_key = str(payload.get("authKey") or payload.get("auth_key") or "").strip()
     if not auth_key:
         available = ", ".join(sorted(str(key) for key in payload.keys()))
-        raise StremioError(
-            "Stremio login response missing authKey" + (f" (keys={available})" if available else "")
-        )
+        raise StremioError("Stremio login response missing authKey" + (f" (keys={available})" if available else ""))
     user_payload = payload.get("user")
     if not isinstance(user_payload, dict):
         user_payload = {}
@@ -85,9 +83,7 @@ class StremioClient:
             return data
         return []
 
-    async def get_library_items(
-        self, auth_key: str, ids: list[str] | None = None
-    ) -> list[dict[str, Any]]:
+    async def get_library_items(self, auth_key: str, ids: list[str] | None = None) -> list[dict[str, Any]]:
         payload: dict[str, Any] = {"authKey": auth_key, "collection": "libraryItem"}
         if ids:
             payload["ids"] = ids
@@ -99,9 +95,7 @@ class StremioClient:
             return [item for item in data if isinstance(item, dict)]
         return []
 
-    async def update_library_items(
-        self, auth_key: str, changes: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    async def update_library_items(self, auth_key: str, changes: list[dict[str, Any]]) -> dict[str, Any]:
         payload = {
             "authKey": auth_key,
             "collection": "libraryItem",

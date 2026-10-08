@@ -15,6 +15,7 @@ const activityState = {
 const settingsState = {
   hasAnyImports: false,
   status: null,
+  statusErrorNotified: false,
   importQueue: [],
   watchlistSources: [],
 };
@@ -25,7 +26,6 @@ const DEFAULT_IMPORT_QUEUE_ORDER = [
   "publicmetadb",
   "anilist",
   "stremio",
-  "aiostreams",
 ];
 const WATCHLIST_PROVIDER_LABELS = {
   trakt: "Trakt",
@@ -113,6 +113,7 @@ async function loadStatusData() {
       requestJSON("/api/activity/events?limit=100"),
     ]);
     settingsState.status = statusData;
+    settingsState.statusErrorNotified = false;
     activityState.jobs = outboxData && outboxData.jobs ? outboxData.jobs : [];
     activityState.events =
       eventsData && eventsData.events ? eventsData.events : [];
@@ -143,6 +144,11 @@ async function loadStatusData() {
     }
   } catch (error) {
     console.error("status load failed", error);
+    // This runs on a timer, so only toast the first failure of a streak.
+    if (!settingsState.statusErrorNotified) {
+      settingsState.statusErrorNotified = true;
+      showRequestErrorToast("Could not refresh status", error);
+    }
   }
 }
 
@@ -295,7 +301,7 @@ function renderImportQueue(queue) {
   }
   list.hidden = false;
   empty.hidden = true;
-  providers.forEach((provider) => {
+  providers.forEach((provider, index) => {
     const label = formatIntegrationName(provider);
     const item = document.createElement("li");
     item.className = "import-queue-item";
@@ -305,12 +311,12 @@ function renderImportQueue(queue) {
     const main = document.createElement("div");
     main.className = "import-queue-main";
 
-    const handle = document.createElement("button");
-    handle.type = "button";
+    // Pointer-only drag affordance; keyboard users reorder with the move buttons.
+    const handle = document.createElement("span");
     handle.className = "import-queue-handle";
     handle.draggable = true;
     handle.textContent = "Drag";
-    handle.setAttribute("aria-label", `Drag to reorder ${label}`);
+    handle.setAttribute("aria-hidden", "true");
 
     const name = document.createElement("span");
     name.className = "import-queue-name";
@@ -323,12 +329,81 @@ function renderImportQueue(queue) {
     indexEl.className = "import-queue-index";
     indexEl.dataset.queueIndex = "true";
 
+    const controls = document.createElement("div");
+    controls.className = "import-queue-controls";
+    controls.appendChild(indexEl);
+    controls.appendChild(
+      buildImportQueueMoveButton(provider, label, "up", index === 0)
+    );
+    controls.appendChild(
+      buildImportQueueMoveButton(provider, label, "down", index === providers.length - 1)
+    );
+
     item.appendChild(main);
-    item.appendChild(indexEl);
+    item.appendChild(controls);
     list.appendChild(item);
   });
   updateImportQueueIndices(list);
   bindImportQueueDrag(list);
+}
+
+function buildImportQueueMoveButton(provider, label, direction, disabled) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn btn-ghost btn-xs";
+  button.dataset.queueMove = direction;
+  button.disabled = disabled;
+  button.setAttribute("aria-label", `Move ${label} ${direction}`);
+  button.title = `Move ${direction}`;
+  const icon = document.createElement("span");
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = direction === "up" ? "↑" : "↓";
+  button.appendChild(icon);
+  button.addEventListener("click", () => {
+    void moveImportQueueProvider(provider, direction);
+  });
+  return button;
+}
+
+function focusImportQueueMoveButton(provider, direction) {
+  const list = document.getElementById("import-queue-list");
+  if (!list) {
+    return;
+  }
+  const item = Array.from(list.querySelectorAll(".import-queue-item")).find(
+    (entry) => entry.dataset.provider === provider
+  );
+  if (!item) {
+    return;
+  }
+  const preferred = item.querySelector(`[data-queue-move="${direction}"]`);
+  const fallback = item.querySelector(
+    `[data-queue-move="${direction === "up" ? "down" : "up"}"]`
+  );
+  const target = preferred && !preferred.disabled ? preferred : fallback;
+  if (target && !target.disabled) {
+    target.focus();
+  }
+}
+
+async function moveImportQueueProvider(provider, direction) {
+  if (settingsState.importQueueSaving) {
+    return;
+  }
+  const order = settingsState.importQueue.slice();
+  const index = order.indexOf(provider);
+  const targetIndex = direction === "up" ? index - 1 : index + 1;
+  if (index === -1 || targetIndex < 0 || targetIndex >= order.length) {
+    return;
+  }
+  [order[index], order[targetIndex]] = [order[targetIndex], order[index]];
+  settingsState.importQueueSaving = true;
+  try {
+    await saveImportQueueOrder(order);
+  } finally {
+    settingsState.importQueueSaving = false;
+  }
+  focusImportQueueMoveButton(provider, direction);
 }
 
 async function loadImportQueue() {
@@ -533,41 +608,6 @@ async function loadIntegrations() {
     setMessage("stremio-message", "");
     if (stremioDisconnect) {
       stremioDisconnect.hidden = true;
-    }
-  }
-
-  const aiostreams = integrations.find((item) => item.provider === "aiostreams");
-  const aiostreamsForm = document.getElementById("aiostreams-form");
-  if (aiostreamsForm) {
-    const apiBaseInput = aiostreamsForm.querySelector("input[name='api_base_url']");
-    const usernameInput = aiostreamsForm.querySelector("input[name='username']");
-    if (aiostreams && aiostreams.config && aiostreams.config.api_base_url && apiBaseInput) {
-      apiBaseInput.value = aiostreams.config.api_base_url;
-    }
-    if (aiostreams && aiostreams.config && aiostreams.config.username && usernameInput) {
-      usernameInput.value = aiostreams.config.username;
-    }
-  }
-  const aiostreamsMessage = document.getElementById("aiostreams-message");
-  const aiostreamsDisconnect = document.getElementById("aiostreams-disconnect");
-  const aiostreamsConnected = isIntegrationConnected(aiostreams);
-  setIntegrationStatusBadge("aiostreams-status", aiostreamsConnected);
-  if (aiostreamsConnected) {
-    const username =
-      aiostreams && aiostreams.config && aiostreams.config.username
-        ? aiostreams.config.username
-        : null;
-    const label = username
-      ? `Connected as ${username}.`
-      : "AIOStreams Proxy is connected.";
-    setMessage("aiostreams-message", label);
-    if (aiostreamsDisconnect) {
-      aiostreamsDisconnect.hidden = false;
-    }
-  } else {
-    setMessage("aiostreams-message", "");
-    if (aiostreamsDisconnect) {
-      aiostreamsDisconnect.hidden = true;
     }
   }
 
@@ -893,6 +933,7 @@ async function loadWatchlistSources() {
     renderWatchlistSources(sources);
   } catch (error) {
     console.error("watchlist sources load failed", error);
+    showRequestErrorToast("Could not load watchlist sources", error);
   }
 }
 
@@ -1184,57 +1225,6 @@ async function handleStremioDisconnect() {
     await loadIntegrations();
   } catch (error) {
     setMessage("stremio-message", error.message, true);
-  }
-}
-
-async function handleAIOStreamsSave(data, form) {
-  setMessage("aiostreams-message", "");
-  const apiBaseUrl = (data.get("api_base_url") || "").trim();
-  const username = (data.get("username") || "").trim();
-  const auth = (data.get("auth") || "").trim();
-  if (!apiBaseUrl || !auth) {
-    setMessage("aiostreams-message", "Enter base URL and auth.", true);
-    return;
-  }
-  const payload = { api_base_url: apiBaseUrl, auth };
-  if (username) {
-    payload.username = username;
-  }
-  try {
-    await requestJSON("/api/integrations/aiostreams", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    const input = form ? form.querySelector("input[name='auth']") : null;
-    if (input) {
-      input.value = "";
-    }
-    setMessage("aiostreams-message", "Saved.");
-    await loadIntegrations();
-  } catch (error) {
-    setMessage("aiostreams-message", error.message, true);
-  }
-}
-
-async function handleAIOStreamsTest() {
-  setMessage("aiostreams-message", "");
-  try {
-    await requestJSON("/api/integrations/aiostreams/test", { method: "POST" });
-    setMessage("aiostreams-message", "Connection test succeeded.");
-    await loadIntegrations();
-  } catch (error) {
-    setMessage("aiostreams-message", error.message, true);
-  }
-}
-
-async function handleAIOStreamsDisconnect() {
-  setMessage("aiostreams-message", "");
-  try {
-    await requestJSON("/api/integrations/aiostreams/disconnect", { method: "POST" });
-    setMessage("aiostreams-message", "Disconnected.");
-    await loadIntegrations();
-  } catch (error) {
-    setMessage("aiostreams-message", error.message, true);
   }
 }
 
@@ -1803,7 +1793,12 @@ function bindHistoryClear() {
     return isValid;
   };
 
+  let releaseFocus = null;
+
   const closeModal = () => {
+    if (modal.hasAttribute("hidden")) {
+      return;
+    }
     modal.setAttribute("hidden", "");
     if (form) {
       form.reset();
@@ -1812,6 +1807,11 @@ function bindHistoryClear() {
       confirmButton.disabled = true;
     }
     setMessage(modalMessageId, "");
+    if (releaseFocus) {
+      const release = releaseFocus;
+      releaseFocus = null;
+      release();
+    }
   };
 
   openButton.addEventListener("click", () => {
@@ -1823,7 +1823,12 @@ function bindHistoryClear() {
     }
     if (input) {
       input.value = "";
-      input.focus();
+    }
+    if (!releaseFocus) {
+      releaseFocus = activateFocusTrap(modal.querySelector("[role='dialog']") || modal, {
+        initialFocus: input,
+        onEscape: closeModal,
+      });
     }
   });
 
@@ -3080,28 +3085,49 @@ function bindMaintenanceControls() {
   }
 }
 
-function startMaintenanceAutoRefresh() {
+const STATUS_REFRESH_INTERVAL_MS = 30000;
+
+function stopMaintenanceAutoRefresh() {
   if (settingsState.timer) {
+    window.clearInterval(settingsState.timer);
+    settingsState.timer = null;
+  }
+}
+
+function startMaintenanceAutoRefresh() {
+  if (!settingsState.visibilityBound) {
+    settingsState.visibilityBound = true;
+    // Don't poll from a background tab; refresh as soon as the tab is visible again.
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopMaintenanceAutoRefresh();
+        return;
+      }
+      loadStatusData();
+      startMaintenanceAutoRefresh();
+    });
+  }
+  if (settingsState.timer || document.hidden) {
     return;
   }
   settingsState.timer = window.setInterval(() => {
     loadStatusData();
-  }, 30000);
+  }, STATUS_REFRESH_INTERVAL_MS);
 }
 
 // Blacklist Logic
 
 const blacklistState = {
   lookupId: null,
-  timer: null,
+  pollController: null,
   candidates: [],
   entries: [],
 };
 
-function clearBlacklistLookupTimer() {
-  if (blacklistState.timer) {
-    window.clearTimeout(blacklistState.timer);
-    blacklistState.timer = null;
+function cancelBlacklistLookupPolling() {
+  if (blacklistState.pollController) {
+    blacklistState.pollController.abort();
+    blacklistState.pollController = null;
   }
 }
 
@@ -3121,39 +3147,35 @@ function resetBlacklistLookupUI() {
 
 async function handleBlacklistLookupSubmit(data) {
   resetBlacklistLookupUI();
-  clearBlacklistLookupTimer();
+  cancelBlacklistLookupPolling();
   const query = (data.get("query") || "").trim();
   if (!query) {
     setMessage("blacklist-lookup-message", "Enter a TV show name or ID to search.", true);
     return;
   }
+  const controller = new AbortController();
+  blacklistState.pollController = controller;
   try {
     setMessage("blacklist-lookup-message", "Searching...");
     const response = await requestJSON("/api/metadata/lookup", {
       method: "POST",
       body: JSON.stringify({ query, search_scope: "tv" }),
+      signal: controller.signal,
     });
     blacklistState.lookupId = response.lookup_id;
-    await pollBlacklistLookupStatus(response.lookup_id);
+    const result = await pollMetadataLookup(response.lookup_id, {
+      signal: controller.signal,
+    });
+    renderBlacklistCandidates(result.candidates || []);
   } catch (error) {
-    setMessage("blacklist-lookup-message", error.message, true);
-  }
-}
-
-async function pollBlacklistLookupStatus(lookupId) {
-  try {
-    const data = await requestJSON(`/api/metadata/lookup/${lookupId}`);
-    if (data.status === "completed") {
-      renderBlacklistCandidates(data.candidates || []);
+    if (isAbortError(error)) {
       return;
     }
-    if (data.status === "failed") {
-      setMessage("blacklist-lookup-message", data.error || "Lookup failed.", true);
-      return;
-    }
-    blacklistState.timer = window.setTimeout(() => pollBlacklistLookupStatus(lookupId), 1500);
-  } catch (error) {
     setMessage("blacklist-lookup-message", error.message, true);
+  } finally {
+    if (blacklistState.pollController === controller) {
+      blacklistState.pollController = null;
+    }
   }
 }
 
@@ -3439,7 +3461,6 @@ window.librarysyncPageInit = async ({ user }) => {
   bindForm("watchlist-source-form", handleWatchlistSourceAdd);
   bindForm("quick-import-form", handleQuickImportScheduleSave);
   bindForm("stremio-form", handleStremioConnect);
-  bindForm("aiostreams-form", handleAIOStreamsSave);
   bindForm("publicmetadb-sync-form", handlePublicMetaDbSyncSave);
   bindForm("settings-form", handleSettingsSave);
   bindForm("tmdb-form", handleTmdbSave);
@@ -3508,14 +3529,6 @@ window.librarysyncPageInit = async ({ user }) => {
   if (stremioDisconnect) {
     stremioDisconnect.addEventListener("click", handleStremioDisconnect);
   }
-  const aiostreamsTest = document.getElementById("aiostreams-test");
-  if (aiostreamsTest) {
-    aiostreamsTest.addEventListener("click", handleAIOStreamsTest);
-  }
-  const aiostreamsDisconnect = document.getElementById("aiostreams-disconnect");
-  if (aiostreamsDisconnect) {
-    aiostreamsDisconnect.addEventListener("click", handleAIOStreamsDisconnect);
-  }
   const publicmetadbSyncTest = document.getElementById("publicmetadb-sync-test");
   if (publicmetadbSyncTest) {
     publicmetadbSyncTest.addEventListener("click", handlePublicMetaDbSyncTest);
@@ -3538,8 +3551,10 @@ window.librarysyncPageInit = async ({ user }) => {
       loadStatusData(),
       initBlacklist(),
     ]);
-    startMaintenanceAutoRefresh();
   } catch (error) {
     console.error("settings load failed", error);
+    showRequestErrorToast("Could not load settings", error);
+  } finally {
+    startMaintenanceAutoRefresh();
   }
 };

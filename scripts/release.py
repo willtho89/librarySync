@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -10,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILES = (ROOT / "backend/pyproject.toml",)
 UV_LOCK = ROOT / "uv.lock"
+CI_WORKFLOW = "ci.yml"
+CI_BRANCH = "main"
 
 VERSION_LINE = re.compile(r'^(?P<indent>\s*)version\s*=\s*"(?P<version>[^"]+)"\s*$')
 SEMVER = re.compile(
@@ -49,9 +52,7 @@ def set_version(path: Path, new_version: str) -> None:
 def bump_version(version: str, part: str) -> str:
     match = SEMVER.match(version)
     if not match:
-        raise SystemExit(
-            f'Current version "{version}" is not semver; pass an explicit version instead.'
-        )
+        raise SystemExit(f'Current version "{version}" is not semver; pass an explicit version instead.')
     major = int(match.group("major"))
     minor = int(match.group("minor"))
     patch = int(match.group("patch"))
@@ -76,6 +77,50 @@ def ensure_clean_worktree() -> None:
     )
     if result.stdout.strip():
         raise SystemExit("Working tree is dirty; commit/stash or use --allow-dirty.")
+
+
+def ensure_ci_passed() -> None:
+    if not shutil.which("gh"):
+        raise SystemExit("gh CLI not found; install it or use --skip-ci-check.")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    result = subprocess.run(
+        [
+            "gh",
+            "run",
+            "list",
+            "--commit",
+            sha,
+            "--workflow",
+            CI_WORKFLOW,
+            "--branch",
+            CI_BRANCH,
+            "--limit",
+            "1",
+            "--json",
+            "status,conclusion,url",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"Could not query CI runs via gh: {result.stderr.strip()}")
+    runs = json.loads(result.stdout or "[]")
+    if not runs:
+        raise SystemExit(
+            f"No {CI_WORKFLOW} run found for {sha[:12]} on {CI_BRANCH}; "
+            "push it and wait for CI, or use --skip-ci-check."
+        )
+    latest = runs[0]
+    if latest["status"] != "completed":
+        raise SystemExit(f"CI for {sha[:12]} is still {latest['status']}: {latest['url']}")
+    if latest["conclusion"] != "success":
+        raise SystemExit(f'CI for {sha[:12]} concluded "{latest["conclusion"]}": {latest["url"]}')
+    print(f"CI passed for {sha[:12]}: {latest['url']}")
 
 
 def run_checks() -> None:
@@ -103,6 +148,11 @@ def main() -> int:
         "--allow-dirty",
         action="store_true",
         help="Allow dirty working tree.",
+    )
+    parser.add_argument(
+        "--skip-ci-check",
+        action="store_true",
+        help=f"Skip verifying that {CI_WORKFLOW} passed for HEAD on {CI_BRANCH}.",
     )
     parser.add_argument(
         "--tag-prefix",
@@ -133,6 +183,9 @@ def main() -> int:
 
     if not args.allow_dirty and (not args.no_commit or not args.no_tag or not args.no_release):
         ensure_clean_worktree()
+
+    if not args.no_tag and not args.skip_ci_check:
+        ensure_ci_passed()
 
     if not args.no_commit:
         run_checks()

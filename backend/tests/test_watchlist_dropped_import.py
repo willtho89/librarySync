@@ -58,9 +58,7 @@ def test_trakt_get_hidden_items_fetches_dropped_section() -> None:
     )
     client._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
 
-    entries = asyncio.run(
-        client.get_hidden_items("token", section="dropped", item_type="show", per_page=50)
-    )
+    entries = asyncio.run(client.get_hidden_items("token", section="dropped", item_type="show", per_page=50))
 
     assert len(entries) == 1
     assert entries[0]["show"]["ids"]["trakt"] == 203632
@@ -286,24 +284,18 @@ async def test_process_dropped_candidates_marks_existing_item_dropped() -> None:
     engine, session_factory = await _make_session()
     async with session_factory() as db:
         await _seed_user_and_show(db, status="added")
-        source = (
-            await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))
-        ).scalars().one()
+        source = (await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))).scalars().one()
 
-        marked = await process_dropped_candidates(
-            db, "user-1", "trakt", source, [_dropped_candidate()], now=NOW
-        )
+        marked = await process_dropped_candidates(db, "user-1", "trakt", source, [_dropped_candidate()], now=NOW)
 
         assert marked == 1
-        item = (
-            await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))
-        ).scalars().one()
+        item = (await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))).scalars().one()
         assert item.status == "dropped"
         link = (
-            await db.execute(
-                select(WatchlistSourceItem).where(WatchlistSourceItem.source_id == "src-dropped")
-            )
-        ).scalars().one()
+            (await db.execute(select(WatchlistSourceItem).where(WatchlistSourceItem.source_id == "src-dropped")))
+            .scalars()
+            .one()
+        )
         assert link.watchlist_item_id == "wl-1"
     await engine.dispose()
 
@@ -343,22 +335,16 @@ async def test_process_dropped_candidates_un_drops_when_show_leaves_provider_lis
             )
         )
         await db.commit()
-        source = (
-            await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))
-        ).scalars().one()
+        source = (await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))).scalars().one()
 
         # Empty candidate list: the show is no longer dropped on the provider.
         marked = await process_dropped_candidates(db, "user-1", "trakt", source, [], now=NOW)
 
         assert marked == 0
-        item = (
-            await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))
-        ).scalars().one()
+        item = (await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))).scalars().one()
         assert item.status == "added"
         assert (
-            await db.execute(
-                select(WatchlistSourceItem).where(WatchlistSourceItem.id == "link-dropped")
-            )
+            await db.execute(select(WatchlistSourceItem).where(WatchlistSourceItem.id == "link-dropped"))
         ).scalars().first() is None
     await engine.dispose()
 
@@ -378,15 +364,11 @@ async def test_process_dropped_candidates_deletes_orphaned_item() -> None:
             )
         )
         await db.commit()
-        source = (
-            await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))
-        ).scalars().one()
+        source = (await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))).scalars().one()
 
         await process_dropped_candidates(db, "user-1", "trakt", source, [], now=NOW)
 
-        assert (
-            await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))
-        ).scalars().first() is None
+        assert (await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))).scalars().first() is None
     await engine.dispose()
 
 
@@ -409,16 +391,12 @@ async def test_watchlist_import_does_not_resurrect_dropped_item() -> None:
         )
         await db.commit()
         source = (
-            await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-watchlist"))
-        ).scalars().one()
-
-        await process_watchlist_candidates(
-            db, "user-1", "trakt", source, [_dropped_candidate()], now=NOW
+            (await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-watchlist"))).scalars().one()
         )
 
-        item = (
-            await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))
-        ).scalars().one()
+        await process_watchlist_candidates(db, "user-1", "trakt", source, [_dropped_candidate()], now=NOW)
+
+        item = (await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))).scalars().one()
         assert item.status == "dropped"
     await engine.dispose()
 
@@ -428,19 +406,13 @@ async def test_process_dropped_candidates_clears_rewatch_request() -> None:
     engine, session_factory = await _make_session()
     async with session_factory() as db:
         await _seed_user_and_show(db, status="added")
-        item = (
-            await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))
-        ).scalars().one()
+        item = (await db.execute(select(WatchlistItem).where(WatchlistItem.id == "wl-1"))).scalars().one()
         item.rewatch_requested = True
         item.rewatch_requested_at = NOW
         await db.commit()
-        source = (
-            await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))
-        ).scalars().one()
+        source = (await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))).scalars().one()
 
-        marked = await process_dropped_candidates(
-            db, "user-1", "trakt", source, [_dropped_candidate()], now=NOW
-        )
+        marked = await process_dropped_candidates(db, "user-1", "trakt", source, [_dropped_candidate()], now=NOW)
 
         assert marked == 1
         assert item.status == "dropped"
@@ -466,23 +438,17 @@ async def test_dropped_import_never_enqueues_provider_sync() -> None:
             )
         )
         await db.commit()
-        source = (
-            await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))
-        ).scalars().one()
+        source = (await db.execute(select(WatchlistSource).where(WatchlistSource.id == "src-dropped"))).scalars().one()
 
         with patch(
             "librarysync.core.watchlist._enqueue_watchlist_sync",
             new=AsyncMock(),
         ) as enqueue:
             # A brand-new show exercises the watchlist-item creation path.
-            marked = await process_dropped_candidates(
-                db, "user-1", "trakt", source, [_dropped_candidate()], now=NOW
-            )
+            marked = await process_dropped_candidates(db, "user-1", "trakt", source, [_dropped_candidate()], now=NOW)
 
         assert marked == 1
-        item = (
-            await db.execute(select(WatchlistItem).where(WatchlistItem.user_id == "user-1"))
-        ).scalars().one()
+        item = (await db.execute(select(WatchlistItem).where(WatchlistItem.user_id == "user-1"))).scalars().one()
         assert item.status == "dropped"
         enqueue.assert_not_awaited()
     await engine.dispose()
