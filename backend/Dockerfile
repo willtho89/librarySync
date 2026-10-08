@@ -1,4 +1,4 @@
-FROM node:24-alpine AS frontend-build
+FROM node:26-alpine AS frontend-build
 
 WORKDIR /app/frontend
 
