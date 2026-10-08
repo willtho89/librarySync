@@ -9,7 +9,9 @@ from fastapi import FastAPI, Request
 
 from librarysync.config import settings
 
-_INLINE_SCRIPT_RE = re.compile(r"<script>(.*?)</script>", re.DOTALL)
+# Matches the attribute-less inline scripts our templates and the API docs pages emit; it only
+# selects trusted, server-rendered HTML for hashing and never filters untrusted input.
+_INLINE_SCRIPT_RE = re.compile(r"<script>(.*?)</script\s*>", re.DOTALL | re.IGNORECASE)
 
 
 def _script_hashes(html: str) -> list[str]:

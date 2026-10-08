@@ -145,7 +145,7 @@ class TestSecurityHeaders:
         csp = response.headers["content-security-policy"]
         assert "frame-ancestors 'none'" in csp
         assert "'unsafe-inline'" not in csp.split("script-src", 1)[1].split(";", 1)[0]
-        inline_scripts = re.findall(r"<script>(.*?)</script>", response.text, re.DOTALL)
+        inline_scripts = re.findall(r"<script>(.*?)</script\s*>", response.text, re.DOTALL | re.IGNORECASE)
         assert inline_scripts, "expected the pre-paint theme script"
         for body in inline_scripts:
             digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
@@ -171,6 +171,6 @@ def test_api_documentation_pages_are_allowed_by_their_csp(client, route):
     script_src = next(d.strip() for d in policy.split(";") if d.strip().startswith("script-src "))
     external = [urlparse(src).netloc for src in re.findall(r'<script[^>]+src="([^"]+)"', response.text)]
     assert all(host in script_src for host in external if host), (external, script_src)
-    for body in re.findall(r"<script>(.*?)</script>", response.text, re.DOTALL):
+    for body in re.findall(r"<script>(.*?)</script\s*>", response.text, re.DOTALL | re.IGNORECASE):
         digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
         assert f"'sha256-{digest}'" in script_src

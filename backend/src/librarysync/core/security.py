@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # stored credentials when one of these is used as the secret key.
 PLACEHOLDER_SECRETS = {"change_me", "changeme", "change-me", "secret", "your_secret_key"}
 PLACEHOLDER_ADMIN_KEYS = {"your_admin_api_key", "change_me", "changeme", "change-me"}
-RECOMMENDED_SECRET_KEY_LENGTH = 32
+RECOMMENDED_KEY_CHARS = 32
 
 
 def _fernet_for(secret: str) -> Fernet:
@@ -75,10 +75,8 @@ def validate_security_settings() -> None:
         if not settings.allow_insecure_secret_key:
             raise RuntimeError(message + " Set LIBRARYSYNC_ALLOW_INSECURE_SECRET_KEY=true to override.")
         logger.warning(message)
-    elif len(secret) < RECOMMENDED_SECRET_KEY_LENGTH:
-        logger.warning(
-            "LIBRARYSYNC_SECRET_KEY is shorter than %s characters; consider rotating it",
-            RECOMMENDED_SECRET_KEY_LENGTH,
-        )
+    elif len(secret) < RECOMMENDED_KEY_CHARS:
+        # Constant text only; the key itself is never logged.
+        logger.warning("LIBRARYSYNC_SECRET_KEY is shorter than 32 characters; consider rotating it")
     if is_placeholder_admin_key(settings.admin_api_key):
         logger.warning("LIBRARYSYNC_ADMIN_API_KEY is a placeholder; admin endpoints are disabled")
