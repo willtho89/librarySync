@@ -70,3 +70,49 @@ def test_admin_key_must_match(use_settings):
     with pytest.raises(HTTPException) as excinfo:
         asyncio.run(deps.get_admin_api_key("a-real-admin-kez"))
     assert excinfo.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_key_rotation_keeps_a_token_refreshed_after_the_secrets_were_listed(use_settings, tmp_path):
+    import json
+
+    from librarysync.core import integration_tokens, integrations
+    from librarysync.db.models import Base, Integration, IntegrationSecret, User
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rotation.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, autoflush=False, expire_on_commit=False)
+    use_settings(secret_key="old-key", secret_key_previous=())
+    async with factory() as db:
+        db.add(User(id="u", username="u", password_hash="x"))
+        db.add(Integration(id="int", user_id="u", provider="trakt"))
+        await db.commit()
+        await integration_tokens.save_integration_secret(db, "int", {"refresh_token": "old-refresh"})
+        await db.commit()
+
+    use_settings(secret_key="new-key", secret_key_previous=("old-key",))
+    async with factory() as rotation_db:
+        execute = rotation_db.execute
+        calls = 0
+
+        async def _execute_then_refresh(statement, *args, **kwargs):
+            nonlocal calls
+            result = await execute(statement, *args, **kwargs)
+            calls += 1
+            if calls == 1:
+                # A worker rotates the refresh token right after the rotation listed the rows.
+                async with factory() as worker_db:
+                    await integration_tokens.save_integration_secret(worker_db, "int", {"refresh_token": "new-refresh"})
+                    await worker_db.commit()
+            return result
+
+        rotation_db.execute = _execute_then_refresh
+        await integrations.reencrypt_integration_secrets(rotation_db)
+
+    async with factory() as db:
+        secret = (await db.execute(select(IntegrationSecret))).scalars().one()
+        assert json.loads(security.decrypt_value(secret.secret_data))["refresh_token"] == "new-refresh"
+    await engine.dispose()

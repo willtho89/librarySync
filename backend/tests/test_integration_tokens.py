@@ -127,3 +127,36 @@ async def test_expire_access_token_forces_next_refresh(factory):
     async with factory() as db:
         token = await integration_tokens.ensure_trakt_access_token(db, "int", stored, client)
     assert token == "new-access"
+
+
+@pytest_asyncio.fixture
+async def file_factory(tmp_path):
+    # A file database gives the refresh session its own connection, like PostgreSQL.
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'tokens.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, autoflush=False, expire_on_commit=False)
+    async with session_factory() as db:
+        db.add(User(id="u", username="original", password_hash="x"))
+        db.add(Integration(id="int", user_id="u", provider="trakt"))
+        await db.commit()
+    yield session_factory
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refresh_does_not_commit_or_end_the_callers_transaction(file_factory):
+    data = {"access_token": "old", "refresh_token": "r1", "expires_at": PAST}
+    await _store(file_factory, data)
+
+    async with file_factory() as db:
+        user = await db.get(User, "u")
+        user.username = "uncommitted-change"
+        token = await integration_tokens.ensure_trakt_access_token(db, "int", data, _client())
+        assert db.in_transaction()
+        await db.rollback()
+
+    assert token == "new-access"
+    async with file_factory() as db:
+        assert (await db.get(User, "u")).username == "original"
+    assert (await _stored(file_factory))["refresh_token"] == "new-refresh"

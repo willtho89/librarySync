@@ -3,9 +3,11 @@
 Trakt and Letterboxd rotate refresh tokens on every refresh, so two workers
 refreshing the same integration at once would leave one of them holding a
 revoked token. Refreshes lock the integration secret row, re-read it, and only
-call the provider when no other worker has refreshed in the meantime. The new
-token is committed straight away so a later rollback of the caller's work
-cannot lose it.
+call the provider when no other worker has refreshed in the meantime.
+
+The refresh runs in its own session and transaction: the new token is committed
+straight away (a later rollback of the caller's work cannot lose it), while the
+caller's pending changes and row locks are left untouched.
 """
 
 import json
@@ -67,21 +69,19 @@ async def ensure_fresh_secret(
     """
     if is_fresh(secret_data):
         return secret_data
-    secret = await _lock_secret(db, integration_id)
-    current = dict(secret_data)
-    if secret is not None:
-        current = _decode(secret) or current
-        if is_fresh(current):
-            await db.commit()
-            return current
-    try:
+    if db.bind is None:
+        raise RuntimeError("Token refresh needs a session bound to an engine")
+    async with AsyncSession(bind=db.bind, expire_on_commit=False) as token_db, token_db.begin():
+        secret = await _lock_secret(token_db, integration_id)
+        current = dict(secret_data)
+        if secret is not None:
+            current = _decode(secret) or current
+            if is_fresh(current):
+                return current
+        # A failing refresh rolls back token_db and releases the lock; the caller
+        # decides how to report the failure.
         updated = {**current, **(await refresh(current))}
-    except Exception:
-        # Release the row lock; the caller decides how to report the failure.
-        await db.commit()
-        raise
-    await save_integration_secret(db, integration_id, updated)
-    await db.commit()
+        await save_integration_secret(token_db, integration_id, updated)
     return updated
 
 

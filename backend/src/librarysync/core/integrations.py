@@ -30,16 +30,31 @@ async def load_integration_with_secrets(
 
 
 async def reencrypt_integration_secrets(db: AsyncSession) -> int:
-    """Re-encrypt stored credentials under the current key after a key rotation."""
-    result = await db.execute(select(IntegrationSecret))
+    """Re-encrypt stored credentials under the current key after a key rotation.
+
+    Each row is re-read and rewritten under the same row lock OAuth refreshes take
+    (core/integration_tokens), so a token refreshed concurrently by a worker is never
+    replaced by the stale value read before it.
+    """
+    result = await db.execute(select(IntegrationSecret.id))
+    secret_ids = list(result.scalars().all())
+    await db.commit()
     rotated = 0
-    for secret in result.scalars().all():
+    for secret_id in secret_ids:
+        locked = await db.execute(
+            select(IntegrationSecret)
+            .where(IntegrationSecret.id == secret_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        secret = locked.scalars().first()
         try:
-            updated = rotate_encrypted_value(secret.secret_data)
+            updated = rotate_encrypted_value(secret.secret_data) if secret is not None else None
         except ValueError:
-            continue
+            updated = None
         if updated is not None:
             secret.secret_data = updated
             rotated += 1
-    await db.commit()
+        # Commit per row so each lock is held only for its own rewrite.
+        await db.commit()
     return rotated
