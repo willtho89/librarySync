@@ -28,6 +28,10 @@ def _coerce_finale_type(value: object) -> int | None:
 
 def _episode_finale_type(episode: EpisodeItem) -> int | None:
     raw = episode.raw if isinstance(getattr(episode, "raw", None), dict) else {}
+    calendar = raw.get("simkl_calendar")
+    if isinstance(calendar, dict) and "finale_type" in calendar:
+        # An explicit null in a refreshed calendar clears an older finale marker.
+        return _coerce_finale_type(calendar["finale_type"])
     simkl = raw.get("simkl")
     if isinstance(simkl, dict):
         finale_type = _coerce_finale_type(simkl.get("finale_type"))

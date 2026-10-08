@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from librarysync.core.import_schedule import parse_datetime
 from librarysync.core.worker_identity import worker_instance_id
 from librarysync.db.models import ScheduledJob
 
@@ -38,9 +39,10 @@ async def claim_scheduled_job(
             job = ScheduledJob(name=name, next_run_at=now)
             db.add(job)
             await db.flush()
-        if job.lease_until and job.lease_until > now:
+        lease_until = parse_datetime(job.lease_until)
+        if lease_until and lease_until > now:
             return None
-        next_run = job.next_run_at or now
+        next_run = parse_datetime(job.next_run_at) or now
         if next_run > now:
             return None
         job.lease_until = now + lease_duration

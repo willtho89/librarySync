@@ -55,3 +55,12 @@ async def test_owner_completes_and_clears_lease(factory):
         stored = await db.get(ScheduledJob, "backfill")
         assert stored.lease_owner is None
         assert stored.next_run_at.replace(tzinfo=timezone.utc) == NOW + timedelta(hours=1)
+
+
+@pytest.mark.asyncio
+async def test_active_lease_excludes_a_second_worker_after_reload(factory):
+    async with factory() as db:
+        assert await scheduler.claim_scheduled_job(db, "backfill", timedelta(hours=1), timedelta(minutes=5), NOW)
+    async with factory() as db:
+        claimed = await scheduler.claim_scheduled_job(db, "backfill", timedelta(hours=1), timedelta(minutes=5), NOW)
+        assert claimed is None
