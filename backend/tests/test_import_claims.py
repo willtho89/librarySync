@@ -1,14 +1,18 @@
 """Claiming quick-import and import-all runs against a real (SQLite) database."""
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
 from librarysync.core.import_all import (
+    IMPORT_ALL_INDEX_KEY,
     IMPORT_ALL_LEASE_OWNER_KEY,
     IMPORT_ALL_LEASE_UNTIL_KEY,
     IMPORT_ALL_STATUS_KEY,
+    build_import_all_config,
 )
 from librarysync.core.import_control import QUICK_IMPORT_REQUESTED_KEY
 from librarysync.db.models import Base, Integration, User
@@ -81,4 +85,39 @@ async def test_import_all_run_with_expired_lease_is_taken_over(factory):
             runs = await imports._claim_import_all_runs(db, 1)
 
     assert [run.user_id for run in runs] == ["stuck"]
-    assert runs[0].config[IMPORT_ALL_LEASE_OWNER_KEY] == "worker-a"
+    assert runs[0].config[IMPORT_ALL_LEASE_OWNER_KEY].startswith("worker-a/")
+
+
+@pytest.mark.asyncio
+async def test_import_all_run_is_not_claimed_twice_by_one_process(factory):
+    # Two import_all loops of one worker process share the worker id.
+    await _add_run(factory, "running", {IMPORT_ALL_STATUS_KEY: "pending"}, NOW)
+
+    with patch.object(imports, "worker_instance_id", return_value="one-process"):
+        async with factory() as db:
+            first = await imports._claim_import_all_runs(db, 1)
+        async with factory() as db:
+            second = await imports._claim_import_all_runs(db, 1)
+
+    assert [run.user_id for run in first] == ["running"]
+    assert second == []
+
+
+@pytest.mark.asyncio
+async def test_finished_step_releases_the_lease_for_the_next_step(factory):
+    config = build_import_all_config({}, ["trakt", "simkl"], NOW)
+    await _add_run(factory, "stepping", config, NOW)
+    strategy = SimpleNamespace(import_for_integration=AsyncMock())
+    registry = SimpleNamespace(get=lambda _provider: strategy)
+    spec = replace(imports.IMPORT_ALL_SPEC, registry=registry)
+
+    with patch.object(imports, "worker_instance_id", return_value="one-process"):
+        async with factory() as db:
+            db.add(Integration(id="trakt-int", user_id="stepping", provider="trakt"))
+            await db.commit()
+            [run] = await imports._claim_import_all_runs(db, 1)
+            await imports._process_import_run(db, run, NOW, spec)
+        async with factory() as db:
+            [next_step] = await imports._claim_import_all_runs(db, 1)
+
+    assert next_step.config[IMPORT_ALL_INDEX_KEY] == 1

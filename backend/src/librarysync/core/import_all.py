@@ -132,7 +132,7 @@ def mark_import_all_lease(config: dict | None, owner: str, now: datetime) -> dic
     return updated
 
 
-def _clear_import_all_lease(config: dict | None) -> dict:
+def clear_import_all_lease(config: dict | None) -> dict:
     updated = dict(config or {})
     updated.pop(IMPORT_ALL_LEASE_OWNER_KEY, None)
     updated.pop(IMPORT_ALL_LEASE_UNTIL_KEY, None)
@@ -140,14 +140,14 @@ def _clear_import_all_lease(config: dict | None) -> dict:
 
 
 def mark_import_all_completed(config: dict | None, completed_at: datetime) -> dict:
-    updated = _clear_import_all_lease(config)
+    updated = clear_import_all_lease(config)
     updated[IMPORT_ALL_STATUS_KEY] = IMPORT_ALL_STATUS_COMPLETED
     updated[IMPORT_ALL_COMPLETED_KEY] = completed_at.isoformat()
     return updated
 
 
 def mark_import_all_failed(config: dict | None, failed_at: datetime, error: str) -> dict:
-    updated = _clear_import_all_lease(config)
+    updated = clear_import_all_lease(config)
     updated[IMPORT_ALL_STATUS_KEY] = IMPORT_ALL_STATUS_FAILED
     updated[IMPORT_ALL_COMPLETED_KEY] = failed_at.isoformat()
     updated[IMPORT_ALL_ERROR_KEY] = error
