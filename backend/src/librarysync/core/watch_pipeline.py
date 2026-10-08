@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, ClassVar
@@ -291,6 +291,35 @@ class SyncCoordinator:
 # Queued jobs that would (re)create a watch at a provider.
 WATCH_PUSH_JOB_TYPES = ("new_item_added", "push_watched", "push_rating", "update_history", "update_log_entry")
 WATCH_DELETED_ERROR = "Cancelled because the watch was deleted"
+
+
+async def lock_watches_for_deletion(
+    db: AsyncSession, user_id: str, watched_ids: Iterable[str] | None = None
+) -> set[str]:
+    """Exclusively lock watches about to be deleted and return the ids that still exist.
+
+    Call this before reading delivery metadata or building provider removal jobs. An
+    in-flight push holds a share lock on its watch until the provider write commits
+    (process_outbox), so waiting here first means the WatchSync rows reloaded below
+    carry the external ids that push stored, e.g. a new Letterboxd log entry.
+    Passing no ids locks all of the user's watches.
+    """
+    query = select(WatchedItem.id).where(WatchedItem.user_id == user_id)
+    if watched_ids is not None:
+        ids = sorted({str(watched_id) for watched_id in watched_ids})
+        if not ids:
+            return set()
+        query = query.where(WatchedItem.id.in_(ids))
+    result = await db.execute(query.order_by(WatchedItem.id).with_for_update())
+    locked = set(result.scalars().all())
+    if locked:
+        # Refresh delivery state read before the lock (identity map) with what is committed now.
+        await db.execute(
+            select(WatchSync)
+            .where(WatchSync.watched_item_id.in_(sorted(locked)))
+            .execution_options(populate_existing=True)
+        )
+    return locked
 
 
 async def cancel_queued_pushes(db: AsyncSession, user_id: str, watched_item_ids: list[str] | None = None) -> int:

@@ -419,3 +419,25 @@ async def test_batch_skips_jobs_whose_watch_was_deleted_after_claim(factory):
     assert [job.payload["watched_item_id"] for job in delivered] == ["w2"]
     statuses = {job.payload["watched_item_id"]: job.status for job in await _jobs(factory)}
     assert statuses == {"w1": process_outbox.SUPERSEDED_STATUS, "w2": "succeeded"}
+
+
+@pytest.mark.asyncio
+async def test_locking_watches_for_deletion_reloads_delivery_state(factory):
+    from librarysync.core.watch_pipeline import lock_watches_for_deletion
+    from librarysync.db.models import WatchSync
+
+    async with factory() as db:
+        db.add(WatchSync(id="lb-sync", user_id=USER, watched_item_id="w1", provider="letterboxd", status="pending"))
+        await db.commit()
+
+    async with factory() as delete_db:
+        stale = await delete_db.get(WatchSync, "lb-sync")
+        assert stale.external_id is None
+        # The in-flight push commits its new entry id.
+        async with factory() as worker_db:
+            (await worker_db.get(WatchSync, "lb-sync")).external_id = "lb-entry-1"
+            await worker_db.commit()
+
+        assert await lock_watches_for_deletion(delete_db, USER, ["w1", "missing"]) == {"w1"}
+        reread = (await delete_db.execute(select(WatchSync).where(WatchSync.id == "lb-sync"))).scalars().one()
+        assert reread.external_id == "lb-entry-1"

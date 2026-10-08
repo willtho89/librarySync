@@ -28,6 +28,7 @@ from librarysync.core.watch_pipeline import (
     cancel_queued_pushes,
     enqueue_new_item_job,
     enqueue_watchlist_update_job,
+    lock_watches_for_deletion,
 )
 from librarysync.db.models import (
     EpisodeItem,
@@ -740,6 +741,9 @@ async def clear_watched_items(
     rows = result.all()
     if not rows:
         return {"deleted": 0}
+    # Wait for in-flight pushes before reading delivery state for removals.
+    locked = await lock_watches_for_deletion(db, current_user.id)
+    rows = [row for row in rows if row[0].id in locked]
 
     now = datetime.now(timezone.utc)
     events: list[WatchEvent] = []
@@ -942,7 +946,8 @@ async def delete_watched_item(
         .where(WatchedItem.id == watched_id, WatchedItem.user_id == current_user.id)
     )
     row = result.first()
-    if not row:
+    # Wait for an in-flight push before reading delivery state for removals.
+    if not row or not await lock_watches_for_deletion(db, current_user.id, [watched_id]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watched entry not found")
 
     watched, media_item, episode_item, show_item = row
@@ -1013,6 +1018,9 @@ async def bulk_delete_watched_items(
         )
     )
     rows = result.all()
+    # Wait for in-flight pushes before reading delivery state for removals.
+    locked = await lock_watches_for_deletion(db, current_user.id, [row[0].id for row in rows])
+    rows = [row for row in rows if row[0].id in locked]
     if not rows:
         return {"deleted": 0}
 

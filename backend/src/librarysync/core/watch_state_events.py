@@ -10,7 +10,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.core.watch_pipeline import SYNC_COORDINATOR, enqueue_new_item_job, enqueue_watchlist_update_job
+from librarysync.core.watch_pipeline import (
+    SYNC_COORDINATOR,
+    enqueue_new_item_job,
+    enqueue_watchlist_update_job,
+    lock_watches_for_deletion,
+)
 from librarysync.core.watch_state_identity import EVENT_TYPE, _media_ids, _resolve_media
 from librarysync.core.watchlist_sources import ensure_watchlist_source, upsert_watchlist_source_item
 from librarysync.core.watchlist_sync import enqueue_personal_watchlist_removal, enqueue_personal_watchlist_sync
@@ -298,8 +303,12 @@ async def _apply_history(db, user_id, media, episode, body, at):
             )
         )
     if body["event"] == "unplayed":
+        # Wait for in-flight pushes before reading delivery state for removals.
+        locked = await lock_watches_for_deletion(
+            db, user_id, [watched.id for watched in watches if utc(watched.watched_at) <= at]
+        )
         for watched in watches:
-            if utc(watched.watched_at) <= at:
+            if utc(watched.watched_at) <= at and watched.id in locked:
                 await SYNC_COORDINATOR.enqueue_delete_all(db, watched, media, episode)
                 await db.delete(watched)
         await enqueue_watchlist_update_job(db, user_id, media.id)

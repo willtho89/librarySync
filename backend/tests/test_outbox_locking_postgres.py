@@ -208,3 +208,51 @@ async def test_deletion_waits_for_an_in_flight_push(factory, monkeypatch, batche
     assert (deliver_batch if batched else deliver).await_count == 1
     # Once the push is committed the deletion goes through (and would queue the removal after it).
     assert await _try_delete_watch(factory, "w1") is True
+
+
+@pytest.mark.asyncio
+async def test_delete_route_queues_provider_removal_for_a_push_that_was_in_flight(factory):
+    """Reviewer reproduction: deleting during the first Letterboxd push must still remove the new log entry."""
+    import asyncio
+
+    from librarysync.api import routes_history
+    from librarysync.db.models import MediaItem, WatchedItem, WatchSync
+
+    async with factory() as db:
+        db.add(MediaItem(id="movie", media_type="movie", title="Movie", imdb_id="tt0000001"))
+        db.add(Integration(id="lb", user_id="u", provider="letterboxd"))
+        await db.commit()
+        db.add(WatchedItem(id="w1", user_id="u", media_item_id="movie", watched_at=datetime.now(timezone.utc)))
+        await db.commit()
+        db.add(WatchSync(id="lb-sync", user_id="u", watched_item_id="w1", provider="letterboxd", status="pending"))
+        await integration_tokens.save_integration_secret(
+            db, "lb", {"client_id": "id", "client_secret": "secret", "refresh_token": "refresh"}
+        )
+        await db.commit()
+
+    push = SimpleNamespace(job_type="push_watched", payload={"watched_item_id": "w1"})
+    async with factory() as worker_db, factory() as delete_db:
+        # The worker has locked the watch and is writing the new Letterboxd entry id.
+        assert await process_outbox._lock_live_watches(worker_db, [push]) == {"w1"}
+        sync = await worker_db.get(WatchSync, "lb-sync")
+        sync.external_id = "lb-entry-1"
+        sync.status = "succeeded"
+        await worker_db.flush()
+
+        deletion = asyncio.create_task(
+            routes_history.delete_watched_item(
+                "w1", delete_integrations=True, current_user=SimpleNamespace(id="u"), db=delete_db
+            )
+        )
+        await asyncio.sleep(0.5)
+        assert not deletion.done(), "deletion must wait for the in-flight push"
+        await worker_db.commit()
+        assert (await deletion) == {"status": "deleted"}
+
+    async with factory() as db:
+        removals = (
+            (await db.execute(select(OutboxJob.payload).where(OutboxJob.job_type == "delete_log_entry")))
+            .scalars()
+            .all()
+        )
+    assert [payload["entry_id"] for payload in removals] == ["lb-entry-1"]
