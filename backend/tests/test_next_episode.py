@@ -51,6 +51,10 @@ class TestSelectNextEpisode:
         episodes = [_episode("e1", 1, 1), _episode("e2", 1, 2)]
         assert select_next_episode(episodes, {"e1", "e2"}) is None
 
+    def test_does_not_return_earlier_gaps_after_the_last_released_episode(self):
+        episodes = [_episode("s1e1", 1, 1), _episode("s2e1", 2, 1), _episode("s2e2", 2, 2)]
+        assert select_next_episode(episodes, {"s2e2"}) is None
+
     def test_returns_none_for_empty_list(self):
         assert select_next_episode([], set()) is None
 
@@ -271,7 +275,7 @@ async def test_find_next_episode_uses_last_watched_episode_across_seasons(db_ses
 
     await _create_episode(db_session, show.id, 1, 1, date(2024, 1, 1), title="S1E1")
     await _create_episode(db_session, show.id, 1, 2, date(2024, 1, 2), title="S1E2")
-    season_two_ep1 = await _create_episode(db_session, show.id, 2, 1, date(2024, 2, 1), title="S2E1")
+    await _create_episode(db_session, show.id, 2, 1, date(2024, 2, 1), title="S2E1")
     season_two_ep2 = await _create_episode(db_session, show.id, 2, 2, date(2024, 2, 2), title="S2E2")
     season_two_ep3 = await _create_episode(db_session, show.id, 2, 3, date(2024, 2, 3), title="S2E3")
 
