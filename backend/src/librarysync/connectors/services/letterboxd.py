@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from librarysync.connectors.services.pagination import PagedEntries
 from librarysync.core.http_client import get_http_client
 
 DEFAULT_LETTERBOXD_API_BASE_URL = "https://api.letterboxd.com/api/v0"
@@ -95,9 +96,7 @@ def normalize_token_payload(payload: Mapping[str, Any]) -> LetterboxdToken:
     elif isinstance(expires_in, (int, float)):
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=float(expires_in))
     if expires_at is None:
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            seconds=DEFAULT_LETTERBOXD_TOKEN_TTL_SECONDS
-        )
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_LETTERBOXD_TOKEN_TTL_SECONDS)
     token_type = payload.get("token_type")
     return LetterboxdToken(
         access_token=access_token,
@@ -622,7 +621,7 @@ class LetterboxdClient:
                 if exc.status_code in {400, 404}:
                     continue
                 raise
-            entries: list[dict[str, Any]] = []
+            entries = PagedEntries()
             cursor: str | None = None
             for page_index in range(max_pages):
                 if page_index > 0:
@@ -639,6 +638,8 @@ class LetterboxdClient:
                 cursor = _extract_next_cursor(payload)
                 if not cursor:
                     break
+            else:
+                entries.truncated = True
             return entries
         if last_error:
             raise last_error
@@ -682,7 +683,7 @@ class LetterboxdClient:
                 if exc.status_code in {400, 404}:
                     continue
                 raise
-            entries: list[dict[str, Any]] = []
+            entries = PagedEntries()
             cursor: str | None = None
             for page_index in range(max_pages):
                 if page_index > 0:
@@ -697,6 +698,8 @@ class LetterboxdClient:
                 cursor = _extract_next_cursor(payload)
                 if not cursor:
                     break
+            else:
+                entries.truncated = True
             return entries
         if last_error:
             raise last_error
@@ -765,9 +768,7 @@ class LetterboxdClient:
 
         raise LetterboxdError("Letterboxd log entry lookup failed", status_code=404)
 
-    async def _get_json(
-        self, path: str, access_token: str, params: dict[str, str] | None = None
-    ) -> dict[str, Any]:
+    async def _get_json(self, path: str, access_token: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         response = await self._request(
             "GET",
             path,
@@ -953,12 +954,7 @@ def _prefix_external_id(prefix: str, value: str) -> str:
 
 def _extract_log_entries(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
-        items = (
-            payload.get("items")
-            or payload.get("results")
-            or payload.get("entries")
-            or payload.get("logEntries")
-        )
+        items = payload.get("items") or payload.get("results") or payload.get("entries") or payload.get("logEntries")
         if isinstance(items, list):
             return [item for item in items if isinstance(item, dict)]
     if isinstance(payload, list):

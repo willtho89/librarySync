@@ -167,9 +167,7 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
             return await self._search(query, "series")
         return await self._search(query, None)
 
-    async def find_by_external_id(
-        self, external_id: str, scope: str = "all"
-    ) -> list[MediaCandidate]:
+    async def find_by_external_id(self, external_id: str, scope: str = "all") -> list[MediaCandidate]:
         if scope == "anime":
             return []
         normalized_scope = scope if scope in {MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV} else "all"
@@ -222,9 +220,7 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
             candidates.append(self._normalize_candidate(item, media_type))
         return candidates
 
-    async def _get(
-        self, path: str, params: dict[str, Any], include_language: bool = True
-    ) -> dict[str, Any]:
+    async def _get(self, path: str, params: dict[str, Any], include_language: bool = True) -> dict[str, Any]:
         token = await self._ensure_token()
         headers = {"Authorization": f"Bearer {token}"}
         if self._language and include_language:
@@ -235,9 +231,7 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
                 self._token = None
                 token = await self._ensure_token()
                 headers["Authorization"] = f"Bearer {token}"
-                async with get_http_client(
-                    base_url=TVDB_API_BASE, timeout=15.0, headers=headers
-                ) as retry_client:
+                async with get_http_client(base_url=TVDB_API_BASE, timeout=15.0, headers=headers) as retry_client:
                     response = await retry_client.get(path, params=params)
             response.raise_for_status()
             return response.json()
@@ -263,10 +257,7 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
         normalized = _normalize_media_type(media_type, MEDIA_TYPE_TV)
         title = raw.get("name") or raw.get("title") or raw.get("slug") or None
         year = _extract_year(
-            raw.get("year")
-            or raw.get("firstAired")
-            or raw.get("first_aired")
-            or raw.get("releaseDate")
+            raw.get("year") or raw.get("firstAired") or raw.get("first_aired") or raw.get("releaseDate")
         )
         poster_url = _poster_url(raw)
         imdb_id = _extract_imdb_id(raw)
@@ -296,12 +287,8 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
             year=year,
             poster_url=poster_url,
             imdb_id=imdb_id,
-            release_date=raw.get("releaseDate") or raw.get("firstAired")
-            if normalized == MEDIA_TYPE_MOVIE
-            else None,
-            first_air_date=raw.get("firstAired") or raw.get("releaseDate")
-            if normalized == MEDIA_TYPE_TV
-            else None,
+            release_date=raw.get("releaseDate") or raw.get("firstAired") if normalized == MEDIA_TYPE_MOVIE else None,
+            first_air_date=raw.get("firstAired") or raw.get("releaseDate") if normalized == MEDIA_TYPE_TV else None,
             runtime_in_seconds=runtime_in_seconds,
             genres=genres,
             overview=overview,

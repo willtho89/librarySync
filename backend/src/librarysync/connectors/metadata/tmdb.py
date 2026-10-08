@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 from librarysync.connectors.metadata.base import (
     EpisodeMetadataProvider,
     EpisodeSummary,
@@ -11,7 +13,7 @@ from librarysync.connectors.metadata.base import (
     ProviderContext,
     SeasonSummary,
 )
-from librarysync.core.http_client import get_http_client
+from librarysync.core.http_client import get_http_client, redact_secrets
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w185"
@@ -55,20 +57,8 @@ def _normalize_media_type(value: str | None, fallback: str) -> str:
 
 def _title_for_type(raw: dict[str, Any], media_type: str) -> str | None:
     if media_type == MEDIA_TYPE_TV:
-        return (
-            raw.get("name")
-            or raw.get("original_name")
-            or raw.get("title")
-            or raw.get("original_title")
-            or None
-        )
-    return (
-        raw.get("title")
-        or raw.get("original_title")
-        or raw.get("name")
-        or raw.get("original_name")
-        or None
-    )
+        return raw.get("name") or raw.get("original_name") or raw.get("title") or raw.get("original_title") or None
+    return raw.get("title") or raw.get("original_title") or raw.get("name") or raw.get("original_name") or None
 
 
 def _year_for_type(raw: dict[str, Any], media_type: str) -> int | None:
@@ -112,9 +102,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             return await self._search_tv(query)
         return await self._search_multi(query)
 
-    async def find_by_external_id(
-        self, external_id: str, scope: str = "all"
-    ) -> list[MediaCandidate]:
+    async def find_by_external_id(self, external_id: str, scope: str = "all") -> list[MediaCandidate]:
         if scope == "anime":
             return []
         normalized_scope = scope if scope in {MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV} else "all"
@@ -128,9 +116,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
         candidates: list[MediaCandidate] = []
         if normalized_scope in ("all", MEDIA_TYPE_MOVIE):
             results = payload.get("movie_results") or []
-            candidates.extend(
-                [self._normalize_candidate(item, MEDIA_TYPE_MOVIE) for item in results]
-            )
+            candidates.extend([self._normalize_candidate(item, MEDIA_TYPE_MOVIE) for item in results])
         if normalized_scope in ("all", MEDIA_TYPE_TV):
             results = payload.get("tv_results") or []
             candidates.extend([self._normalize_candidate(item, MEDIA_TYPE_TV) for item in results])
@@ -144,9 +130,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
         )
         if normalized_scope in ("all", MEDIA_TYPE_MOVIE):
             results = payload.get("movie_results") or []
-            candidates.extend(
-                [self._normalize_candidate(item, MEDIA_TYPE_MOVIE) for item in results]
-            )
+            candidates.extend([self._normalize_candidate(item, MEDIA_TYPE_MOVIE) for item in results])
         if normalized_scope in ("all", MEDIA_TYPE_TV):
             results = payload.get("tv_results") or []
             candidates.extend([self._normalize_candidate(item, MEDIA_TYPE_TV) for item in results])
@@ -182,9 +166,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             fallback_seasons = fallback_payload.get("seasons") or []
             if fallback_seasons:
                 seen = {entry.get("season_number") for entry in seasons}
-                seasons.extend(
-                    entry for entry in fallback_seasons if entry.get("season_number") not in seen
-                )
+                seasons.extend(entry for entry in fallback_seasons if entry.get("season_number") not in seen)
         summaries: list[SeasonSummary] = []
         for entry in seasons:
             season_number = entry.get("season_number")
@@ -214,9 +196,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             fallback_episodes = fallback_payload.get("episodes") or []
             if fallback_episodes:
                 seen = {entry.get("episode_number") for entry in episodes}
-                episodes.extend(
-                    entry for entry in fallback_episodes if entry.get("episode_number") not in seen
-                )
+                episodes.extend(entry for entry in fallback_episodes if entry.get("episode_number") not in seen)
         summaries: list[EpisodeSummary] = []
         for entry in episodes:
             episode_number = entry.get("episode_number")
@@ -235,10 +215,21 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         filtered = {key: value for key, value in params.items() if value is not None}
-        filtered["api_key"] = self._api_key
-        async with get_http_client(base_url=TMDB_API_BASE, timeout=15.0) as client:
+        headers: dict[str, str] = {}
+        if _is_read_access_token(self._api_key):
+            # v4 read access tokens go in a header and never appear in URLs.
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        else:
+            filtered["api_key"] = self._api_key
+        async with get_http_client(base_url=TMDB_API_BASE, timeout=15.0, headers=headers) as client:
             response = await client.get(path, params=filtered)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # The message embeds the request URL, which carries a v3 api_key.
+                raise httpx.HTTPStatusError(
+                    redact_secrets(str(exc)), request=exc.request, response=exc.response
+                ) from None
             return response.json()
 
     async def _search_movie(self, query: str) -> list[MediaCandidate]:
@@ -265,10 +256,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
                 },
             )
             results = payload.get("results") or []
-        return [
-            self._normalize_candidate(item, MEDIA_TYPE_MOVIE)
-            for item in results[:DEFAULT_SEARCH_LIMIT]
-        ]
+        return [self._normalize_candidate(item, MEDIA_TYPE_MOVIE) for item in results[:DEFAULT_SEARCH_LIMIT]]
 
     async def _search_tv(self, query: str) -> list[MediaCandidate]:
         include_adult = "true" if self._include_adult else "false"
@@ -292,10 +280,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
                 },
             )
             results = payload.get("results") or []
-        return [
-            self._normalize_candidate(item, MEDIA_TYPE_TV)
-            for item in results[:DEFAULT_SEARCH_LIMIT]
-        ]
+        return [self._normalize_candidate(item, MEDIA_TYPE_TV) for item in results[:DEFAULT_SEARCH_LIMIT]]
 
     async def _search_multi(self, query: str) -> list[MediaCandidate]:
         include_adult = "true" if self._include_adult else "false"
@@ -374,3 +359,7 @@ class TmdbMetadataProvider(EpisodeMetadataProvider[TmdbConfig, TmdbSecrets]):
             overview=overview,
             raw=raw,
         )
+
+
+def _is_read_access_token(value: str) -> bool:
+    return value.startswith("eyJ") and value.count(".") == 2

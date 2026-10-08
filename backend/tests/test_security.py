@@ -7,7 +7,7 @@ from cryptography.fernet import Fernet
 
 
 def _make_test_fernet():
-    digest = hashlib.sha256("test-secret-key-for-testing-only".encode("utf-8")).digest()
+    digest = hashlib.sha256(b"test-secret-key-for-testing-only").digest()
     key = base64.urlsafe_b64encode(digest)
     return Fernet(key)
 

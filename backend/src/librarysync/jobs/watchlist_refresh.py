@@ -199,11 +199,7 @@ async def _load_watchlist_rows_for_refresh(
             WatchlistItem.user_id == user_id,
             WatchlistItem.status.in_(WATCHLIST_REFRESH_STATUSES),
             MediaItem.media_type.in_(["tv", "anime"]),
-            ~exists(
-                select(EpisodeItem.id).where(
-                    EpisodeItem.show_media_item_id == MediaItem.id
-                )
-            ),
+            ~exists(select(EpisodeItem.id).where(EpisodeItem.show_media_item_id == MediaItem.id)),
         )
     )
     media_ids.update(missing_episodes_result.scalars().all())
@@ -220,9 +216,7 @@ async def _backfill_missing_show_episodes(
     user_id: str,
     rows: list[tuple[WatchlistItem, MediaItem]],
 ) -> None:
-    media_by_id = {
-        media.id: media for item, media in rows if media.media_type in {"tv", "anime"}
-    }
+    media_by_id = {media.id: media for item, media in rows if media.media_type in {"tv", "anime"}}
     if not media_by_id:
         return
 

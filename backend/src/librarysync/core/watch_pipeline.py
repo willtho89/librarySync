@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, ClassVar
+from typing import Any, ClassVar
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,6 +56,27 @@ def is_synced_status(status: str | None) -> bool:
     return status.startswith("synced_from_")
 
 
+# Job types that set provider state from their payload; a newer payload queued while
+# one is in flight must still be delivered. Other job types (plays, deletes, internal
+# fan-out) would only duplicate the in-flight delivery.
+SUCCESSOR_JOB_TYPES = {
+    "push_rating",
+    "remove_rating",
+    "update_history",
+    "update_log_entry",
+    "push_watchlist",
+    "remove_watchlist",
+    "watchlist_update",
+}
+
+
+def _same_payload(left: object, right: object) -> bool:
+    def _normalize(value: object) -> str:
+        return json.dumps(value, sort_keys=True, default=str)
+
+    return _normalize(left) == _normalize(right)
+
+
 def _build_outbox_dedupe_key(
     user_id: str,
     provider: str,
@@ -97,21 +120,26 @@ async def enqueue_outbox_job(
                 OutboxJob.status.in_(ACTIVE_OUTBOX_STATUSES),
             )
         )
-        existing = result.scalars().first()
-        if existing:
-            if existing.status != "in_progress":
-                existing.payload = payload
-                existing.job_type = job_type
-                existing.status = status
-                existing.run_after = None
-                existing.last_error = None
-                existing.updated_at = now
-                return existing
-            if not payload.get("state_entry_id"):
-                return existing
-            # The in-flight operation owns its unique key until delivery finishes.
-            # Its successor must remain durable without overwriting the payload being sent.
-            dedupe_key = None
+        matches = result.scalars().all()
+        waiting = next((job for job in matches if job.status != "in_progress"), None)
+        if waiting:
+            waiting.payload = payload
+            waiting.job_type = job_type
+            waiting.status = status
+            waiting.run_after = None
+            waiting.last_error = None
+            waiting.updated_at = now
+            return waiting
+        in_flight = next((job for job in matches if job.status == "in_progress"), None)
+        if in_flight:
+            if payload.get("state_entry_id"):
+                # The in-flight operation owns its unique key until delivery finishes.
+                # Its successor must remain durable without overwriting the payload being sent.
+                dedupe_key = None
+            elif job_type not in SUCCESSOR_JOB_TYPES or _same_payload(in_flight.payload, payload):
+                return in_flight
+            # Otherwise the in-flight job is delivering stale state: queue a successor that
+            # keeps the key (only waiting jobs are unique) and runs once the current one ends.
     if status not in ACTIVE_OUTBOX_STATUSES:
         dedupe_key = None
     job = OutboxJob(
@@ -188,9 +216,7 @@ class SyncCoordinator:
         force: bool = False,
     ) -> None:
         for strategy in self._registry.list():
-            await strategy.enqueue_new(
-                db, watched, media_item, episode_item, is_rewatch, force=force
-            )
+            await strategy.enqueue_new(db, watched, media_item, episode_item, is_rewatch, force=force)
 
     async def enqueue_update(
         self,
@@ -257,8 +283,70 @@ class SyncCoordinator:
         media_item: MediaItem | None,
         episode_item: EpisodeItem | None,
     ) -> None:
+        await cancel_queued_pushes(db, watched.user_id, [watched.id])
         for strategy in self._registry.list():
             await strategy.enqueue_delete(db, watched, media_item, episode_item)
+
+
+# Queued jobs that would (re)create a watch at a provider.
+WATCH_PUSH_JOB_TYPES = ("new_item_added", "push_watched", "push_rating", "update_history", "update_log_entry")
+WATCH_DELETED_ERROR = "Cancelled because the watch was deleted"
+
+
+async def lock_watches_for_deletion(
+    db: AsyncSession, user_id: str, watched_ids: Iterable[str] | None = None
+) -> set[str]:
+    """Exclusively lock watches about to be deleted and return the ids that still exist.
+
+    Call this before reading delivery metadata or building provider removal jobs. An
+    in-flight push holds a share lock on its watch until the provider write commits
+    (process_outbox), so waiting here first means the WatchSync rows reloaded below
+    carry the external ids that push stored, e.g. a new Letterboxd log entry.
+    Passing no ids locks all of the user's watches.
+    """
+    query = select(WatchedItem.id).where(WatchedItem.user_id == user_id)
+    if watched_ids is not None:
+        ids = sorted({str(watched_id) for watched_id in watched_ids})
+        if not ids:
+            return set()
+        query = query.where(WatchedItem.id.in_(ids))
+    result = await db.execute(query.order_by(WatchedItem.id).with_for_update())
+    locked = set(result.scalars().all())
+    if locked:
+        # Refresh delivery state read before the lock (identity map) with what is committed now.
+        await db.execute(
+            select(WatchSync)
+            .where(WatchSync.watched_item_id.in_(sorted(locked)))
+            .execution_options(populate_existing=True)
+        )
+    return locked
+
+
+async def cancel_queued_pushes(db: AsyncSession, user_id: str, watched_item_ids: list[str] | None = None) -> int:
+    """Cancel queued pushes for watches being deleted (all of the user's when ids is None).
+
+    A push still waiting for a retry would otherwise recreate the deleted watch at the
+    provider, possibly after the provider deletion already ran.
+    """
+    if watched_item_ids is not None and not watched_item_ids:
+        return 0
+    conditions = [
+        OutboxJob.user_id == user_id,
+        OutboxJob.status.in_(("pending", "failed_retryable")),
+        OutboxJob.job_type.in_(WATCH_PUSH_JOB_TYPES),
+    ]
+    if watched_item_ids is not None:
+        conditions.append(OutboxJob.payload["watched_item_id"].as_string().in_(watched_item_ids))
+    result = await db.execute(select(OutboxJob).where(*conditions))
+    jobs = result.scalars().all()
+    now = datetime.now(timezone.utc)
+    for job in jobs:
+        job.status = "superseded"
+        job.dedupe_key = None
+        job.run_after = None
+        job.last_error = WATCH_DELETED_ERROR
+        job.updated_at = now
+    return len(jobs)
 
 
 async def enqueue_new_item_job(
@@ -380,9 +468,7 @@ class LetterboxdSyncStrategy(SyncStrategy):
             return
         if not media_item.imdb_id and not media_item.tmdb_id:
             return
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "letterboxd"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "letterboxd")
         if not integration or not secret_data:
             return
         if not has_required_letterboxd_fields(secret_data):
@@ -441,9 +527,7 @@ class LetterboxdSyncStrategy(SyncStrategy):
         # Support movies and anime movies for Letterboxd
         if not media_item or media_item.media_type not in ("movie", "anime"):
             return
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "letterboxd"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "letterboxd")
         if not integration or not secret_data:
             return
         if not has_required_letterboxd_fields(secret_data):
@@ -492,9 +576,7 @@ class LetterboxdSyncStrategy(SyncStrategy):
         # Support movies and anime movies for Letterboxd
         if not media_item or media_item.media_type not in ("movie", "anime"):
             return
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "letterboxd"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "letterboxd")
         if not integration or not secret_data:
             return
         if not has_required_letterboxd_fields(secret_data):
@@ -526,9 +608,7 @@ class LetterboxdSyncStrategy(SyncStrategy):
 class HistorySyncConfig:
     provider: str
     has_required_fields: Callable[[dict[str, Any]], bool]
-    build_payload: Callable[
-        [MediaItem, EpisodeItem | None, datetime, float | None], dict[str, object] | None
-    ]
+    build_payload: Callable[[MediaItem, EpisodeItem | None, datetime, float | None], dict[str, object] | None]
     client_id_attr: str | None = None
     client_secret_attr: str | None = None
     settings_required: bool = True
@@ -553,9 +633,7 @@ class HistorySyncStrategy(SyncStrategy):
         integration, secret_data = await load_integration_with_secrets(db, user_id, self.provider)
         if not integration or not secret_data:
             return False
-        if self.provider == "publicmetadb" and not is_publicmetadb_sync_enabled(
-            dict(integration.config or {})
-        ):
+        if self.provider == "publicmetadb" and not is_publicmetadb_sync_enabled(dict(integration.config or {})):
             return False
         return self._config.has_required_fields(secret_data)
 
@@ -677,9 +755,7 @@ class HistorySyncStrategy(SyncStrategy):
         if not await self._has_integration(db, watched.user_id):
             return
         result = await db.execute(
-            select(WatchSync).where(
-                WatchSync.watched_item_id == watched.id, WatchSync.provider == self.provider
-            )
+            select(WatchSync).where(WatchSync.watched_item_id == watched.id, WatchSync.provider == self.provider)
         )
         watch_sync = result.scalars().first()
         if not watch_sync:
@@ -774,7 +850,7 @@ class TraktSyncStrategy(HistorySyncStrategy):
                 has_required_fields=has_required_trakt_fields,
                 build_payload=build_trakt_payload,
                 client_id_attr="trakt_client_id",
-                client_secret_attr="trakt_client_secret",
+                client_secret_attr="trakt_client_secret",  # noqa: S106 - settings attribute name
                 include_history_id_on_delete=True,
             )
         )
@@ -788,7 +864,7 @@ class SimklSyncStrategy(HistorySyncStrategy):
                 has_required_fields=has_required_simkl_fields,
                 build_payload=build_simkl_payload,
                 client_id_attr="simkl_client_id",
-                client_secret_attr="simkl_client_secret",
+                client_secret_attr="simkl_client_secret",  # noqa: S106 - settings attribute name
             )
         )
 
@@ -820,9 +896,7 @@ class StremioSyncStrategy(SyncStrategy):
     ) -> None:
         if not media_item:
             return
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "stremio"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "stremio")
         if not integration or not secret_data:
             return
         if not has_required_stremio_fields(secret_data):
@@ -871,9 +945,7 @@ class StremioSyncStrategy(SyncStrategy):
     ) -> None:
         if not media_item:
             return
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "stremio"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "stremio")
         if not integration or not secret_data:
             return
         if not has_required_stremio_fields(secret_data):
@@ -963,9 +1035,7 @@ async def _mark_sync_failed(
     db.add(watch_sync)
 
 
-def collect_external_ids(
-    imdb_id: str | None, tmdb_id: str | None, tvdb_id: str | None
-) -> dict[str, object]:
+def collect_external_ids(imdb_id: str | None, tmdb_id: str | None, tvdb_id: str | None) -> dict[str, object]:
     ids: dict[str, object] = {}
     if imdb_id:
         ids["imdb"] = imdb_id.lower()
@@ -1096,9 +1166,7 @@ class AniListSyncStrategy(SyncStrategy):
         if not media_item.anilist_id:
             return
 
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "anilist"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "anilist")
         if not integration or not secret_data:
             return
         if not has_required_anilist_fields(secret_data):
@@ -1166,9 +1234,7 @@ class AniListSyncStrategy(SyncStrategy):
         if not media_item.anilist_id:
             return
 
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "anilist"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "anilist")
         if not integration or not secret_data:
             return
         if not has_required_anilist_fields(secret_data):
@@ -1218,9 +1284,7 @@ class AniListSyncStrategy(SyncStrategy):
         if not media_item or not is_anime(media_item):
             return
 
-        integration, secret_data = await load_integration_with_secrets(
-            db, watched.user_id, "anilist"
-        )
+        integration, secret_data = await load_integration_with_secrets(db, watched.user_id, "anilist")
         if not integration or not secret_data:
             return
         if not has_required_anilist_fields(secret_data):
@@ -1335,9 +1399,7 @@ def _extract_stremio_video_id(media_item: MediaItem, episode_item: EpisodeItem) 
     if not stremio_video_id:
         stremio_payload = raw.get("stremio")
         if isinstance(stremio_payload, dict):
-            stremio_video_id = _coerce_str(
-                stremio_payload.get("video_id") or stremio_payload.get("videoId")
-            )
+            stremio_video_id = _coerce_str(stremio_payload.get("video_id") or stremio_payload.get("videoId"))
             if not stremio_video_id:
                 state = stremio_payload.get("state")
                 if isinstance(state, dict):
@@ -1351,9 +1413,7 @@ def _extract_stremio_video_id(media_item: MediaItem, episode_item: EpisodeItem) 
     return None
 
 
-def _extract_stremio_state(
-    media_item: MediaItem, episode_item: EpisodeItem | None
-) -> dict[str, object]:
+def _extract_stremio_state(media_item: MediaItem, episode_item: EpisodeItem | None) -> dict[str, object]:
     raw = episode_item.raw if episode_item and isinstance(episode_item.raw, dict) else {}
     if not raw and isinstance(media_item.raw, dict):
         raw = media_item.raw

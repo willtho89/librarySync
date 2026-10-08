@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Iterable
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,6 +51,13 @@ IMPORT_ALL_REQUESTED_KEY = "import_all_requested_at"
 IMPORT_ALL_STARTED_KEY = "import_all_started_at"
 IMPORT_ALL_COMPLETED_KEY = "import_all_completed_at"
 IMPORT_ALL_ERROR_KEY = "import_all_error"
+IMPORT_ALL_LEASE_OWNER_KEY = "import_all_lease_owner"
+IMPORT_ALL_LEASE_UNTIL_KEY = "import_all_lease_until"
+
+# A full import of one provider can run for a long time; the lease is renewed
+# at every provider step and only lets another worker take over a run whose
+# owner stopped making progress.
+IMPORT_ALL_LEASE_SECONDS = 2 * 60 * 60
 
 IMPORT_ALL_ACTIVE_STATUSES = {
     IMPORT_ALL_STATUS_PENDING,
@@ -109,15 +116,38 @@ def mark_import_all_started(config: dict | None, started_at: datetime) -> dict:
     return updated
 
 
-def mark_import_all_completed(config: dict | None, completed_at: datetime) -> dict:
+def import_all_lease_blocked(config: dict | None, now: datetime, owner: str) -> bool:
+    """Return True when another worker holds a live lease on the run."""
+    config = config or {}
+    lease_until = parse_datetime(config.get(IMPORT_ALL_LEASE_UNTIL_KEY))
+    if not lease_until or lease_until <= now:
+        return False
+    return str(config.get(IMPORT_ALL_LEASE_OWNER_KEY) or "") != owner
+
+
+def mark_import_all_lease(config: dict | None, owner: str, now: datetime) -> dict:
     updated = dict(config or {})
+    updated[IMPORT_ALL_LEASE_OWNER_KEY] = owner
+    updated[IMPORT_ALL_LEASE_UNTIL_KEY] = (now + timedelta(seconds=IMPORT_ALL_LEASE_SECONDS)).isoformat()
+    return updated
+
+
+def clear_import_all_lease(config: dict | None) -> dict:
+    updated = dict(config or {})
+    updated.pop(IMPORT_ALL_LEASE_OWNER_KEY, None)
+    updated.pop(IMPORT_ALL_LEASE_UNTIL_KEY, None)
+    return updated
+
+
+def mark_import_all_completed(config: dict | None, completed_at: datetime) -> dict:
+    updated = clear_import_all_lease(config)
     updated[IMPORT_ALL_STATUS_KEY] = IMPORT_ALL_STATUS_COMPLETED
     updated[IMPORT_ALL_COMPLETED_KEY] = completed_at.isoformat()
     return updated
 
 
 def mark_import_all_failed(config: dict | None, failed_at: datetime, error: str) -> dict:
-    updated = dict(config or {})
+    updated = clear_import_all_lease(config)
     updated[IMPORT_ALL_STATUS_KEY] = IMPORT_ALL_STATUS_FAILED
     updated[IMPORT_ALL_COMPLETED_KEY] = failed_at.isoformat()
     updated[IMPORT_ALL_ERROR_KEY] = error
@@ -129,9 +159,7 @@ def import_all_active(config: dict | None) -> bool:
     return bool(state.status in IMPORT_ALL_ACTIVE_STATUSES)
 
 
-async def get_or_create_system_integration(
-    db: AsyncSession, user_id: str
-) -> Integration:
+async def get_or_create_system_integration(db: AsyncSession, user_id: str) -> Integration:
     result = await db.execute(
         select(Integration).where(
             Integration.user_id == user_id,
@@ -166,9 +194,7 @@ async def load_import_queue_preferences(db: AsyncSession, user_id: str) -> list[
 async def load_import_ready_providers(db: AsyncSession, user_id: str) -> list[str]:
     queue: list[str] = []
     for provider in IMPORT_ALL_PRIORITY:
-        integration, secret_data = await load_integration_with_secrets(
-            db, user_id, provider
-        )
+        integration, secret_data = await load_integration_with_secrets(db, user_id, provider)
         if not integration or not secret_data:
             continue
         if provider == "letterboxd":
@@ -213,9 +239,7 @@ async def build_import_all_queue(db: AsyncSession, user_id: str) -> list[str]:
 
 async def load_active_import_all_users(db: AsyncSession) -> set[str]:
     result = await db.execute(
-        select(Integration.user_id, Integration.config).where(
-            Integration.provider == IMPORT_ALL_PROVIDER
-        )
+        select(Integration.user_id, Integration.config).where(Integration.provider == IMPORT_ALL_PROVIDER)
     )
     active: set[str] = set()
     for user_id, config in result.all():

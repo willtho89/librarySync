@@ -86,9 +86,7 @@ async def _import_for_integration(
 ) -> ImportResult:
     if not settings.anilist_client_id or not settings.anilist_client_secret:
         return ImportResult(imported=0, attempted=False)
-    integration, secret_data = await load_integration_with_secrets(
-        db, integration.user_id, "anilist"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, integration.user_id, "anilist")
     if not integration or not secret_data:
         return ImportResult(imported=0, attempted=False)
     if not has_required_anilist_fields(secret_data):
@@ -475,9 +473,7 @@ async def _get_or_create_episode_item(
     return item
 
 
-async def _entry_already_imported(
-    db: AsyncSession, user_id: str, entry_key: str
-) -> bool:
+async def _entry_already_imported(db: AsyncSession, user_id: str, entry_key: str) -> bool:
     result = await db.execute(
         select(WatchEvent.id).where(
             WatchEvent.user_id == user_id,
@@ -488,9 +484,7 @@ async def _entry_already_imported(
     return result.scalars().first() is not None
 
 
-async def _get_or_create_media_item(
-    db: AsyncSession, summary: AnimeSummary
-) -> MediaItem | None:
+async def _get_or_create_media_item(db: AsyncSession, summary: AnimeSummary) -> MediaItem | None:
     item = await _find_media_item(db, summary.anilist_id, summary.myanimelist_id)
     if item:
         _apply_media_updates(item, summary)
@@ -823,9 +817,7 @@ def _build_episode_raw(entry_id: str | None) -> dict[str, Any]:
     return raw
 
 
-def _apply_episode_updates(
-    item: EpisodeItem, episode_number: int, entry_id: str | None
-) -> None:
+def _apply_episode_updates(item: EpisodeItem, episode_number: int, entry_id: str | None) -> None:
     raw = item.raw if isinstance(item.raw, dict) else {}
     if entry_id and not raw.get("entry_id"):
         raw["entry_id"] = entry_id

@@ -10,7 +10,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.core.watch_pipeline import SYNC_COORDINATOR, enqueue_new_item_job, enqueue_watchlist_update_job
+from librarysync.core.watch_pipeline import (
+    SYNC_COORDINATOR,
+    enqueue_new_item_job,
+    enqueue_watchlist_update_job,
+    lock_watches_for_deletion,
+)
 from librarysync.core.watch_state_identity import EVENT_TYPE, _media_ids, _resolve_media
 from librarysync.core.watchlist_sources import ensure_watchlist_source, upsert_watchlist_source_item
 from librarysync.core.watchlist_sync import enqueue_personal_watchlist_removal, enqueue_personal_watchlist_sync
@@ -239,7 +244,7 @@ async def apply_event(db: AsyncSession, user_id: str, media_type: str, body: dic
         category = "drop"
     elif name in {"rated", "unrated"}:
         category = "rating"
-    elif name in {"played", "unplayed"} or name == "stop" and body.get("played"):
+    elif name in {"played", "unplayed"} or (name == "stop" and body.get("played")):
         category = "watched"
     else:
         category = "playback"
@@ -256,7 +261,7 @@ async def apply_event(db: AsyncSession, user_id: str, media_type: str, body: dic
         from librarysync.core.watch_state_ratings import enqueue_rating_delivery
 
         await enqueue_rating_delivery(db, entry, media, episode)
-    resumes_show = name in {"start", "played"} or name == "stop" and body.get("played")
+    resumes_show = name in {"start", "played"} or (name == "stop" and body.get("played"))
     if media_type == "series" and resumes_show:
         show_body = {**body, "scope": "series", "event": "undropped", "videoId": None, "season": None, "episode": None}
         dropped = await _entry(db, user_id, "drop", target_key(media, show_body))
@@ -272,7 +277,7 @@ async def apply_event(db: AsyncSession, user_id: str, media_type: str, body: dic
 
 
 async def _apply_history(db, user_id, media, episode, body, at):
-    if media is None or body["scope"] == "episode" and episode is None:
+    if media is None or (body["scope"] == "episode" and episode is None):
         return
     target = WatchedItem.episode_item_id == episode.id if episode else WatchedItem.media_item_id == media.id
     watches = list((await db.scalars(select(WatchedItem).where(WatchedItem.user_id == user_id, target))).all())
@@ -298,12 +303,16 @@ async def _apply_history(db, user_id, media, episode, body, at):
             )
         )
     if body["event"] == "unplayed":
+        # Wait for in-flight pushes before reading delivery state for removals.
+        locked = await lock_watches_for_deletion(
+            db, user_id, [watched.id for watched in watches if utc(watched.watched_at) <= at]
+        )
         for watched in watches:
-            if utc(watched.watched_at) <= at:
+            if utc(watched.watched_at) <= at and watched.id in locked:
                 await SYNC_COORDINATOR.enqueue_delete_all(db, watched, media, episode)
                 await db.delete(watched)
         await enqueue_watchlist_update_job(db, user_id, media.id)
-    elif not watches or body["event"] != "played" and not any(utc(w.watched_at) == at for w in watches):
+    elif not watches or (body["event"] != "played" and not any(utc(w.watched_at) == at for w in watches)):
         watched = WatchedItem(
             user_id=user_id,
             media_item_id=None if episode else media.id,

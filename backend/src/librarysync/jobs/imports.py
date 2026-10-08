@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Protocol
+from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,9 +18,12 @@ from librarysync.core.import_all import (
     IMPORT_ALL_STATUS_KEY,
     IMPORT_ALL_STATUS_PENDING,
     build_import_all_queue,
+    clear_import_all_lease,
     import_all_active,
+    import_all_lease_blocked,
     mark_import_all_completed,
     mark_import_all_failed,
+    mark_import_all_lease,
     mark_import_all_started,
     parse_import_all_state,
 )
@@ -31,6 +36,7 @@ from librarysync.core.import_control import (
     QUICK_IMPORT_STATUS_IN_PROGRESS,
     QUICK_IMPORT_STATUS_PENDING,
     build_quick_import_config,
+    clear_quick_import_lease,
     mark_merge_failed,
     mark_merge_required,
     mark_quick_import_completed,
@@ -79,6 +85,7 @@ class ImportRunSpec:
     index_key: str
     error_key: str
     history_event_type: str
+    release_lease: Callable[[dict | None], dict]
 
 
 QUICK_IMPORT_LOOKBACK_DAYS = 7
@@ -110,6 +117,7 @@ QUICK_IMPORT_SPEC = ImportRunSpec(
     index_key=QUICK_IMPORT_INDEX_KEY,
     error_key=QUICK_IMPORT_ERROR_KEY,
     history_event_type="quick_import",
+    release_lease=clear_quick_import_lease,
 )
 IMPORT_ALL_SPEC = ImportRunSpec(
     name="import_all",
@@ -120,6 +128,7 @@ IMPORT_ALL_SPEC = ImportRunSpec(
     index_key=IMPORT_ALL_INDEX_KEY,
     error_key=IMPORT_ALL_ERROR_KEY,
     history_event_type="import_all",
+    release_lease=clear_import_all_lease,
 )
 
 
@@ -149,16 +158,42 @@ async def process_import_all_once(limit: int = 1) -> int:
         return processed
 
 
+def _claim_owner() -> str:
+    """A lease owner unique to one claim.
+
+    Several import loops of one worker process share worker_instance_id(); a
+    per-claim token keeps a live lease exclusive between them as well. Leases are
+    released after every provider step so the next step can be claimed by any loop.
+    """
+    return f"{worker_instance_id()}/{uuid.uuid4().hex[:12]}"
+
+
 async def _claim_quick_import_runs(db: AsyncSession, limit: int) -> list[Integration]:
     now = datetime.now(timezone.utc)
-    owner = worker_instance_id()
+    owner = _claim_owner()
     candidate_limit = max(limit * 5, limit)
     async with db.begin():
-        result = await db.execute(
-            select(Integration)
+        # Pick due runs from an unlocked scan first: runs that are not due (e.g. with
+        # the schedule disabled) never get updated_at bumped, so a plain "oldest N"
+        # window would fill up with them and starve every other user.
+        scan = await db.execute(
+            select(Integration.id, Integration.config)
             .where(Integration.provider == IMPORT_ALL_PROVIDER)
             .order_by(Integration.updated_at)
-            .limit(candidate_limit)
+        )
+        due_ids = [
+            run_id
+            for run_id, config in scan.all()
+            if not import_all_active(config)
+            and should_run_quick_import(config, now)
+            and not quick_import_lease_blocked(config, now, owner)
+        ][:candidate_limit]
+        if not due_ids:
+            return []
+        result = await db.execute(
+            select(Integration)
+            .where(Integration.id.in_(due_ids))
+            .order_by(Integration.updated_at)
             .with_for_update(skip_locked=True)
         )
         runs: list[Integration] = []
@@ -169,8 +204,8 @@ async def _claim_quick_import_runs(db: AsyncSession, limit: int) -> list[Integra
                 continue
             if not should_run_quick_import(run.config, now):
                 continue
-            # Single-flight: another live worker owns this run. An expired or
-            # missing lease means the run is free (or stuck) and can be claimed.
+            # Single-flight: another claim holds a live lease on this run. An expired
+            # or missing lease means the run is free (or stuck) and can be claimed.
             if quick_import_lease_blocked(run.config, now, owner):
                 continue
             state = parse_quick_import_state(run.config)
@@ -196,6 +231,7 @@ async def _claim_quick_import_runs(db: AsyncSession, limit: int) -> list[Integra
 
 
 async def _claim_import_all_runs(db: AsyncSession, limit: int) -> list[Integration]:
+    owner = _claim_owner()
     async with db.begin():
         result = await db.execute(
             select(Integration)
@@ -207,14 +243,16 @@ async def _claim_import_all_runs(db: AsyncSession, limit: int) -> list[Integrati
                 .in_([IMPORT_ALL_STATUS_PENDING, IMPORT_ALL_STATUS_IN_PROGRESS]),
             )
             .order_by(Integration.updated_at)
-            .limit(limit)
             .with_for_update(skip_locked=True)
         )
-        runs = result.scalars().all()
+        now = datetime.now(timezone.utc)
+        # Single-flight: skip runs another claim (any loop or process) is importing.
+        runs = [run for run in result.scalars().all() if not import_all_lease_blocked(run.config, now, owner)][:limit]
         if not runs:
             return []
-        now = datetime.now(timezone.utc)
         for run in runs:
+            run.config = mark_import_all_lease(run.config, owner, now)
+            run.updated_at = now
             state = parse_import_all_state(run.config)
             if state.status == IMPORT_ALL_STATUS_PENDING:
                 config = mark_import_all_started(run.config, now)
@@ -296,6 +334,8 @@ async def _process_import_run(
                 history_parser=spec.parse_state,
             )
             return 1
+        # Step done: hand the run back so the next provider step can be claimed.
+        run.config = spec.release_lease(config)
         db.add(run)
         await db.commit()
         return 1
@@ -333,6 +373,8 @@ async def _advance_import_run(
 ) -> int:
     run.config = dict(run.config or {})
     run.config[spec.index_key] = next_index
+    if next_index < len(queue):
+        run.config = spec.release_lease(run.config)
     if next_index >= len(queue):
         await _finalize_merge(
             db,
@@ -423,8 +465,4 @@ def _already_recorded_import(
         return False
     last_completed = last.get("completed_at")
     current_completed = completed_at.isoformat() if completed_at else None
-    return (
-        last.get("event_type") == event_type
-        and last.get("status") == status
-        and last_completed == current_completed
-    )
+    return last.get("event_type") == event_type and last.get("status") == status and last_completed == current_completed

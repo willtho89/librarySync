@@ -51,9 +51,7 @@ def test_tv_watchlist_filters_select_expected_statuses() -> None:
 
     assert [item.status for item in items] == ["added", "in_progress", "watched"]
     assert [item.item_id for item in _apply_status_filter(items, ["added"])] == ["added"]
-    assert [item.item_id for item in _apply_status_filter(items, ["in_progress"])] == [
-        "in_progress"
-    ]
+    assert [item.item_id for item in _apply_status_filter(items, ["in_progress"])] == ["in_progress"]
     assert [item.item_id for item in _apply_status_filter(items, ["watched"])] == ["watched"]
     assert [item.item_id for item in _apply_status_filter(items, ["added", "in_progress"])] == [
         "added",

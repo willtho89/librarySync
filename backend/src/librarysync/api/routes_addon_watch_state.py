@@ -132,7 +132,7 @@ async def pull_watch_state(
     viewer: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    config, user_id = await _load_config(db, addon_id, viewer)
+    _config, user_id = await _load_config(db, addon_id, viewer)
     response.headers["Cache-Control"] = "no-store"
     result = await build_watch_state(db, user_id, since)
     await db.commit()
@@ -162,7 +162,7 @@ def validate_event(media_type: str, item_id: str, payload: WatchStatePush) -> di
     scope = payload.scope
     if scope is None:
         scope = "movie" if media_type == "movie" else "episode"
-        if title_event or payload.event in {"rated", "unrated"} and not payload.videoId:
+        if title_event or (payload.event in {"rated", "unrated"} and not payload.videoId):
             if media_type == "movie":
                 scope = "movie"
             elif payload.season is not None:

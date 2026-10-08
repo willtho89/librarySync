@@ -15,7 +15,7 @@ from librarysync.core.http_client import get_http_client
 
 DEFAULT_SIMKL_API_BASE_URL = "https://api.simkl.com"
 SIMKL_OAUTH_AUTHORIZE_URL = "https://simkl.com/oauth/authorize"
-SIMKL_OAUTH_TOKEN_URL = "https://api.simkl.com/oauth/token"
+SIMKL_OAUTH_TOKEN_URL = "https://api.simkl.com/oauth/token"  # noqa: S105 - endpoint URL, not a secret
 SIMKL_REQUIRED_FIELDS = ("access_token",)
 
 
@@ -91,10 +91,7 @@ def normalize_token_payload(payload: Mapping[str, Any]) -> SimklToken:
     refresh_token = str(payload.get("refresh_token") or "").strip()
     if not access_token:
         available = ", ".join(sorted(str(key) for key in payload.keys()))
-        raise SimklError(
-            "SIMKL token response missing access_token"
-            + (f" (keys={available})" if available else "")
-        )
+        raise SimklError("SIMKL token response missing access_token" + (f" (keys={available})" if available else ""))
     created_at = payload.get("created_at")
     expires_in = payload.get("expires_in")
     expires_at: datetime | None = None
@@ -165,9 +162,7 @@ class SimklClient:
         data = await self._post_json(self.token_url, payload)
         return normalize_token_payload(data)
 
-    async def refresh_access_token(
-        self, refresh_token: str, redirect_uri: str | None = None
-    ) -> SimklToken:
+    async def refresh_access_token(self, refresh_token: str, redirect_uri: str | None = None) -> SimklToken:
         payload = {
             "refresh_token": refresh_token,
             "client_id": self.client_id,
@@ -183,66 +178,33 @@ class SimklClient:
         response = await self._request("GET", "/users/settings", access_token=access_token)
         return self._parse_json(response)
 
-    async def add_history(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/history", access_token=access_token, json_body=payload
-        )
+    async def add_history(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
+        response = await self._request("POST", "/sync/history", access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def remove_history(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/history/remove", access_token=access_token, json_body=payload
-        )
+    async def remove_history(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
+        response = await self._request("POST", "/sync/history/remove", access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def add_ratings(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/ratings", access_token=access_token, json_body=payload
-        )
+    async def add_ratings(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
+        response = await self._request("POST", "/sync/ratings", access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def remove_ratings(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/ratings/remove", access_token=access_token, json_body=payload
-        )
+    async def remove_ratings(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
+        response = await self._request("POST", "/sync/ratings/remove", access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def add_to_watchlist(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/add-to-list", access_token=access_token, json_body=payload
-        )
+    async def add_to_watchlist(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
+        response = await self._request("POST", "/sync/add-to-list", access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def remove_from_watchlist(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/history/remove", access_token=access_token, json_body=payload
-        )
-        parsed = self._parse_json(response)
-        return parsed if isinstance(parsed, dict) else {}, response.status_code
-
-    async def add_to_list(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/add-to-list", access_token=access_token, json_body=payload
-        )
+    async def add_to_list(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
+        response = await self._request("POST", "/sync/add-to-list", access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
@@ -278,9 +240,7 @@ class SimklClient:
         last_error: SimklError | None = None
         for params in params_sets:
             try:
-                response = await self._request(
-                    "GET", "/sync/history", access_token=access_token, params=params
-                )
+                response = await self._request("GET", "/sync/history", access_token=access_token, params=params)
             except SimklError as exc:
                 last_error = exc
                 if exc.status_code not in {400, 404}:
@@ -294,9 +254,7 @@ class SimklClient:
         return [], {}, {}
 
     async def fetch_activities(self, access_token: str) -> dict[str, Any]:
-        response = await self._request(
-            "POST", "/sync/activities", access_token=access_token, json_body={}
-        )
+        response = await self._request("POST", "/sync/activities", access_token=access_token, json_body={})
         payload = self._parse_json(response)
         return payload if isinstance(payload, dict) else {}
 

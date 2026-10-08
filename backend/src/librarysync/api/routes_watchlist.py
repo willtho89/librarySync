@@ -226,9 +226,7 @@ async def add_watchlist_item(
             external_item_id=None,
             now=now,
         )
-        media_result = await db.execute(
-            select(MediaItem).where(MediaItem.id == watchlist_item.media_item_id)
-        )
+        media_result = await db.execute(select(MediaItem).where(MediaItem.id == watchlist_item.media_item_id))
         media_item = media_result.scalars().first()
         await enqueue_personal_watchlist_sync(db, watchlist_item, media_item, unhide_dropped=was_dropped)
         await db.commit()
@@ -274,9 +272,7 @@ async def list_watchlist_sources_route(
                 provider="letterboxd",
                 name="Letterboxd watchlist",
             )
-        elif integration.provider == "publicmetadb" and is_publicmetadb_sync_enabled(
-            dict(integration.config or {})
-        ):
+        elif integration.provider == "publicmetadb" and is_publicmetadb_sync_enabled(dict(integration.config or {})):
             await ensure_personal_watchlist_source(
                 db,
                 user_id=current_user.id,
@@ -447,9 +443,7 @@ async def sync_watchlist_source(
     )
     source = result.scalars().first()
     if not source:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist source not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist source not found")
     imported = await _sync_watchlist_source(db, source)
     return {"status": "synced", "imported": imported}
 
@@ -473,9 +467,7 @@ async def update_watchlist_source(
     )
     source = result.scalars().first()
     if not source:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist source not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist source not found")
     source.is_enabled = bool(payload.is_enabled)
     source.updated_at = datetime.now(timezone.utc)
     db.add(source)
@@ -504,9 +496,7 @@ async def delete_watchlist_source(
     )
     source = result.scalars().first()
     if not source:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist source not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist source not found")
     if source.source_type not in {URL_SOURCE_TYPE, LEGACY_LIST_SOURCE_TYPE}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -528,9 +518,7 @@ async def list_watchlist_items(
     media_type: Literal["movie", "tv", "anime"] | None = Query(None),
     search: str | None = Query(None, max_length=200),
     source: str | None = Query(None, max_length=32),
-    rewatch: Literal["all", "only", "exclude"] = Query(
-        "all", description="Filter rewatch-queued items"
-    ),
+    rewatch: Literal["all", "only", "exclude"] = Query("all", description="Filter rewatch-queued items"),
     order_by: CatalogOrderBy = Query(
         "date_added",
         description="Order by: date_added, release_date, last_watched, episodes_left, "
@@ -672,9 +660,7 @@ async def list_watchlist_items(
         progress = None
         desired_status = item.status
         if media.media_type == "tv":
-            progress = progress_map.get(
-                media.id, {"watched": 0, "total": 0, "earliest_air_date": None}
-            )
+            progress = progress_map.get(media.id, {"watched": 0, "total": 0, "earliest_air_date": None})
             desired_status = determine_show_watchlist_status(
                 total_released=progress["total"],
                 watched_count=progress["watched"],
@@ -762,9 +748,7 @@ async def remove_watchlist_item(
     )
     item = result.scalars().first()
     if not item:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found")
 
     await log_watchlist_event(db, current_user.id, item.media_item_id, "watchlist_removed", {})
     media_item = None
@@ -798,9 +782,7 @@ async def drop_watchlist_item(
     )
     row = result.first()
     if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found")
 
     item, media_item = row
     if media_item.media_type not in {"tv", "anime"}:
@@ -843,9 +825,7 @@ async def restore_watchlist_item(
     )
     row = result.first()
     if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found")
 
     item, media_item = row
     if item.status != "dropped":
@@ -887,9 +867,7 @@ async def enable_watchlist_rewatch(
     )
     row = result.first()
     if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found")
     item, media_item = row
     if item.status in WATCHLIST_TERMINAL_STATUSES:
         raise HTTPException(
@@ -962,9 +940,7 @@ async def disable_watchlist_rewatch(
     )
     item = result.scalars().first()
     if not item:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found")
     changed = await clear_watchlist_rewatch_request(
         db,
         item,
@@ -1002,9 +978,7 @@ async def mark_watchlist_item_watched(
     )
     row = result.first()
     if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist item not found")
     watchlist_item, media_item = row
 
     # 2. Determine target (Movie or Next Episode)
@@ -1105,15 +1079,11 @@ async def mark_watchlist_item_watched(
     return {
         "watched_id": watched.id,
         "media_type": media_item.media_type,
-        "added_episode": f"S{target_episode.season_number}E{target_episode.episode_number}"
-        if target_episode
-        else None,
+        "added_episode": f"S{target_episode.season_number}E{target_episode.episode_number}" if target_episode else None,
     }
 
 
-async def _get_show_progress_bulk(
-    db: AsyncSession, user_id: str, media_item_ids: list[str]
-) -> dict[str, dict]:
+async def _get_show_progress_bulk(db: AsyncSession, user_id: str, media_item_ids: list[str]) -> dict[str, dict]:
     if not media_item_ids:
         return {}
 
@@ -1161,11 +1131,7 @@ async def _get_show_progress_bulk(
         .group_by(EpisodeItem.show_media_item_id)
         .subquery()
     )
-    base = (
-        select(MediaItem.id.label("media_item_id"))
-        .where(MediaItem.id.in_(media_item_ids))
-        .subquery()
-    )
+    base = select(MediaItem.id.label("media_item_id")).where(MediaItem.id.in_(media_item_ids)).subquery()
     result = await db.execute(
         select(
             base.c.media_item_id,
@@ -1218,9 +1184,7 @@ async def _refresh_watchlist_statuses_for_filter(
             continue
         desired_status = item.status
         if media.media_type == "tv":
-            progress = progress_map.get(
-                media.id, {"watched": 0, "total": 0, "earliest_air_date": None}
-            )
+            progress = progress_map.get(media.id, {"watched": 0, "total": 0, "earliest_air_date": None})
             desired_status = determine_show_watchlist_status(
                 total_released=progress["total"],
                 watched_count=progress["watched"],

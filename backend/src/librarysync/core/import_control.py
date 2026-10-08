@@ -218,9 +218,7 @@ def merge_pending(config: dict | None) -> bool:
 
 async def load_blocked_outbox_users(db: AsyncSession) -> set[str]:
     result = await db.execute(
-        select(Integration.user_id, Integration.config).where(
-            Integration.provider == IMPORT_ALL_PROVIDER
-        )
+        select(Integration.user_id, Integration.config).where(Integration.provider == IMPORT_ALL_PROVIDER)
     )
     blocked: set[str] = set()
     for user_id, config in result.all():

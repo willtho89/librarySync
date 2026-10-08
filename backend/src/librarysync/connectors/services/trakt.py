@@ -10,12 +10,13 @@ from urllib.parse import urlencode
 import httpx
 
 from librarysync.connectors.services.base import ServiceConnector
+from librarysync.connectors.services.pagination import PagedEntries
 from librarysync.core.canonical import ProgressEvent
 from librarysync.core.http_client import get_http_client
 
 DEFAULT_TRAKT_API_BASE_URL = "https://api.trakt.tv"
 TRAKT_OAUTH_AUTHORIZE_URL = "https://api.trakt.tv/oauth/authorize"
-TRAKT_OAUTH_TOKEN_URL = "https://api.trakt.tv/oauth/token"
+TRAKT_OAUTH_TOKEN_URL = "https://api.trakt.tv/oauth/token"  # noqa: S105 - endpoint URL, not a secret
 TRAKT_REQUIRED_FIELDS = ("access_token", "refresh_token")
 
 
@@ -155,9 +156,7 @@ class TraktClient:
         data = await self._post_json(self.token_url, payload)
         return normalize_token_payload(data)
 
-    async def refresh_access_token(
-        self, refresh_token: str, redirect_uri: str | None = None
-    ) -> TraktToken:
+    async def refresh_access_token(self, refresh_token: str, redirect_uri: str | None = None) -> TraktToken:
         payload = {
             "refresh_token": refresh_token,
             "client_id": self.client_id,
@@ -173,12 +172,8 @@ class TraktClient:
         response = await self._request("GET", "/users/me", access_token=access_token)
         return self._parse_json(response)
 
-    async def add_history(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/history", access_token=access_token, json_body=payload
-        )
+    async def add_history(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
+        response = await self._request("POST", "/sync/history", access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
@@ -191,30 +186,18 @@ class TraktClient:
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def remove_history(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/history/remove", access_token=access_token, json_body=payload
-        )
+    async def remove_history(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
+        response = await self._request("POST", "/sync/history/remove", access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def add_ratings(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/ratings", access_token=access_token, json_body=payload
-        )
+    async def add_ratings(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
+        response = await self._request("POST", "/sync/ratings", access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
-    async def remove_ratings(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
-        response = await self._request(
-            "POST", "/sync/ratings/remove", access_token=access_token, json_body=payload
-        )
+    async def remove_ratings(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
+        response = await self._request("POST", "/sync/ratings/remove", access_token=access_token, json_body=payload)
         parsed = self._parse_json(response)
         return parsed if isinstance(parsed, dict) else {}, response.status_code
 
@@ -348,7 +331,7 @@ class TraktClient:
         per_page: int = 50,
         max_pages: int | None = 10,
     ) -> list[dict[str, Any]]:
-        entries: list[dict[str, Any]] = []
+        entries = PagedEntries()
         page = 1
         while max_pages is None or page <= max_pages:
             items, headers = await self.fetch_watchlist(
@@ -366,6 +349,8 @@ class TraktClient:
             if len(items) < per_page:
                 break
             page += 1
+        else:
+            entries.truncated = True
         return entries
 
     async def fetch_hidden_items(
@@ -414,9 +399,7 @@ class TraktClient:
             page += 1
         return entries
 
-    async def add_to_watchlist(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
+    async def add_to_watchlist(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
         response = await self._request(
             "POST",
             "/sync/watchlist",
@@ -425,9 +408,7 @@ class TraktClient:
         )
         return self._parse_json(response), response.status_code
 
-    async def remove_from_watchlist(
-        self, payload: dict[str, Any], access_token: str
-    ) -> tuple[dict[str, Any], int]:
+    async def remove_from_watchlist(self, payload: dict[str, Any], access_token: str) -> tuple[dict[str, Any], int]:
         response = await self._request(
             "POST",
             "/sync/watchlist/remove",
@@ -532,7 +513,7 @@ class TraktClient:
         per_page: int = 50,
         max_pages: int | None = 1,
     ) -> list[dict[str, Any]]:
-        entries: list[dict[str, Any]] = []
+        entries = PagedEntries()
         page = 1
         while max_pages is None or page <= max_pages:
             items, headers = await self.fetch_list_items(
@@ -553,6 +534,8 @@ class TraktClient:
             if len(items) < per_page:
                 break
             page += 1
+        else:
+            entries.truncated = True
         return entries
 
     async def fetch_user_list_items(
@@ -569,10 +552,7 @@ class TraktClient:
         type_segment = item_type or ""
         sort_by_segment = sort_by or ""
         sort_how_segment = sort_how or ""
-        path = (
-            f"/users/{username}/lists/{list_id}/items/{type_segment}/{sort_by_segment}/"
-            f"{sort_how_segment}"
-        )
+        path = f"/users/{username}/lists/{list_id}/items/{type_segment}/{sort_by_segment}/{sort_how_segment}"
         params: dict[str, str] = {"page": str(page), "limit": str(limit)}
         response = await self._request("GET", path, access_token=access_token, params=params)
         payload = self._parse_json(response)
@@ -590,7 +570,7 @@ class TraktClient:
         per_page: int = 50,
         max_pages: int | None = 1,
     ) -> list[dict[str, Any]]:
-        entries: list[dict[str, Any]] = []
+        entries = PagedEntries()
         page = 1
         while max_pages is None or page <= max_pages:
             items, headers = await self.fetch_user_list_items(
@@ -612,6 +592,8 @@ class TraktClient:
             if len(items) < per_page:
                 break
             page += 1
+        else:
+            entries.truncated = True
         return entries
 
     async def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:

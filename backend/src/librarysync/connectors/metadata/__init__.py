@@ -15,15 +15,15 @@ from librarysync.connectors.metadata.tvdb import TvdbMetadataProvider
 from librarysync.connectors.metadata.tvmaze import TvmazeMetadataProvider
 
 __all__ = [
-    "MetadataProvider",
     "EpisodeMetadataProvider",
+    "ImdbMetadataProvider",
+    "KitsuMetadataProvider",
     "MediaCandidate",
+    "MetadataProvider",
+    "MyAnimeListMetadataProvider",
     "ProviderCapabilities",
     "ProviderConfig",
     "ProviderContext",
-    "ImdbMetadataProvider",
-    "KitsuMetadataProvider",
-    "MyAnimeListMetadataProvider",
     "PublicMetaDbMetadataProvider",
     "TmdbMetadataProvider",
     "TvdbMetadataProvider",

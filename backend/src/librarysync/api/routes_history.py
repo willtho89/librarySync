@@ -25,8 +25,10 @@ from librarysync.core.ratings import normalize_star_rating
 from librarysync.core.watch_pipeline import (
     SYNC_COORDINATOR,
     SYNC_STRATEGY_REGISTRY,
+    cancel_queued_pushes,
     enqueue_new_item_job,
     enqueue_watchlist_update_job,
+    lock_watches_for_deletion,
 )
 from librarysync.db.models import (
     EpisodeItem,
@@ -335,8 +337,9 @@ async def add_watched_item(
     await db.flush()
     from librarysync.core.watch_state_history import record_manual_state
 
-    await record_manual_state(db, watched, media_item, episode_item, watch_changed=True,
-                              rating_changed=rating is not None)
+    await record_manual_state(
+        db, watched, media_item, episode_item, watch_changed=True, rating_changed=rating is not None
+    )
     await enqueue_new_item_job(
         db,
         current_user.id,
@@ -526,21 +529,12 @@ async def list_watched_items(
         base_item = media_item or show
         if not base_item:
             continue
-        sync_entries = [
-            entry for entry in (sync, trakt, simkl, stremio, anilist, publicmetadb) if entry
-        ]
-        first_sync_at = (
-            min((entry.created_at for entry in sync_entries), default=None)
-            if sync_entries
-            else None
-        )
+        sync_entries = [entry for entry in (sync, trakt, simkl, stremio, anilist, publicmetadb) if entry]
+        first_sync_at = min((entry.created_at for entry in sync_entries), default=None) if sync_entries else None
         last_sync_at = None
         if sync_entries:
             last_sync_at = max(
-                (
-                    entry.last_synced_at or entry.updated_at or entry.created_at
-                    for entry in sync_entries
-                ),
+                (entry.last_synced_at or entry.updated_at or entry.created_at for entry in sync_entries),
                 default=None,
             )
         metadata = HistoryItemMetadata(
@@ -596,9 +590,7 @@ async def list_watched_items(
                 episode_number=episode_item.episode_number if episode_item else None,
                 episode_title=episode_item.title if episode_item else None,
                 episode_air_date=episode_item.air_date if episode_item else None,
-                episode_overview=episode_item.raw.get("overview")
-                if episode_item and episode_item.raw
-                else None,
+                episode_overview=episode_item.raw.get("overview") if episode_item and episode_item.raw else None,
                 episode_imdb_id=episode_item.imdb_id if episode_item else None,
                 episode_tmdb_id=episode_item.tmdb_id if episode_item else None,
                 episode_tvdb_id=episode_item.tvdb_id if episode_item else None,
@@ -695,9 +687,7 @@ async def sync_watched_items(
             detail="Unknown sync provider",
         )
     watched_ids = [
-        watched_id.strip()
-        for watched_id in (payload.watched_ids or [])
-        if watched_id and watched_id.strip()
+        watched_id.strip() for watched_id in (payload.watched_ids or []) if watched_id and watched_id.strip()
     ]
     unique_ids = list(dict.fromkeys(watched_ids))
     show_item = aliased(MediaItem)
@@ -751,11 +741,14 @@ async def clear_watched_items(
     rows = result.all()
     if not rows:
         return {"deleted": 0}
+    # Wait for in-flight pushes before reading delivery state for removals.
+    locked = await lock_watches_for_deletion(db, current_user.id)
+    rows = [row for row in rows if row[0].id in locked]
 
     now = datetime.now(timezone.utc)
     events: list[WatchEvent] = []
     watchlist_media_ids: set[str] = set()
-    for watched, media_item, episode_item, show in rows:
+    for watched, media_item, _episode_item, show in rows:
         events.append(
             WatchEvent(
                 user_id=current_user.id,
@@ -765,9 +758,7 @@ async def clear_watched_items(
                 occurred_at=now,
                 raw={
                     "watched_id": watched.id,
-                    "previous_watched_at": watched.watched_at.isoformat()
-                    if watched.watched_at
-                    else None,
+                    "previous_watched_at": watched.watched_at.isoformat() if watched.watched_at else None,
                     "bulk_clear": True,
                 },
             )
@@ -781,6 +772,7 @@ async def clear_watched_items(
                 target_media.id,
             )
     db.add_all(events)
+    await cancel_queued_pushes(db, current_user.id)
     await db.execute(delete(WatchedItem).where(WatchedItem.user_id == current_user.id))
     await db.execute(
         delete(WatchEvent).where(
@@ -846,9 +838,7 @@ async def update_watched_item(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     result = await db.execute(
-        select(WatchedItem).where(
-            WatchedItem.id == watched_id, WatchedItem.user_id == current_user.id
-        )
+        select(WatchedItem).where(WatchedItem.id == watched_id, WatchedItem.user_id == current_user.id)
     )
     watched = result.scalars().first()
     if not watched:
@@ -879,9 +869,7 @@ async def update_watched_item(
 
     event_raw: dict[str, object] = {"watched_id": watched.id}
     if watched_at_updated:
-        event_raw["previous_watched_at"] = (
-            previous_watched_at.isoformat() if previous_watched_at else None
-        )
+        event_raw["previous_watched_at"] = previous_watched_at.isoformat() if previous_watched_at else None
         event_raw["watched_at"] = watched.watched_at.isoformat()
     if rating_updated:
         event_raw["previous_rating"] = previous_rating
@@ -902,25 +890,25 @@ async def update_watched_item(
         episode_item: EpisodeItem | None = None
         show_item: MediaItem | None = None
         if watched.media_item_id:
-            result = await db.execute(
-                select(MediaItem).where(MediaItem.id == watched.media_item_id)
-            )
+            result = await db.execute(select(MediaItem).where(MediaItem.id == watched.media_item_id))
             media_item = result.scalars().first()
         if watched.episode_item_id:
-            result = await db.execute(
-                select(EpisodeItem).where(EpisodeItem.id == watched.episode_item_id)
-            )
+            result = await db.execute(select(EpisodeItem).where(EpisodeItem.id == watched.episode_item_id))
             episode_item = result.scalars().first()
             if episode_item:
-                result = await db.execute(
-                    select(MediaItem).where(MediaItem.id == episode_item.show_media_item_id)
-                )
+                result = await db.execute(select(MediaItem).where(MediaItem.id == episode_item.show_media_item_id))
                 show_item = result.scalars().first()
         if media_item or episode_item:
             from librarysync.core.watch_state_history import record_manual_state
 
-            await record_manual_state(db, watched, media_item or show_item, episode_item,
-                                      watch_changed=watched_at_updated, rating_changed=rating_updated)
+            await record_manual_state(
+                db,
+                watched,
+                media_item or show_item,
+                episode_item,
+                watch_changed=watched_at_updated,
+                rating_changed=rating_updated,
+            )
             await _enqueue_update_syncs(
                 db,
                 watched,
@@ -945,9 +933,7 @@ async def update_watched_item(
 )
 async def delete_watched_item(
     watched_id: str,
-    delete_integrations: bool = Query(
-        False, description="Also delete the item from connected integrations."
-    ),
+    delete_integrations: bool = Query(False, description="Also delete the item from connected integrations."),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -960,7 +946,8 @@ async def delete_watched_item(
         .where(WatchedItem.id == watched_id, WatchedItem.user_id == current_user.id)
     )
     row = result.first()
-    if not row:
+    # Wait for an in-flight push before reading delivery state for removals.
+    if not row or not await lock_watches_for_deletion(db, current_user.id, [watched_id]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watched entry not found")
 
     watched, media_item, episode_item, show_item = row
@@ -996,6 +983,7 @@ async def delete_watched_item(
             current_user.id,
             target_media.id,
         )
+    await cancel_queued_pushes(db, current_user.id, [watched.id])
     await db.delete(watched)
     await db.commit()
     return {"status": "deleted"}
@@ -1030,6 +1018,9 @@ async def bulk_delete_watched_items(
         )
     )
     rows = result.all()
+    # Wait for in-flight pushes before reading delivery state for removals.
+    locked = await lock_watches_for_deletion(db, current_user.id, [row[0].id for row in rows])
+    rows = [row for row in rows if row[0].id in locked]
     if not rows:
         return {"deleted": 0}
 
@@ -1075,6 +1066,7 @@ async def bulk_delete_watched_items(
             )
 
     db.add_all(events)
+    await cancel_queued_pushes(db, current_user.id, list(delete_ids))
     await db.flush()
     await db.execute(
         delete(WatchedItem).where(
@@ -1255,9 +1247,7 @@ async def _is_rewatch(
     return False
 
 
-async def _attach_next_episodes(
-    db: AsyncSession, user_id: str, items: list[dict]
-) -> None:
+async def _attach_next_episodes(db: AsyncSession, user_id: str, items: list[dict]) -> None:
     """Attach the next released, unwatched episode to show items, in place."""
     show_ids: list[str] = []
     for item in items:
@@ -1301,9 +1291,7 @@ def _merge_history_items(items: list[dict]) -> list[dict]:
     for group_items in groups.values():
         base = max(group_items, key=_history_item_score)
         merged_item = dict(base)
-        merged_item["watched_at"] = max(
-            item["watched_at"] for item in group_items if item.get("watched_at")
-        )
+        merged_item["watched_at"] = max(item["watched_at"] for item in group_items if item.get("watched_at"))
         for field in _provider_fields():
             if merged_item.get(field) is None:
                 for item in group_items:
@@ -1324,9 +1312,7 @@ def _merge_history_items(items: list[dict]) -> list[dict]:
                 break
         for item in group_items:
             title = item.get("title")
-            if title and (
-                not merged_item.get("title") or len(title) > len(str(merged_item.get("title")))
-            ):
+            if title and (not merged_item.get("title") or len(title) > len(str(merged_item.get("title")))):
                 merged_item["title"] = title
         merged.append(merged_item)
     return merged
@@ -1490,9 +1476,7 @@ async def _enqueue_delete_syncs(
     )
 
 
-async def _find_media_item_by_ids(
-    db: AsyncSession, media_type: str, ids: dict[str, str]
-) -> MediaItem | None:
+async def _find_media_item_by_ids(db: AsyncSession, media_type: str, ids: dict[str, str]) -> MediaItem | None:
     item: MediaItem | None = None
 
     def _set_item(candidate: MediaItem | None) -> None:
@@ -1591,9 +1575,7 @@ async def _find_episode_item_by_ids(
         result = await db.execute(select(EpisodeItem).where(EpisodeItem.tvdb_id == ids["tvdb_id"]))
         _set_item(result.scalars().first())
     if ids.get("tvmaze_id"):
-        result = await db.execute(
-            select(EpisodeItem).where(EpisodeItem.tvmaze_id == ids["tvmaze_id"])
-        )
+        result = await db.execute(select(EpisodeItem).where(EpisodeItem.tvmaze_id == ids["tvmaze_id"]))
         _set_item(result.scalars().first())
 
     result = await db.execute(

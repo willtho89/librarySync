@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass
@@ -15,14 +14,11 @@ from librarysync.connectors.services.simkl import (
     SimklClient,
     SimklError,
     has_required_simkl_fields,
-    is_token_expired,
-    parse_expires_at,
-    token_to_secret_payload,
 )
 from librarysync.core.import_schedule import parse_datetime
+from librarysync.core.integration_tokens import ensure_simkl_access_token
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.ratings import normalize_ten_point_rating
-from librarysync.core.security import encrypt_value
 from librarysync.core.watchlist_sources import (
     DROPPED_SOURCE_EXTERNAL_ID,
     PERSONAL_SOURCE_TYPE,
@@ -35,7 +31,6 @@ from librarysync.core.watchlist_sources import (
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
-    IntegrationSecret,
     MediaItem,
     WatchEvent,
     WatchlistSource,
@@ -55,6 +50,8 @@ from librarysync.jobs.watchlist_pipeline import (
 )
 
 LOOKBACK_DAYS = settings.history_lookback_days
+_ensure_simkl_access_token = ensure_simkl_access_token
+
 logger = logging.getLogger(__name__)
 SIMKL_ACTIVITY_KEYS = {
     "movies": "movies",
@@ -136,9 +133,7 @@ async def _import_for_integration(
 ) -> ImportResult:
     if not settings.simkl_client_id or not settings.simkl_client_secret:
         return ImportResult(imported=0, attempted=False)
-    integration, secret_data = await load_integration_with_secrets(
-        db, integration.user_id, "simkl"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, integration.user_id, "simkl")
     if not integration or not secret_data:
         return ImportResult(imported=0, attempted=False)
     if not has_required_simkl_fields(secret_data):
@@ -148,9 +143,7 @@ async def _import_for_integration(
         client_secret=settings.simkl_client_secret,
     )
     try:
-        access_token = await _ensure_simkl_access_token(
-            db, integration.id, secret_data, client
-        )
+        access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
     except SimklError as exc:
         logger.warning(
             "SIMKL token refresh failed for user %s: %s",
@@ -159,13 +152,9 @@ async def _import_for_integration(
         )
         return ImportResult(imported=0, attempted=True)
 
-    activities = await _fetch_simkl_activities(
-        client, access_token, integration.user_id
-    )
+    activities = await _fetch_simkl_activities(client, access_token, integration.user_id)
     has_history = await _has_simkl_import_history(db, integration.user_id)
-    date_from, initial_sync = _select_date_from(
-        integration.config, activities, now, lookback_days, has_history
-    )
+    date_from, initial_sync = _select_date_from(integration.config, activities, now, lookback_days, has_history)
     if initial_sync:
         logger.info(
             "SIMKL import using initial lookback window starting %s for user %s",
@@ -270,9 +259,7 @@ async def _import_for_integration(
     return ImportResult(imported=imported + watchlist_imported, attempted=True)
 
 
-async def _fetch_simkl_activities(
-    client: SimklClient, access_token: str, user_id: str
-) -> dict[str, Any]:
+async def _fetch_simkl_activities(client: SimklClient, access_token: str, user_id: str) -> dict[str, Any]:
     try:
         return await client.fetch_activities(access_token)
     except SimklError as exc:
@@ -322,9 +309,7 @@ def _extract_activity_timestamp(payload: dict[str, Any] | None) -> datetime | No
     return None
 
 
-def _extract_activity_block_timestamp(
-    payload: dict[str, Any] | None, key: str
-) -> datetime | None:
+def _extract_activity_block_timestamp(payload: dict[str, Any] | None, key: str) -> datetime | None:
     if not isinstance(payload, dict):
         return None
     block = payload.get(key)
@@ -564,6 +549,9 @@ async def _import_watchlist_for_integration(
             continue
         candidates: list[WatchlistCandidate] = []
         total_entries = 0
+        # A failed category fetch leaves the listing incomplete; reconciling
+        # against it would delete that category's watchlist items.
+        complete = True
         for category in ("movies", "shows", "anime"):
             payload = await _fetch_all_items_cached(
                 client,
@@ -573,6 +561,7 @@ async def _import_watchlist_for_integration(
                 user_id=integration.user_id,
             )
             if payload is None:
+                complete = False
                 continue
             entries = _extract_all_items_entries(payload, category, WATCHLIST_STATUSES)
             total_entries += len(entries)
@@ -592,8 +581,9 @@ async def _import_watchlist_for_integration(
                 source,
                 candidates,
                 now=now,
+                reconcile=complete,
             )
-        elif total_entries == 0:
+        elif total_entries == 0 and complete:
             await reconcile_watchlist_source(
                 db,
                 source,
@@ -668,9 +658,7 @@ async def import_watchlist_source(
         raise ValueError("Watchlist source is not a SIMKL list")
     if not settings.simkl_client_id or not settings.simkl_client_secret:
         raise ValueError("SIMKL credentials are not configured")
-    integration, secret_data = await load_integration_with_secrets(
-        db, source.user_id, "simkl"
-    )
+    integration, secret_data = await load_integration_with_secrets(db, source.user_id, "simkl")
     if not integration or integration.status == "disconnected":
         raise ValueError("SIMKL integration is not connected")
     if not secret_data or not has_required_simkl_fields(secret_data):
@@ -682,9 +670,7 @@ async def import_watchlist_source(
         client_id=settings.simkl_client_id,
         client_secret=settings.simkl_client_secret,
     )
-    access_token = await _ensure_simkl_access_token(
-        db, integration.id, secret_data, client
-    )
+    access_token = await _ensure_simkl_access_token(db, integration.id, secret_data, client)
     return await _import_watchlist_for_integration(
         db,
         integration,
@@ -831,9 +817,7 @@ def _extract_all_items_entries(
         container = payload
     entries: list[dict[str, Any]] = []
     if isinstance(container, dict):
-        has_status_keys = bool(statuses) and any(
-            status in container for status in statuses or set()
-        )
+        has_status_keys = bool(statuses) and any(status in container for status in statuses or set())
         if statuses:
             for status in statuses:
                 entries.extend(_extract_entries_from_container(container.get(status)))
@@ -867,9 +851,7 @@ def _extract_entries_from_container(value: object) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
     if isinstance(value, dict):
-        if _looks_like_payload(value) or any(
-            key in value for key in ("movie", "show", "item", "episode", "anime")
-        ):
+        if _looks_like_payload(value) or any(key in value for key in ("movie", "show", "item", "episode", "anime")):
             return [value]
         entries: list[dict[str, Any]] = []
         for key in (
@@ -910,9 +892,7 @@ def _extract_show_payload(entry: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _extract_episode_entries(entry: dict[str, Any]) -> list[dict[str, Any]]:
-    episode_season = _coerce_int(
-        entry.get("season") or entry.get("season_number") or entry.get("number")
-    )
+    episode_season = _coerce_int(entry.get("season") or entry.get("season_number") or entry.get("number"))
     episodes = _coerce_episode_list(entry.get("episodes"), episode_season)
     if episodes:
         return episodes
@@ -921,17 +901,13 @@ def _extract_episode_entries(entry: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(seasons, dict):
         for season_key, season in seasons.items():
             season_number = _extract_season_number(season, season_key)
-            results.extend(
-                _coerce_episode_list(_extract_season_episodes(season), season_number)
-            )
+            results.extend(_coerce_episode_list(_extract_season_episodes(season), season_number))
     elif isinstance(seasons, list):
         for season in seasons:
             if not isinstance(season, dict):
                 continue
             season_number = _extract_season_number(season, None)
-            results.extend(
-                _coerce_episode_list(_extract_season_episodes(season), season_number)
-            )
+            results.extend(_coerce_episode_list(_extract_season_episodes(season), season_number))
     if results:
         return results
     last_watched = _extract_last_watched_label(entry)
@@ -974,14 +950,9 @@ def _parse_last_watched_label(value: str) -> tuple[int, int] | None:
 
 def _extract_season_number(payload: object, key: object) -> int | None:
     if isinstance(payload, dict):
-        return (
-            _coerce_int(
-                payload.get("season")
-                or payload.get("season_number")
-                or payload.get("number")
-            )
-            or _coerce_int(key)
-        )
+        return _coerce_int(
+            payload.get("season") or payload.get("season_number") or payload.get("number")
+        ) or _coerce_int(key)
     return _coerce_int(key)
 
 
@@ -990,24 +961,15 @@ def _extract_season_episodes(payload: dict[str, Any] | None) -> object:
         return payload
     if not isinstance(payload, dict):
         return None
-    return (
-        payload.get("episodes")
-        or payload.get("items")
-        or payload.get("list")
-        or payload.get("episode")
-    )
+    return payload.get("episodes") or payload.get("items") or payload.get("list") or payload.get("episode")
 
 
-def _coerce_episode_list(
-    value: object, season_number: int | None
-) -> list[dict[str, Any]]:
+def _coerce_episode_list(value: object, season_number: int | None) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     if isinstance(value, dict):
         for key, episode in value.items():
             episode_number = _coerce_int(key)
-            normalized = _normalize_episode_payload(
-                episode, episode_number, season_number
-            )
+            normalized = _normalize_episode_payload(episode, episode_number, season_number)
             if normalized:
                 results.append(normalized)
         return results
@@ -1032,17 +994,9 @@ def _normalize_episode_payload(
         normalized = {"episode": payload}
     else:
         return None
-    if (
-        episode_number is not None
-        and "episode" not in normalized
-        and "number" not in normalized
-    ):
+    if episode_number is not None and "episode" not in normalized and "number" not in normalized:
         normalized["episode"] = episode_number
-    if (
-        season_number is not None
-        and "season" not in normalized
-        and "season_number" not in normalized
-    ):
+    if season_number is not None and "season" not in normalized and "season_number" not in normalized:
         normalized["season"] = season_number
     return normalized
 
@@ -1216,12 +1170,8 @@ def _build_episode_candidate(
     )
 
 
-async def _get_or_create_movie_item(
-    db: AsyncSession, movie: MovieSummary
-) -> MediaItem | None:
-    item = await _find_media_item(
-        db, movie.imdb_id, movie.tmdb_id, movie.simkl_id, "movie"
-    )
+async def _get_or_create_movie_item(db: AsyncSession, movie: MovieSummary) -> MediaItem | None:
+    item = await _find_media_item(db, movie.imdb_id, movie.tmdb_id, movie.simkl_id, "movie")
     if item:
         await _apply_movie_updates(db, item, movie)
         return item
@@ -1241,12 +1191,8 @@ async def _get_or_create_movie_item(
     return item
 
 
-async def _get_or_create_show_item(
-    db: AsyncSession, show: ShowSummary, raw_type: str = "show"
-) -> MediaItem | None:
-    item = await _find_media_item(
-        db, show.imdb_id, show.tmdb_id, show.simkl_id, "tv"
-    )
+async def _get_or_create_show_item(db: AsyncSession, show: ShowSummary, raw_type: str = "show") -> MediaItem | None:
+    item = await _find_media_item(db, show.imdb_id, show.tmdb_id, show.simkl_id, "tv")
     if item:
         await _apply_show_updates(db, item, show, raw_type)
         return item
@@ -1298,15 +1244,11 @@ async def _find_media_item(
 ) -> MediaItem | None:
     item: MediaItem | None = None
     if imdb_id:
-        result = await db.execute(
-            select(MediaItem).where(MediaItem.imdb_id == imdb_id)
-        )
+        result = await db.execute(select(MediaItem).where(MediaItem.imdb_id == imdb_id))
         item = result.scalars().first()
     if tmdb_id:
         result = await db.execute(
-            select(MediaItem).where(
-                MediaItem.tmdb_id == tmdb_id, MediaItem.media_type == media_type
-            )
+            select(MediaItem).where(MediaItem.tmdb_id == tmdb_id, MediaItem.media_type == media_type)
         )
         tmdb_item = result.scalars().first()
         if item and tmdb_item and item.id != tmdb_item.id:
@@ -1329,23 +1271,17 @@ async def _find_episode_item(
 ) -> EpisodeItem | None:
     item: EpisodeItem | None = None
     if episode.imdb_id:
-        result = await db.execute(
-            select(EpisodeItem).where(EpisodeItem.imdb_id == episode.imdb_id)
-        )
+        result = await db.execute(select(EpisodeItem).where(EpisodeItem.imdb_id == episode.imdb_id))
         item = result.scalars().first()
     if episode.tmdb_id:
-        result = await db.execute(
-            select(EpisodeItem).where(EpisodeItem.tmdb_id == episode.tmdb_id)
-        )
+        result = await db.execute(select(EpisodeItem).where(EpisodeItem.tmdb_id == episode.tmdb_id))
         tmdb_item = result.scalars().first()
         if item and tmdb_item and item.id != tmdb_item.id:
             return item
         if not item:
             item = tmdb_item
     if episode.tvdb_id:
-        result = await db.execute(
-            select(EpisodeItem).where(EpisodeItem.tvdb_id == episode.tvdb_id)
-        )
+        result = await db.execute(select(EpisodeItem).where(EpisodeItem.tvdb_id == episode.tvdb_id))
         tvdb_item = result.scalars().first()
         if item and tvdb_item and item.id != tvdb_item.id:
             return item
@@ -1353,9 +1289,7 @@ async def _find_episode_item(
             item = tvdb_item
     if not item and episode.simkl_id:
         result = await db.execute(
-            select(EpisodeItem).where(
-                EpisodeItem.raw["simkl_id"].as_string() == episode.simkl_id
-            )
+            select(EpisodeItem).where(EpisodeItem.raw["simkl_id"].as_string() == episode.simkl_id)
         )
         item = result.scalars().first()
     if not item and show_media_item_id:
@@ -1413,9 +1347,7 @@ async def _apply_episode_updates(
     item.raw = _merge_episode_raw(item.raw, episode.simkl_id, episode.raw)
 
 
-def _build_media_raw(
-    simkl_id: str | None, raw_payload: dict[str, Any], raw_type: str
-) -> dict[str, Any]:
+def _build_media_raw(simkl_id: str | None, raw_payload: dict[str, Any], raw_type: str) -> dict[str, Any]:
     raw = {"source": "simkl", "type": raw_type}
     if simkl_id:
         raw["simkl_id"] = simkl_id
@@ -1449,9 +1381,7 @@ def _build_episode_raw(simkl_id: str | None, raw_payload: dict[str, Any]) -> dic
     return raw
 
 
-def _merge_episode_raw(
-    existing: dict | None, simkl_id: str | None, raw_payload: dict[str, Any]
-) -> dict:
+def _merge_episode_raw(existing: dict | None, simkl_id: str | None, raw_payload: dict[str, Any]) -> dict:
     raw = existing if isinstance(existing, dict) else {}
     if simkl_id and not raw.get("simkl_id"):
         raw["simkl_id"] = simkl_id
@@ -1505,9 +1435,7 @@ async def _can_assign_media_id(
     value: str,
 ) -> bool:
     if field == "imdb_id":
-        result = await db.execute(
-            select(MediaItem.id).where(MediaItem.imdb_id == value)
-        )
+        result = await db.execute(select(MediaItem.id).where(MediaItem.imdb_id == value))
     elif field == "tmdb_id":
         result = await db.execute(
             select(MediaItem.id).where(
@@ -1535,17 +1463,11 @@ async def _can_assign_episode_id(
     value: str,
 ) -> bool:
     if field == "imdb_id":
-        result = await db.execute(
-            select(EpisodeItem.id).where(EpisodeItem.imdb_id == value)
-        )
+        result = await db.execute(select(EpisodeItem.id).where(EpisodeItem.imdb_id == value))
     elif field == "tmdb_id":
-        result = await db.execute(
-            select(EpisodeItem.id).where(EpisodeItem.tmdb_id == value)
-        )
+        result = await db.execute(select(EpisodeItem.id).where(EpisodeItem.tmdb_id == value))
     elif field == "tvdb_id":
-        result = await db.execute(
-            select(EpisodeItem.id).where(EpisodeItem.tvdb_id == value)
-        )
+        result = await db.execute(select(EpisodeItem.id).where(EpisodeItem.tvdb_id == value))
     else:
         return False
     existing = result.scalars().first()
@@ -1768,9 +1690,7 @@ def _extract_episode_summary(entry: dict[str, Any]) -> EpisodeSummary | None:
     if not isinstance(payload, dict):
         return None
     season = _coerce_int(payload.get("season") or payload.get("season_number"))
-    number = _coerce_int(
-        payload.get("episode") or payload.get("number") or payload.get("episode_number")
-    )
+    number = _coerce_int(payload.get("episode") or payload.get("number") or payload.get("episode_number"))
     if season is None or number is None:
         return None
     ids = _coerce_ids(payload.get("ids") or payload.get("episode_ids"))
@@ -1793,11 +1713,7 @@ def _sanitize_simkl_payload(payload: dict[str, Any]) -> dict[str, Any]:
             keep[key] = payload[key]
     ids = payload.get("ids")
     if isinstance(ids, dict):
-        keep["ids"] = {
-            key: value
-            for key, value in ids.items()
-            if isinstance(value, (str, int))
-        }
+        keep["ids"] = {key: value for key, value in ids.items() if isinstance(value, (str, int))}
     return keep
 
 
@@ -1868,9 +1784,7 @@ def _expand_episode_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any
                 expanded.append(merged)
             continue
         season = _coerce_int(entry.get("season") or entry.get("season_number"))
-        number = _coerce_int(
-            entry.get("episode") or entry.get("number") or entry.get("episode_number")
-        )
+        number = _coerce_int(entry.get("episode") or entry.get("number") or entry.get("episode_number"))
         if season is not None and number is not None and entry.get("show"):
             expanded.append(
                 {
@@ -1951,45 +1865,3 @@ def _parse_datetime(value: object) -> datetime | None:
                 return parsed.replace(tzinfo=timezone.utc)
             return parsed
     return None
-
-
-async def _ensure_simkl_access_token(
-    db: AsyncSession,
-    integration_id: str,
-    secret_data: dict[str, object],
-    client: SimklClient,
-) -> str:
-    access_token = secret_data.get("access_token")
-    refresh_token = secret_data.get("refresh_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise SimklError("SIMKL access token is missing", status_code=401)
-    expires_at = parse_expires_at(secret_data.get("expires_at"))
-    if not is_token_expired(expires_at):
-        return access_token
-    if not isinstance(refresh_token, str) or not refresh_token:
-        raise SimklError("SIMKL refresh token is missing", status_code=401)
-    token = await client.refresh_access_token(refresh_token)
-    updated = dict(secret_data)
-    updated.update(token_to_secret_payload(token))
-    await _save_integration_secret(db, integration_id, updated)
-    return token.access_token
-
-
-async def _save_integration_secret(
-    db: AsyncSession, integration_id: str, secret_data: dict[str, object]
-) -> None:
-    encrypted = encrypt_value(json.dumps(secret_data))
-    result = await db.execute(
-        select(IntegrationSecret).where(
-            IntegrationSecret.integration_id == integration_id
-        )
-    )
-    secret = result.scalars().first()
-    if not secret:
-        secret = IntegrationSecret(
-            integration_id=integration_id,
-            secret_data=encrypted,
-        )
-    else:
-        secret.secret_data = encrypted
-    db.add(secret)

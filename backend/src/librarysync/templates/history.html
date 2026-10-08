@@ -129,6 +129,40 @@
   </div>
  </div>
 
+<div id="history-delete-modal" class="modal" hidden>
+  <div class="modal-backdrop" data-modal-close></div>
+  <div
+    class="modal-panel"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="history-delete-heading"
+    aria-describedby="history-delete-description"
+  >
+    <header class="modal-header">
+      <h2 id="history-delete-heading" class="section-title">Delete entry</h2>
+      <button type="button" class="btn btn-ghost btn-sm" data-modal-close>Close</button>
+    </header>
+    <form id="history-delete-form" class="space-y-4">
+      <p id="history-delete-description" class="text-sm text-ink">
+        Delete <strong data-history-delete-title>this entry</strong> from your history?
+      </p>
+      <label class="inline-control">
+        <input id="history-delete-item-integrations" type="checkbox" />
+        <span>Also delete from connected integrations</span>
+      </label>
+      <p class="helper-text">
+        Removing it from connected integrations cannot be undone.
+      </p>
+      <div class="flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-danger">Delete</button>
+        <button type="button" class="btn btn-secondary" data-modal-close data-history-delete-cancel>
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}

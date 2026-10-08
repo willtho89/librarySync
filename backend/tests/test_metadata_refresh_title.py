@@ -8,6 +8,7 @@ could permanently overwrite a show title with "Unknown title":
 3. IMDb and next provider return no match but a third provider does → title from third
 4. No provider returns valid metadata → existing title is preserved
 """
+
 import asyncio
 import sys
 import unittest
@@ -24,6 +25,7 @@ from librarysync.core.metadata_enrichment import apply_refresh_candidate  # noqa
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_media_item(title: str = "Original Title", **kwargs):
     m = MagicMock()
@@ -69,9 +71,7 @@ async def _run_refresh_loop(media_item, providers_and_candidates):
     """
     db = AsyncMock()
     # _apply_candidate_ids does DB lookups – stub it out
-    with patch(
-        "librarysync.core.metadata_enrichment._apply_candidate_ids", new=AsyncMock()
-    ):
+    with patch("librarysync.core.metadata_enrichment._apply_candidate_ids", new=AsyncMock()):
         refreshed = False
         for _provider_name, candidate in providers_and_candidates:
             if not candidate:
@@ -84,6 +84,7 @@ async def _run_refresh_loop(media_item, providers_and_candidates):
 # ---------------------------------------------------------------------------
 # IMDb provider unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestImdbGetDetailsReturnsNoneWhenNoMatch(unittest.TestCase):
     """ImdbMetadataProvider.get_details() must return None when the suggestion
@@ -147,6 +148,7 @@ class TestImdbGetDetailsReturnsNoneWhenNoMatch(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Multi-provider refresh loop scenarios
 # ---------------------------------------------------------------------------
+
 
 class TestMultiProviderRefreshScenarios(unittest.TestCase):
     """Simulate the refresh loop from routes_metadata.py with mocked providers.

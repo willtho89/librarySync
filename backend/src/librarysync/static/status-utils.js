@@ -82,7 +82,7 @@ function statusBadgeClass(status) {
     return "status-unknown";
   }
   const normalized = String(status);
-  if (normalized === "blacklisted") {
+  if (normalized === "blacklisted" || normalized === "superseded") {
     return "status-unknown";
   }
   if (normalized === "in_progress") {

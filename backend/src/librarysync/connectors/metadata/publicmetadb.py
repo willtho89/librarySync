@@ -102,24 +102,14 @@ def _first_mapping_value(value: Any) -> str | None:
     if isinstance(value, list):
         for item in value:
             if isinstance(item, dict):
-                candidate = (
-                    item.get("value")
-                    or item.get("id_value")
-                    or item.get("id")
-                    or item.get("tmdb_id")
-                )
+                candidate = item.get("value") or item.get("id_value") or item.get("id") or item.get("tmdb_id")
                 if candidate:
                     return str(candidate)
             elif item:
                 return str(item)
         return None
     if isinstance(value, dict):
-        candidate = (
-            value.get("value")
-            or value.get("id_value")
-            or value.get("id")
-            or value.get("tmdb_id")
-        )
+        candidate = value.get("value") or value.get("id_value") or value.get("id") or value.get("tmdb_id")
         if candidate:
             return str(candidate)
         return None
@@ -173,9 +163,7 @@ class PublicMetaDbMetadataProvider(MetadataProvider[PublicMetaDbConfig, PublicMe
     async def search(self, query: str, scope: str = "all") -> list[MediaCandidate]:
         return []
 
-    async def find_by_external_id(
-        self, external_id: str, scope: str = MEDIA_SCOPE_ALL
-    ) -> list[MediaCandidate]:
+    async def find_by_external_id(self, external_id: str, scope: str = MEDIA_SCOPE_ALL) -> list[MediaCandidate]:
         if scope not in {MEDIA_SCOPE_ALL, MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV}:
             return []
         parsed = _parse_external_id(external_id)

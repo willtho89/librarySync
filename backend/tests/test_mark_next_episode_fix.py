@@ -18,17 +18,17 @@ class TestMarkNextEpisodeQuery(unittest.TestCase):
     def test_query_should_use_join_pattern(self):
         """
         This test documents the expected query pattern.
-        
+
         The fix changed from using `.in_()` with a list comprehension to using
         an explicit JOIN, matching the pattern in `_get_show_progress_bulk`.
-        
+
         Before (buggy):
             select(WatchedItem.episode_item_id).where(
                 WatchedItem.user_id == current_user.id,
                 WatchedItem.media_item_id is None,
                 WatchedItem.episode_item_id.in_([e.id for e in released_episodes]),
             )
-        
+
         After (fixed):
             select(WatchedItem.episode_item_id)
             .join(EpisodeItem, WatchedItem.episode_item_id == EpisodeItem.id)
@@ -40,7 +40,7 @@ class TestMarkNextEpisodeQuery(unittest.TestCase):
                 EpisodeItem.air_date <= now_date,
                 EpisodeItem.season_number > 0,
             )
-        
+
         The key differences:
         1. Explicit JOIN between WatchedItem and EpisodeItem
         2. Filter on show_media_item_id to ensure we only get episodes from current show

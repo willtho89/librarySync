@@ -216,8 +216,7 @@ def determine_show_watchlist_status(
 ) -> str:
     if total_released <= 0:
         if (
-            first_air_date is None
-            and earliest_air_date is None
+            (first_air_date is None and earliest_air_date is None)
             or _is_future_date(first_air_date, now_date)
             or _is_future_date(earliest_air_date, now_date)
         ):
@@ -253,7 +252,7 @@ def _parse_air_date(value: str | None) -> date | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
+        return date.fromisoformat(value)
     except ValueError:
         return None
 
@@ -289,9 +288,7 @@ async def _persist_episode_list_for_media_item(
     }
     taken_tmdb_ids: set[str] = set()
     if provider_tmdb_ids:
-        taken_result = await db.execute(
-            select(EpisodeItem.tmdb_id).where(EpisodeItem.tmdb_id.in_(provider_tmdb_ids))
-        )
+        taken_result = await db.execute(select(EpisodeItem.tmdb_id).where(EpisodeItem.tmdb_id.in_(provider_tmdb_ids)))
         taken_tmdb_ids = set(taken_result.scalars().all())
 
     dirty = False
@@ -396,9 +393,7 @@ async def backfill_show_episodes(
                     None,
                 )
                 if candidate and candidate.provider_id:
-                    if not await _can_assign_media_id(
-                        db, media_item, "tmdb_id", candidate.provider_id
-                    ):
+                    if not await _can_assign_media_id(db, media_item, "tmdb_id", candidate.provider_id):
                         logger.warning(
                             "Skipping tmdb_id=%s for media item %s due to conflict",
                             candidate.provider_id,
@@ -513,9 +508,7 @@ async def _enqueue_watchlist_sync(
     # Deferred import: watchlist_sync depends on watch_pipeline, which imports this module.
     from librarysync.core.watchlist_sync import enqueue_personal_watchlist_sync
 
-    await enqueue_personal_watchlist_sync(
-        db, watchlist_item, media_item, unhide_dropped=unhide_dropped
-    )
+    await enqueue_personal_watchlist_sync(db, watchlist_item, media_item, unhide_dropped=unhide_dropped)
 
 
 async def check_and_update_watchlist(
@@ -905,9 +898,7 @@ async def clear_watchlist_rewatch_request(
     )
 
 
-async def log_watchlist_event(
-    db: AsyncSession, user_id: str, media_item_id: str, event_type: str, raw: dict
-) -> None:
+async def log_watchlist_event(db: AsyncSession, user_id: str, media_item_id: str, event_type: str, raw: dict) -> None:
     event = WatchEvent(
         user_id=user_id,
         media_item_id=media_item_id,
@@ -940,9 +931,7 @@ def fallback_title(ids: dict[str, str]) -> str:
     return "Unknown title"
 
 
-async def find_media_item_by_ids(
-    db: AsyncSession, media_type: str, ids: dict[str, str]
-) -> MediaItem | None:
+async def find_media_item_by_ids(db: AsyncSession, media_type: str, ids: dict[str, str]) -> MediaItem | None:
     clauses = []
     if ids.get("imdb_id"):
         clauses.append(MediaItem.imdb_id == ids["imdb_id"])
@@ -951,22 +940,13 @@ async def find_media_item_by_ids(
     if ids.get("tvdb_id"):
         clauses.append((MediaItem.tvdb_id == ids["tvdb_id"]) & (MediaItem.media_type == media_type))
     if ids.get("tvmaze_id"):
-        clauses.append(
-            (MediaItem.tvmaze_id == ids["tvmaze_id"]) & (MediaItem.media_type == media_type)
-        )
+        clauses.append((MediaItem.tvmaze_id == ids["tvmaze_id"]) & (MediaItem.media_type == media_type))
     if ids.get("kitsu_id"):
-        clauses.append(
-            (MediaItem.kitsu_id == ids["kitsu_id"]) & (MediaItem.media_type == media_type)
-        )
+        clauses.append((MediaItem.kitsu_id == ids["kitsu_id"]) & (MediaItem.media_type == media_type))
     if ids.get("myanimelist_id"):
-        clauses.append(
-            (MediaItem.myanimelist_id == ids["myanimelist_id"])
-            & (MediaItem.media_type == media_type)
-        )
+        clauses.append((MediaItem.myanimelist_id == ids["myanimelist_id"]) & (MediaItem.media_type == media_type))
     if ids.get("anilist_id"):
-        clauses.append(
-            (MediaItem.anilist_id == ids["anilist_id"]) & (MediaItem.media_type == media_type)
-        )
+        clauses.append((MediaItem.anilist_id == ids["anilist_id"]) & (MediaItem.media_type == media_type))
     if ids.get("letterboxd_film_id"):
         clauses.append(
             (MediaItem.raw["letterboxd_film_id"].as_string() == ids["letterboxd_film_id"])
@@ -989,9 +969,7 @@ _MEDIA_ID_FIELDS_PER_TYPE = {
 }
 
 
-async def _can_assign_media_id(
-    db: AsyncSession, item: MediaItem, field: str, value: str
-) -> bool:
+async def _can_assign_media_id(db: AsyncSession, item: MediaItem, field: str, value: str) -> bool:
     if field in _MEDIA_ID_FIELDS_GLOBAL:
         clauses = [getattr(MediaItem, field) == value]
     elif field in _MEDIA_ID_FIELDS_PER_TYPE:
@@ -1003,9 +981,7 @@ async def _can_assign_media_id(
     return existing is None or existing == item.id
 
 
-async def apply_media_id_update(
-    db: AsyncSession, item: MediaItem, field: str, value: str | None
-) -> None:
+async def apply_media_id_update(db: AsyncSession, item: MediaItem, field: str, value: str | None) -> None:
     if not value:
         return
     current = getattr(item, field)
@@ -1148,9 +1124,7 @@ async def upsert_watchlist_item(
         await apply_media_id_update(db, media_item, "tvdb_id", normalized_ids.get("tvdb_id"))
         await apply_media_id_update(db, media_item, "tvmaze_id", normalized_ids.get("tvmaze_id"))
         await apply_media_id_update(db, media_item, "kitsu_id", normalized_ids.get("kitsu_id"))
-        await apply_media_id_update(
-            db, media_item, "myanimelist_id", normalized_ids.get("myanimelist_id")
-        )
+        await apply_media_id_update(db, media_item, "myanimelist_id", normalized_ids.get("myanimelist_id"))
         await apply_media_id_update(db, media_item, "anilist_id", normalized_ids.get("anilist_id"))
         if year is not None and media_item.year is None:
             media_item.year = year

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Iterable
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -152,30 +152,22 @@ async def remove_watchlist_source(
 ) -> int:
     if now is None:
         now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(WatchlistSourceItem).where(WatchlistSourceItem.source_id == source.id)
-    )
+    result = await db.execute(select(WatchlistSourceItem).where(WatchlistSourceItem.source_id == source.id))
     items = result.scalars().all()
     if not items:
         await db.delete(source)
         await db.commit()
         return 0
     watchlist_item_ids = {item.watchlist_item_id for item in items}
-    await db.execute(
-        delete(WatchlistSourceItem).where(WatchlistSourceItem.source_id == source.id)
-    )
+    await db.execute(delete(WatchlistSourceItem).where(WatchlistSourceItem.source_id == source.id))
     removed_count = 0
     for watchlist_item_id in watchlist_item_ids:
         remaining = await db.execute(
-            select(WatchlistSourceItem.id).where(
-                WatchlistSourceItem.watchlist_item_id == watchlist_item_id
-            )
+            select(WatchlistSourceItem.id).where(WatchlistSourceItem.watchlist_item_id == watchlist_item_id)
         )
         if remaining.scalars().first():
             continue
-        item_result = await db.execute(
-            select(WatchlistItem).where(WatchlistItem.id == watchlist_item_id)
-        )
+        item_result = await db.execute(select(WatchlistItem).where(WatchlistItem.id == watchlist_item_id))
         watchlist_item = item_result.scalars().first()
         if not watchlist_item:
             continue
@@ -266,22 +258,14 @@ async def reconcile_watchlist_source(
         return 0
     removed_count = 0
     watchlist_item_ids = {item.watchlist_item_id for item in stale}
-    await db.execute(
-        delete(WatchlistSourceItem).where(
-            WatchlistSourceItem.id.in_([item.id for item in stale])
-        )
-    )
+    await db.execute(delete(WatchlistSourceItem).where(WatchlistSourceItem.id.in_([item.id for item in stale])))
     for watchlist_item_id in watchlist_item_ids:
         remaining = await db.execute(
-            select(WatchlistSourceItem.id).where(
-                WatchlistSourceItem.watchlist_item_id == watchlist_item_id
-            )
+            select(WatchlistSourceItem.id).where(WatchlistSourceItem.watchlist_item_id == watchlist_item_id)
         )
         if remaining.scalars().first():
             continue
-        item_result = await db.execute(
-            select(WatchlistItem).where(WatchlistItem.id == watchlist_item_id)
-        )
+        item_result = await db.execute(select(WatchlistItem).where(WatchlistItem.id == watchlist_item_id))
         watchlist_item = item_result.scalars().first()
         if not watchlist_item:
             continue
@@ -334,22 +318,14 @@ async def reconcile_dropped_source(
         return 0
     restored_count = 0
     watchlist_item_ids = {item.watchlist_item_id for item in stale}
-    await db.execute(
-        delete(WatchlistSourceItem).where(
-            WatchlistSourceItem.id.in_([item.id for item in stale])
-        )
-    )
+    await db.execute(delete(WatchlistSourceItem).where(WatchlistSourceItem.id.in_([item.id for item in stale])))
     for watchlist_item_id in watchlist_item_ids:
-        item_result = await db.execute(
-            select(WatchlistItem).where(WatchlistItem.id == watchlist_item_id)
-        )
+        item_result = await db.execute(select(WatchlistItem).where(WatchlistItem.id == watchlist_item_id))
         watchlist_item = item_result.scalars().first()
         if not watchlist_item:
             continue
         remaining = await db.execute(
-            select(WatchlistSourceItem.id).where(
-                WatchlistSourceItem.watchlist_item_id == watchlist_item_id
-            )
+            select(WatchlistSourceItem.id).where(WatchlistSourceItem.watchlist_item_id == watchlist_item_id)
         )
         has_other_sources = remaining.scalars().first() is not None
         if not has_other_sources and watchlist_item.source != "manual":
@@ -365,11 +341,14 @@ async def reconcile_dropped_source(
         if watchlist_item.status != "dropped":
             continue
         remaining_drop = await db.scalar(
-            select(WatchlistSourceItem.id).join(WatchlistSource).where(
+            select(WatchlistSourceItem.id)
+            .join(WatchlistSource)
+            .where(
                 WatchlistSourceItem.watchlist_item_id == watchlist_item_id,
                 WatchlistSource.source_type == PERSONAL_SOURCE_TYPE,
                 WatchlistSource.external_id == DROPPED_SOURCE_EXTERNAL_ID,
-            ).limit(1)
+            )
+            .limit(1)
         )
         if remaining_drop:
             continue
@@ -387,14 +366,10 @@ async def reconcile_dropped_source(
             },
         )
         if watchlist_item.type in {"tv", "anime"}:
-            media_result = await db.execute(
-                select(MediaItem).where(MediaItem.id == watchlist_item.media_item_id)
-            )
+            media_result = await db.execute(select(MediaItem).where(MediaItem.id == watchlist_item.media_item_id))
             media_item = media_result.scalars().first()
             if media_item:
-                await evaluate_show_watchlist_status(
-                    db, watchlist_item.user_id, watchlist_item, media_item
-                )
+                await evaluate_show_watchlist_status(db, watchlist_item.user_id, watchlist_item, media_item)
         restored_count += 1
     source.last_synced_at = now
     db.add(source)

@@ -42,6 +42,8 @@ def _mock_db(integrations: list[Integration]) -> MagicMock:
     db = MagicMock()
     result = MagicMock()
     result.scalars.return_value.all.return_value = integrations
+    # The claim first scans (id, config) rows unlocked, then locks the due ones.
+    result.all.return_value = [(integration.id, integration.config) for integration in integrations]
     db.execute = AsyncMock(return_value=result)
     return db
 
@@ -93,9 +95,7 @@ class TestClaimQuickImportRuns(unittest.TestCase):
         db = _mock_db([integration])
         with (
             patch.object(imports, "worker_instance_id", return_value=WORKER_A),
-            patch.object(
-                imports, "build_import_all_queue", new=AsyncMock(return_value=["trakt"])
-            ),
+            patch.object(imports, "build_import_all_queue", new=AsyncMock(return_value=["trakt"])),
         ):
             return asyncio.run(imports._claim_quick_import_runs(db, 1))
 
@@ -120,19 +120,21 @@ class TestClaimQuickImportRuns(unittest.TestCase):
         # Run is resumed, not restarted: status and progress are preserved.
         self.assertEqual(config["quick_import_status"], "in_progress")
         self.assertEqual(config["quick_import_index"], 1)
-        # Lease is taken over by this worker.
-        self.assertEqual(config[QUICK_IMPORT_LEASE_OWNER_KEY], WORKER_A)
+        # Lease is taken over by this claim (owner is per claim, prefixed by the worker id).
+        self.assertTrue(config[QUICK_IMPORT_LEASE_OWNER_KEY].startswith(f"{WORKER_A}/"))
         lease_until = datetime.fromisoformat(config[QUICK_IMPORT_LEASE_UNTIL_KEY])
         self.assertGreater(lease_until, datetime.now(timezone.utc))
 
-    def test_claims_run_with_lease_held_by_self(self) -> None:
+    def test_live_lease_from_same_worker_process_blocks_another_loop(self) -> None:
+        # Another import loop of this worker process holds the run; worker ids are shared
+        # between loops, so the lease owner is per claim and still blocks.
         integration = Integration(
             user_id="user-1",
             provider="system",
-            config=_leased_config(WORKER_A, datetime.now(timezone.utc) + timedelta(minutes=5)),
+            config=_leased_config(f"{WORKER_A}/other-claim", datetime.now(timezone.utc) + timedelta(minutes=5)),
         )
         runs = self._claim(integration)
-        self.assertEqual(runs, [integration])
+        self.assertEqual(runs, [])
 
     def test_starts_scheduled_run_and_takes_lease(self) -> None:
         integration = Integration(
@@ -141,9 +143,7 @@ class TestClaimQuickImportRuns(unittest.TestCase):
             config={
                 "quick_import_status": "completed",
                 "quick_import_interval_seconds": 1800,
-                "quick_import_last_run_at": (
-                    datetime.now(timezone.utc) - timedelta(hours=1)
-                ).isoformat(),
+                "quick_import_last_run_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
             },
         )
         runs = self._claim(integration)
@@ -151,7 +151,7 @@ class TestClaimQuickImportRuns(unittest.TestCase):
         config = integration.config
         self.assertEqual(config["quick_import_status"], "in_progress")
         self.assertEqual(config["quick_import_queue"], ["trakt"])
-        self.assertEqual(config[QUICK_IMPORT_LEASE_OWNER_KEY], WORKER_A)
+        self.assertTrue(config[QUICK_IMPORT_LEASE_OWNER_KEY].startswith(f"{WORKER_A}/"))
 
 
 if __name__ == "__main__":

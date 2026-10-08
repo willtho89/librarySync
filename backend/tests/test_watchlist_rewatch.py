@@ -178,9 +178,7 @@ def test_enable_watchlist_rewatch_rejects_dropped_item() -> None:
     )
     current_user = SimpleNamespace(id="user-1")
 
-    with pytest.raises(
-        HTTPException, match="Removed or dropped watchlist items cannot be queued for rewatch"
-    ) as exc:
+    with pytest.raises(HTTPException, match="Removed or dropped watchlist items cannot be queued for rewatch") as exc:
         asyncio.run(routes_watchlist.enable_watchlist_rewatch("wl-1", current_user, db))
 
     assert exc.value.status_code == 400
@@ -412,9 +410,7 @@ def test_add_watchlist_item_unhides_dropped_item_on_sync(monkeypatch) -> None:
     current_user = SimpleNamespace(id="user-1")
 
     sync_mock = AsyncMock()
-    monkeypatch.setattr(
-        routes_watchlist, "find_media_item_by_ids", AsyncMock(return_value=existing_media_item)
-    )
+    monkeypatch.setattr(routes_watchlist, "find_media_item_by_ids", AsyncMock(return_value=existing_media_item))
     monkeypatch.setattr(
         routes_watchlist,
         "upsert_watchlist_item",
@@ -452,9 +448,7 @@ def test_add_watchlist_item_skips_unhide_for_non_dropped_item(monkeypatch) -> No
     current_user = SimpleNamespace(id="user-1")
 
     sync_mock = AsyncMock()
-    monkeypatch.setattr(
-        routes_watchlist, "find_media_item_by_ids", AsyncMock(return_value=existing_media_item)
-    )
+    monkeypatch.setattr(routes_watchlist, "find_media_item_by_ids", AsyncMock(return_value=existing_media_item))
     monkeypatch.setattr(
         routes_watchlist,
         "upsert_watchlist_item",

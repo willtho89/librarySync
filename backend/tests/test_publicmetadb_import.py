@@ -15,9 +15,7 @@ class TestPublicMetaDbImport(unittest.TestCase):
         self.assertIn("publicmetadb", DEFAULT_IMPORT_QUEUE_ORDER)
 
     def test_normalize_import_queue_accepts_publicmetadb(self) -> None:
-        normalized = normalize_import_queue_order(
-            ["trakt", "publicmetadb", "SIMKL", "unknown-provider"]
-        )
+        normalized = normalize_import_queue_order(["trakt", "publicmetadb", "SIMKL", "unknown-provider"])
         self.assertEqual(normalized, ["trakt", "publicmetadb", "simkl"])
 
     def test_import_skips_when_sync_is_disabled(self) -> None:
@@ -29,13 +27,16 @@ class TestPublicMetaDbImport(unittest.TestCase):
             config={"sync_enabled": False},
         )
         now = datetime.now(timezone.utc)
-        with patch(
-            "librarysync.jobs.publicmetadb_import.load_integration_with_secrets",
-            new=AsyncMock(return_value=(integration, {"api_key": "pm-key"})),
-        ), patch(
-            "librarysync.jobs.publicmetadb_import.PublicMetaDbClient.list_watched",
-            new=AsyncMock(return_value=({"items": []}, 200)),
-        ) as mocked_list_watched:
+        with (
+            patch(
+                "librarysync.jobs.publicmetadb_import.load_integration_with_secrets",
+                new=AsyncMock(return_value=(integration, {"api_key": "pm-key"})),
+            ),
+            patch(
+                "librarysync.jobs.publicmetadb_import.PublicMetaDbClient.list_watched",
+                new=AsyncMock(return_value=({"items": []}, 200)),
+            ) as mocked_list_watched,
+        ):
             result = asyncio.run(
                 strategy.import_for_integration(
                     ImportContext(db=AsyncMock(), now=now),
@@ -68,19 +69,24 @@ class TestPublicMetaDbImport(unittest.TestCase):
                 }
             ]
         }
-        with patch(
-            "librarysync.jobs.publicmetadb_import.load_integration_with_secrets",
-            new=AsyncMock(return_value=(integration, {"api_key": "pm-key"})),
-        ), patch(
-            "librarysync.jobs.publicmetadb_import.PublicMetaDbClient.list_watched",
-            new=AsyncMock(return_value=(payload, 200)),
-        ), patch(
-            "librarysync.jobs.publicmetadb_import._load_existing_external_ids",
-            new=AsyncMock(return_value=set()),
-        ), patch(
-            "librarysync.jobs.publicmetadb_import.process_import_candidates",
-            new=AsyncMock(return_value=1),
-        ) as mocked_process:
+        with (
+            patch(
+                "librarysync.jobs.publicmetadb_import.load_integration_with_secrets",
+                new=AsyncMock(return_value=(integration, {"api_key": "pm-key"})),
+            ),
+            patch(
+                "librarysync.jobs.publicmetadb_import.PublicMetaDbClient.list_watched",
+                new=AsyncMock(return_value=(payload, 200)),
+            ),
+            patch(
+                "librarysync.jobs.publicmetadb_import._load_existing_external_ids",
+                new=AsyncMock(return_value=set()),
+            ),
+            patch(
+                "librarysync.jobs.publicmetadb_import.process_import_candidates",
+                new=AsyncMock(return_value=1),
+            ) as mocked_process,
+        ):
             result = asyncio.run(
                 strategy.import_for_integration(
                     ImportContext(db=AsyncMock(), now=now),
@@ -118,19 +124,24 @@ class TestPublicMetaDbImport(unittest.TestCase):
                 }
             ]
         }
-        with patch(
-            "librarysync.jobs.publicmetadb_import.load_integration_with_secrets",
-            new=AsyncMock(return_value=(integration, {"api_key": "pm-key"})),
-        ), patch(
-            "librarysync.jobs.publicmetadb_import.PublicMetaDbClient.list_watched",
-            new=AsyncMock(return_value=(payload, 200)),
-        ), patch(
-            "librarysync.jobs.publicmetadb_import._load_existing_external_ids",
-            new=AsyncMock(return_value={"w_existing"}),
-        ), patch(
-            "librarysync.jobs.publicmetadb_import.process_import_candidates",
-            new=AsyncMock(return_value=1),
-        ) as mocked_process:
+        with (
+            patch(
+                "librarysync.jobs.publicmetadb_import.load_integration_with_secrets",
+                new=AsyncMock(return_value=(integration, {"api_key": "pm-key"})),
+            ),
+            patch(
+                "librarysync.jobs.publicmetadb_import.PublicMetaDbClient.list_watched",
+                new=AsyncMock(return_value=(payload, 200)),
+            ),
+            patch(
+                "librarysync.jobs.publicmetadb_import._load_existing_external_ids",
+                new=AsyncMock(return_value={"w_existing"}),
+            ),
+            patch(
+                "librarysync.jobs.publicmetadb_import.process_import_candidates",
+                new=AsyncMock(return_value=1),
+            ) as mocked_process,
+        ):
             result = asyncio.run(
                 strategy.import_for_integration(
                     ImportContext(db=AsyncMock(), now=now),

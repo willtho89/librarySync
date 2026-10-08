@@ -56,9 +56,7 @@ MERGE_PENDING_RETRY_DELAY = timedelta(minutes=10)
 async def enqueue_merge_history(db: AsyncSession, now: datetime | None = None) -> None:
     if now is None:
         now = datetime.now(timezone.utc)
-    result = await db.execute(
-        select(ScheduledJob).where(ScheduledJob.name == MERGE_PENDING_JOB).with_for_update()
-    )
+    result = await db.execute(select(ScheduledJob).where(ScheduledJob.name == MERGE_PENDING_JOB).with_for_update())
     job = result.scalars().first()
     if not job:
         job = ScheduledJob(name=MERGE_PENDING_JOB, next_run_at=now)
@@ -151,7 +149,7 @@ async def _merge_history(
         key = (row.watched.user_id, watched_date, season, episode)
         tv_grouped.setdefault(key, []).append(row)
 
-    for (user_id, watched_date, season, episode), day_rows in tv_grouped.items():
+    for (user_id, watched_date, _season, _episode), day_rows in tv_grouped.items():
         clusters = _cluster_rows(day_rows)
         for cluster in clusters:
             if len(cluster) < 2:
@@ -209,7 +207,7 @@ async def _merge_cluster(
     _merge_watched(primary_watched, [row.watched for row in duplicate_rows])
 
     duplicate_ids = [row.watched.id for row in duplicate_rows]
-    syncs = await _load_syncs(db, duplicate_ids + [primary_watched.id])
+    syncs = await _load_syncs(db, [*duplicate_ids, primary_watched.id])
     sync_map, delete_syncs = _select_syncs(syncs, primary_watched.id)
     await _repoint_outbox_jobs(db, sync_map, primary_watched.id, duplicate_ids)
     for sync in delete_syncs:
@@ -347,16 +345,14 @@ async def _load_syncs(db: AsyncSession, watched_ids: list[str]) -> list[WatchSyn
     return result.scalars().all()
 
 
-def _select_syncs(
-    syncs: list[WatchSync], primary_watched_id: str
-) -> tuple[dict[str, str], list[WatchSync]]:
+def _select_syncs(syncs: list[WatchSync], primary_watched_id: str) -> tuple[dict[str, str], list[WatchSync]]:
     by_provider: dict[str, list[WatchSync]] = {}
     for sync in syncs:
         by_provider.setdefault(sync.provider, []).append(sync)
 
     mapping: dict[str, str] = {}
     to_delete: list[WatchSync] = []
-    for provider, provider_syncs in by_provider.items():
+    for provider_syncs in by_provider.values():
         primary_sync = next(
             (sync for sync in provider_syncs if sync.watched_item_id == primary_watched_id),
             None,
@@ -474,9 +470,7 @@ async def process_merge_history_once() -> int:
 
 async def run_merge_history(db: AsyncSession, job: ScheduledJob) -> int:
     logger.info("Starting merge history")
-    result = await db.execute(
-        select(Integration).where(Integration.provider == IMPORT_ALL_PROVIDER)
-    )
+    result = await db.execute(select(Integration).where(Integration.provider == IMPORT_ALL_PROVIDER))
     integrations = result.scalars().all()
     total = 0
     now = datetime.now(timezone.utc)

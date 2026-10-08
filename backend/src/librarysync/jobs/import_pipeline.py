@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Iterable, Literal
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,9 +94,7 @@ async def process_import_candidates(
             f"{provider}_imported",
             entry_keys,
         )
-    if existing_blacklist_keys is None and any(
-        candidate.blacklist_enabled for candidate in candidate_list
-    ):
+    if existing_blacklist_keys is None and any(candidate.blacklist_enabled for candidate in candidate_list):
         existing_blacklist_keys = await load_existing_entry_keys(
             db,
             user_id,
@@ -187,13 +186,19 @@ async def _process_candidate(
     # A delayed provider snapshot must not undo an explicit clear.
     from librarysync.core.watch_state_events import utc
 
-    target = (WatchStateEntry.episode_item_id == episode_item_id if episode_item_id
-              else WatchStateEntry.media_item_id == media_item_id)
-    cleared = await db.scalar(select(WatchStateEntry).where(
-        WatchStateEntry.user_id == user_id, WatchStateEntry.category == "watched", target,
-    ))
-    if (cleared and cleared.payload["event"] == "unplayed"
-            and utc(candidate.watched_at) <= utc(cleared.occurred_at)):
+    target = (
+        WatchStateEntry.episode_item_id == episode_item_id
+        if episode_item_id
+        else WatchStateEntry.media_item_id == media_item_id
+    )
+    cleared = await db.scalar(
+        select(WatchStateEntry).where(
+            WatchStateEntry.user_id == user_id,
+            WatchStateEntry.category == "watched",
+            target,
+        )
+    )
+    if cleared and cleared.payload["event"] == "unplayed" and utc(candidate.watched_at) <= utc(cleared.occurred_at):
         return 0
 
     if candidate.blacklist_enabled:
@@ -284,12 +289,7 @@ async def _resolve_blacklist_match(
     if not ids:
         return None
     normalized = _normalize_blacklist_ids(ids)
-    if not (
-        normalized.imdb_id
-        or normalized.tmdb_id
-        or normalized.tvdb_id
-        or normalized.tvmaze_id
-    ):
+    if not (normalized.imdb_id or normalized.tmdb_id or normalized.tvdb_id or normalized.tvmaze_id):
         return None
     cache_key = BlacklistCacheKey(
         imdb_id=normalized.imdb_id,
@@ -311,9 +311,7 @@ async def _resolve_blacklist_match(
     return match
 
 
-def _resolve_blacklist_ids(
-    candidate: ImportCandidate, items: ImportItems
-) -> BlacklistIds | None:
+def _resolve_blacklist_ids(candidate: ImportCandidate, items: ImportItems) -> BlacklistIds | None:
     if not candidate.blacklist_ids and not items.show_item and not items.media_item:
         return None
     ids = candidate.blacklist_ids or BlacklistIds()
