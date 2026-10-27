@@ -200,7 +200,7 @@ See `.env.example` and the README for every variable and default. Highlights:
 - **Secrets**: Encrypt at rest using `LIBRARYSYNC_SECRET_KEY` (see `core/security.py`; MultiFernet with previous keys for rotation). Startup refuses empty/placeholder keys.
 - **Passwords**: Bcrypt hashing (in a worker thread) with 8+ character minimum and 72-byte maximum (rejected, not truncated)
 - **Sessions**: HttpOnly SameSite=Lax cookie (Secure on https); CORS never allows credentials
-- **OAuth**: State validation (constant-time) for Trakt, SIMKL and AniList flows
+- **OAuth**: State validation (constant-time) for Trakt, SIMKL and AniList flows. Trakt also uses PKCE (S256); the verifier is stored encrypted in the integration config until the callback, and the client secret is optional
 - **OAuth tokens**: Refresh through `core/integration_tokens.py` only (row-locked, in its own transaction so the caller's transaction and locks are untouched); never refresh and discard a rotating token. Key rotation rewrites each secret under the same row lock
 - **Outbound requests to user-supplied URLs**: Validate with `core/url_safety.py` (`ensure_public_url` / `ensure_public_host`)
 - **Responses**: Security headers and a CSP for pages (`core/security_headers.py`); inline scripts must be plain `<script>` blocks so their hashes are allowed. `/docs` and `/redoc` are served by the app with their own page-specific CSP

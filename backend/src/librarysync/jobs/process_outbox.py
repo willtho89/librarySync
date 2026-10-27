@@ -1238,8 +1238,8 @@ async def _deliver_trakt_watch_batch(db: AsyncSession, jobs: list[OutboxJob]) ->
         raise TraktError("Trakt credentials are missing", status_code=401)
     if not has_required_trakt_fields(secret_data):
         raise TraktError("Trakt credentials are incomplete", status_code=401)
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        raise ValueError("Trakt client ID/secret are not configured")
+    if not settings.trakt_client_id:
+        raise ValueError("Trakt client ID is not configured")
 
     client = TraktClient(
         client_id=settings.trakt_client_id,
@@ -1262,8 +1262,8 @@ async def _deliver_trakt_rating_batch(db: AsyncSession, jobs: list[OutboxJob]) -
         raise TraktError("Trakt credentials are missing", status_code=401)
     if not has_required_trakt_fields(secret_data):
         raise TraktError("Trakt credentials are incomplete", status_code=401)
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        raise ValueError("Trakt client ID/secret are not configured")
+    if not settings.trakt_client_id:
+        raise ValueError("Trakt client ID is not configured")
 
     client = TraktClient(
         client_id=settings.trakt_client_id,
@@ -1336,8 +1336,8 @@ async def _deliver_trakt_watch(db: AsyncSession, job: OutboxJob) -> tuple[int | 
         raise TraktError("Trakt credentials are missing", status_code=401)
     if not has_required_trakt_fields(secret_data):
         raise TraktError("Trakt credentials are incomplete", status_code=401)
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        raise ValueError("Trakt client ID/secret are not configured")
+    if not settings.trakt_client_id:
+        raise ValueError("Trakt client ID is not configured")
 
     client = TraktClient(
         client_id=settings.trakt_client_id,
@@ -1372,8 +1372,8 @@ async def _deliver_trakt_rating(db: AsyncSession, job: OutboxJob) -> tuple[int |
         raise TraktError("Trakt credentials are missing", status_code=401)
     if not has_required_trakt_fields(secret_data):
         raise TraktError("Trakt credentials are incomplete", status_code=401)
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        raise ValueError("Trakt client ID/secret are not configured")
+    if not settings.trakt_client_id:
+        raise ValueError("Trakt client ID is not configured")
 
     client = TraktClient(
         client_id=settings.trakt_client_id,
@@ -1396,8 +1396,8 @@ async def _deliver_trakt_watchlist(db: AsyncSession, job: OutboxJob) -> tuple[in
         raise TraktError("Trakt credentials are missing", status_code=401)
     if not has_required_trakt_fields(secret_data):
         raise TraktError("Trakt credentials are incomplete", status_code=401)
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        raise ValueError("Trakt client ID/secret are not configured")
+    if not settings.trakt_client_id:
+        raise ValueError("Trakt client ID is not configured")
 
     client = TraktClient(
         client_id=settings.trakt_client_id,
@@ -1422,8 +1422,8 @@ async def _deliver_trakt_watchlist_remove(db: AsyncSession, job: OutboxJob) -> t
         raise TraktError("Trakt credentials are missing", status_code=401)
     if not has_required_trakt_fields(secret_data):
         raise TraktError("Trakt credentials are incomplete", status_code=401)
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        raise ValueError("Trakt client ID/secret are not configured")
+    if not settings.trakt_client_id:
+        raise ValueError("Trakt client ID is not configured")
 
     client = TraktClient(
         client_id=settings.trakt_client_id,
@@ -1453,8 +1453,8 @@ async def _deliver_trakt_update(db: AsyncSession, job: OutboxJob) -> tuple[int |
         raise TraktError("Trakt credentials are missing", status_code=401)
     if not has_required_trakt_fields(secret_data):
         raise TraktError("Trakt credentials are incomplete", status_code=401)
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        raise ValueError("Trakt client ID/secret are not configured")
+    if not settings.trakt_client_id:
+        raise ValueError("Trakt client ID is not configured")
 
     client = TraktClient(
         client_id=settings.trakt_client_id,
@@ -1529,8 +1529,8 @@ async def _deliver_trakt_remove(db: AsyncSession, job: OutboxJob) -> tuple[int |
         raise TraktError("Trakt credentials are missing", status_code=401)
     if not has_required_trakt_fields(secret_data):
         raise TraktError("Trakt credentials are incomplete", status_code=401)
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
-        raise ValueError("Trakt client ID/secret are not configured")
+    if not settings.trakt_client_id:
+        raise ValueError("Trakt client ID is not configured")
 
     client = TraktClient(
         client_id=settings.trakt_client_id,

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,6 +21,14 @@ DEFAULT_TRAKT_API_BASE_URL = "https://api.trakt.tv"
 TRAKT_OAUTH_AUTHORIZE_URL = "https://api.trakt.tv/oauth/authorize"
 TRAKT_OAUTH_TOKEN_URL = "https://api.trakt.tv/oauth/token"  # noqa: S105 - endpoint URL, not a secret
 TRAKT_REQUIRED_FIELDS = ("access_token", "refresh_token")
+
+
+def generate_pkce_pair() -> tuple[str, str]:
+    """Return a PKCE (code_verifier, S256 code_challenge) pair; Trakt only supports S256."""
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return verifier, challenge
 
 
 @dataclass(frozen=True)
@@ -123,7 +134,7 @@ class TraktClient:
     def __init__(
         self,
         client_id: str,
-        client_secret: str,
+        client_secret: str | None = None,
         api_base_url: str = DEFAULT_TRAKT_API_BASE_URL,
         authorize_url: str = TRAKT_OAUTH_AUTHORIZE_URL,
         token_url: str = TRAKT_OAUTH_TOKEN_URL,
@@ -134,25 +145,30 @@ class TraktClient:
         self.authorize_url = authorize_url
         self.token_url = token_url
 
-    def build_authorize_url(self, redirect_uri: str, state: str) -> str:
-        params = urlencode(
-            {
-                "response_type": "code",
-                "client_id": self.client_id,
-                "redirect_uri": redirect_uri,
-                "state": state,
-            }
-        )
-        return f"{self.authorize_url}?{params}"
+    def build_authorize_url(self, redirect_uri: str, state: str, code_challenge: str | None = None) -> str:
+        params = {
+            "response_type": "code",
+            "client_id": self.client_id,
+            "redirect_uri": redirect_uri,
+            "state": state,
+        }
+        if code_challenge:
+            params["code_challenge"] = code_challenge
+            params["code_challenge_method"] = "S256"
+        return f"{self.authorize_url}?{urlencode(params)}"
 
-    async def exchange_code(self, code: str, redirect_uri: str) -> TraktToken:
+    async def exchange_code(self, code: str, redirect_uri: str, code_verifier: str | None = None) -> TraktToken:
         payload = {
             "code": code,
             "client_id": self.client_id,
-            "client_secret": self.client_secret,
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         }
+        # PKCE apps are issued no client secret; send each credential only when present.
+        if self.client_secret:
+            payload["client_secret"] = self.client_secret
+        if code_verifier:
+            payload["code_verifier"] = code_verifier
         data = await self._post_json(self.token_url, payload)
         return normalize_token_payload(data)
 
@@ -160,9 +176,10 @@ class TraktClient:
         payload = {
             "refresh_token": refresh_token,
             "client_id": self.client_id,
-            "client_secret": self.client_secret,
             "grant_type": "refresh_token",
         }
+        if self.client_secret:
+            payload["client_secret"] = self.client_secret
         if redirect_uri:
             payload["redirect_uri"] = redirect_uri
         data = await self._post_json(self.token_url, payload)
