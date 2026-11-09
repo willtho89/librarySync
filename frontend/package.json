@@ -5,7 +5,7 @@
     "chart.js": "^4.6.1"
   },
   "devDependencies": {
-    "@tailwindcss/cli": "^4.3.3",
+    "@tailwindcss/cli": "^4.3.4",
     "tailwindcss": "^4.3.3"
   },
   "scripts": {
