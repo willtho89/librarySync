@@ -11,9 +11,9 @@ COPY backend/src/librarysync/static/*.js /app/backend/src/librarysync/static/
 
 RUN npm run build
 
-FROM ghcr.io/astral-sh/uv:0.13.0 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.8 AS uv
 
-FROM python:3.14-slim AS builder
+FROM python:3.15-slim AS builder
 
 COPY --from=uv /uv /bin/uv
 
@@ -41,7 +41,7 @@ COPY --from=frontend-build /app/backend/src/librarysync/static/chart.umd.min.js.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --package librarysync
 
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
