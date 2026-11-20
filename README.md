@@ -214,7 +214,9 @@ Example values (replace `example.com` with your domain):
 
 ## Development (uv + Ruff)
 
-1. Install Python 3.13 or 3.14, [`uv`](https://docs.astral.sh/uv/) and, for CSS changes, Node.js.
+1. Install Python 3.15, [`uv`](https://docs.astral.sh/uv/) and, for CSS changes, Node.js.
+   Python 3.15 is the only version tested in CI and is used in both the Docker builder and runtime.
+   Local installs may need a C compiler and libc headers to build locked dependencies without wheels.
 2. Sync deps from the repository root: `uv sync --group dev`
 3. Start Postgres (for example `docker compose up db`) and point `DATABASE_URL` at it.
 4. Run API: `cd backend && uv run uvicorn librarysync.main:app --reload`
