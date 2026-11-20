@@ -4,10 +4,12 @@ from importlib import metadata
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -118,6 +120,18 @@ def create_app() -> FastAPI:
         docs_url=None,
         redoc_url=None,
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        if exc.body is None:
+            errors = list(exc.errors())
+            for index, error in enumerate(errors):
+                match error:
+                    case {"type": "model_attributes_type", "loc": ("body",), "input": None}:
+                        # FastAPI 0.162 treats JSON null as model input, not as a missing body.
+                        errors[index] = {"type": "missing", "loc": ("body",), "msg": "Field required", "input": None}
+            return await request_validation_exception_handler(request, RequestValidationError(errors))
+        return await request_validation_exception_handler(request, exc)
 
     # The Stremio addon and Watch State endpoints are fetched cross-origin by
     # Stremio/AIOStreams clients and authenticate via the URL, never cookies.

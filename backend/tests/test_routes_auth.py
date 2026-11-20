@@ -3,12 +3,12 @@ from dataclasses import replace
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
 from librarysync import config
 from librarysync.api import deps, routes_auth
 from librarysync.core import auth
 from librarysync.core.login_throttle import MAX_FAILURES_PER_USERNAME, LoginThrottle
 from librarysync.db.models import Base
+from librarysync.main import create_app
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
@@ -31,8 +31,7 @@ async def client():
         async with factory() as session:
             yield session
 
-    app = FastAPI()
-    app.include_router(routes_auth.router)
+    app = create_app()
     app.dependency_overrides[deps.get_db] = _db
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
@@ -42,6 +41,26 @@ async def client():
 
 async def _register(client, username="alice", password="correct horse"):
     return await client.post("/api/auth/register", json={"username": username, "password": password})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/api/auth/register", "/api/auth/login"])
+async def test_explicit_json_null_is_reported_as_missing_body(client, path):
+    response = await client.post(path, content="null", headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": [{"type": "missing", "loc": ["body"], "msg": "Field required", "input": None}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("content", "error_type"), [("[]", "model_attributes_type"), ("{", "json_invalid")])
+async def test_other_invalid_bodies_are_not_reported_as_missing(client, content, error_type):
+    response = await client.post("/api/auth/login", content=content, headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 422
+    assert [error["type"] for error in response.json()["detail"]] == [error_type]
 
 
 @pytest.mark.asyncio
