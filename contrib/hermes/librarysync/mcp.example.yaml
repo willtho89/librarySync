@@ -1,0 +1,39 @@
+# Merge only into the dedicated private LibrarySync bot profile during acceptance.
+# Do not use literal secrets here. Set these variables in that profile's secret store.
+mcp_servers:
+  librarysync_read:
+    url: "${LIBRARYSYNC_MCP_URL}"
+    headers:
+      Authorization: "Bearer ${LIBRARYSYNC_MCP_READ_TOKEN}"
+    protocol: legacy
+    trust: untrusted
+    timeout: 30
+    connect_timeout: 15
+    tools:
+      include: [list_history, find_title]
+      resources: false
+      prompts: false
+    sampling:
+      enabled: false
+    elicitation:
+      enabled: false
+  # Omit this entire entry for a read-only installation. The separate server-side
+  # one-call FORM is mandatory; the Hermes trust prompt (which may remember grants)
+  # is not that form. Trust only this private, operator-controlled endpoint.
+  librarysync_write:
+    url: "${LIBRARYSYNC_MCP_URL}"
+    headers:
+      Authorization: "Bearer ${LIBRARYSYNC_MCP_WRITE_TOKEN}"
+    protocol: legacy
+    trust: full
+    timeout: 330
+    connect_timeout: 15
+    tools:
+      include: [add_to_watchlist]
+      resources: false
+      prompts: false
+    sampling:
+      enabled: false
+    elicitation:
+      enabled: true
+      timeout: 280

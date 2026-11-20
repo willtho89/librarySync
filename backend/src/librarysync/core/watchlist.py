@@ -1136,8 +1136,39 @@ async def upsert_watchlist_item(
                 existing_raw["letterboxd_film_id"] = normalized_ids["letterboxd_film_id"]
                 media_item.raw = existing_raw
 
+    return await upsert_resolved_watchlist_item(
+        db,
+        user_id,
+        media_item,
+        source,
+        now=now,
+        event_raw=event_raw,
+        enqueue_sync=enqueue_sync,
+        restore_dropped=restore_dropped,
+    )
+
+
+async def upsert_resolved_watchlist_item(
+    db: AsyncSession,
+    user_id: str,
+    media_item: MediaItem,
+    source: str,
+    *,
+    now: datetime,
+    event_raw: dict[str, Any] | None = None,
+    enqueue_sync: bool = False,
+    restore_dropped: bool = True,
+    create_only: bool = False,
+) -> tuple[WatchlistItem, str]:
+    """Upsert using a local MediaItem, without resolving aliases or changing catalog metadata.
+
+    A create-only caller leaves *all* existing rows untouched, including insert race winners.
+    """
+    media_type = media_item.media_type
     existing = await _get_watchlist_item(db, user_id, media_item.id)
     if existing:
+        if create_only:
+            return existing, "already_exists"
         return await _resolve_existing_watchlist_item(
             db,
             existing,
@@ -1196,6 +1227,8 @@ async def upsert_watchlist_item(
         existing = await _get_watchlist_item(db, user_id, media_item.id)
         if existing is None:
             raise
+        if create_only:
+            return existing, "already_exists"
         logger.info(
             "Watchlist item insert race for user %s media %s; using existing row",
             user_id,

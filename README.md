@@ -32,6 +32,13 @@ By default, `docker-compose.override.yml` is loaded and builds local images. To 
 the published images instead, run:
 `docker compose -f docker-compose.yml up --pull=always`
 
+## Private MCP access (optional)
+
+The release image can also run a separate, default-off Streamable HTTP MCP listener. It can read the
+assigned account's watch history and, with a separate one-time approval, add one local catalog title
+without marking it watched. See [MCP deployment and Hermes setup](docs/mcp.md). Do not expose it via
+public ingress.
+
 ## Environment Variables (Defaults)
 
 All defaults below are from `.env.example`.
