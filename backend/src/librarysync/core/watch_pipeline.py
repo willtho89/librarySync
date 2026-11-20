@@ -623,11 +623,14 @@ class HistorySyncStrategy(SyncStrategy):
     def _settings_ready(self) -> bool:
         if not self._config.settings_required:
             return True
-        if not self._config.client_id_attr or not self._config.client_secret_attr:
+        if not self._config.client_id_attr:
             return False
-        client_id = getattr(settings, self._config.client_id_attr, None)
-        client_secret = getattr(settings, self._config.client_secret_attr, None)
-        return bool(client_id and client_secret)
+        if not getattr(settings, self._config.client_id_attr, None):
+            return False
+        # Providers without a client secret attribute (Trakt with PKCE) only need the client ID.
+        if self._config.client_secret_attr is None:
+            return True
+        return bool(getattr(settings, self._config.client_secret_attr, None))
 
     async def _has_integration(self, db: AsyncSession, user_id: str) -> bool:
         integration, secret_data = await load_integration_with_secrets(db, user_id, self.provider)
@@ -850,7 +853,6 @@ class TraktSyncStrategy(HistorySyncStrategy):
                 has_required_fields=has_required_trakt_fields,
                 build_payload=build_trakt_payload,
                 client_id_attr="trakt_client_id",
-                client_secret_attr="trakt_client_secret",  # noqa: S106 - settings attribute name
                 include_history_id_on_delete=True,
             )
         )
