@@ -50,6 +50,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM python:3.15-slim
 
+# Upgrade the runtime's zlib1g for CVE-2026-85091 without a distro-wide upgrade.
+RUN apt-get -o APT::Update::Error-Mode=any update && \
+    apt-get install -y --no-install-recommends --no-remove --only-upgrade -t trixie-security zlib1g && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' zlib1g)" ge '1:1.3.dfsg+really1.3.1-1+deb13u1' && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
