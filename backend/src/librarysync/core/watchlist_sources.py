@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.core.watchlist import evaluate_show_watchlist_status, log_watchlist_event
@@ -16,6 +17,7 @@ PERSONAL_SOURCE_TYPE = "personal"
 URL_SOURCE_TYPE = "url"
 LEGACY_LIST_SOURCE_TYPE = "list"
 DROPPED_SOURCE_EXTERNAL_ID = "dropped"
+_SOURCE_UNIQUE_CONSTRAINT = "uq_watchlist_sources_user_provider_type_external"
 
 
 async def ensure_watchlist_source(
@@ -29,37 +31,49 @@ async def ensure_watchlist_source(
     name: str | None = None,
     is_enabled: bool | None = None,
 ) -> WatchlistSource:
-    result = await db.execute(
-        select(WatchlistSource).where(
-            WatchlistSource.user_id == user_id,
-            WatchlistSource.provider == provider,
-            WatchlistSource.source_type == source_type,
-            WatchlistSource.external_id == external_id,
+    query = select(WatchlistSource).where(
+        WatchlistSource.user_id == user_id,
+        WatchlistSource.provider == provider,
+        WatchlistSource.source_type == source_type,
+        WatchlistSource.external_id == external_id,
+    )
+    source = (await db.execute(query)).scalars().first()
+    if source is None:
+        source = WatchlistSource(
+            user_id=user_id,
+            provider=provider,
+            source_type=source_type,
+            external_id=external_id,
+            url=url,
+            name=name,
+            is_enabled=True if is_enabled is None else is_enabled,
         )
-    )
-    source = result.scalars().first()
-    if source:
-        updated = False
-        if url and not source.url:
-            source.url = url
-            updated = True
-        if name and not source.name:
-            source.name = name
-            updated = True
-        if updated:
-            source.updated_at = datetime.now(timezone.utc)
-        return source
-    source = WatchlistSource(
-        user_id=user_id,
-        provider=provider,
-        source_type=source_type,
-        external_id=external_id,
-        url=url,
-        name=name,
-        is_enabled=True if is_enabled is None else is_enabled,
-    )
-    db.add(source)
-    await db.flush()
+        if db.get_bind().dialect.name != "postgresql":
+            db.add(source)
+            await db.flush()
+            return source
+        # Protect the caller's outer transaction if a concurrent writer created the same source.
+        await db.flush()
+        try:
+            async with db.begin_nested():
+                db.add(source)
+                await db.flush()
+            return source
+        except IntegrityError as exc:
+            if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != _SOURCE_UNIQUE_CONSTRAINT:
+                raise
+            source = (await db.execute(query)).scalars().first()
+            if source is None:
+                raise
+    updated = False
+    if url and not source.url:
+        source.url = url
+        updated = True
+    if name and not source.name:
+        source.name = name
+        updated = True
+    if updated:
+        source.updated_at = datetime.now(timezone.utc)
     return source
 
 
