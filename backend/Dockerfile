@@ -13,9 +13,15 @@ RUN npm run build
 
 FROM ghcr.io/astral-sh/uv:0.13.8 AS uv
 
-FROM python:3.14-slim AS builder
+FROM python:3.15-slim AS builder
 
 COPY --from=uv /uv /bin/uv
+
+# Some locked dependencies (e.g. regex and httptools) do not ship CPython
+# 3.15 wheels yet. Compile them in the builder, not in the runtime image.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc libc6-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -39,9 +45,10 @@ COPY --from=frontend-build /app/backend/src/librarysync/static/chart.umd.min.js.
 # Install librarysync itself as a regular (non-editable) package so the
 # runtime stage only needs the virtualenv.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable --package librarysync
+    uv sync --frozen --no-dev --no-editable --package librarysync && \
+    /app/.venv/bin/python -c 'import sys; print(sys.version); sys.exit(sys.version_info[:2] != (3, 15))'
 
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
