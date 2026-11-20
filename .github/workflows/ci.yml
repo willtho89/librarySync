@@ -17,13 +17,9 @@ concurrency:
 
 jobs:
   lint-test:
-    name: Lint & test (Python ${{ matrix.python-version }})
+    name: Lint, test & migrations (Python 3.15)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.13", "3.14"]
     services:
       postgres:
         image: postgres:17
@@ -46,9 +42,9 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.0
+        uses: astral-sh/setup-uv@v10.3.3
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.15"
           enable-cache: true
 
       - name: Install dependencies
@@ -63,52 +59,15 @@ jobs:
       - name: Pytest
         run: uv run python -m pytest backend/tests -ra
 
-  migrations:
-    name: Alembic migrations
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: librarysync
-          POSTGRES_PASSWORD: librarysync
-          POSTGRES_DB: librarysync
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U librarysync -d librarysync"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-    env:
-      DATABASE_URL: postgresql+psycopg://librarysync:librarysync@localhost:5432/librarysync
-    defaults:
-      run:
+      - name: Check Alembic migrations
         working-directory: backend
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.0
-        with:
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --locked --group dev
-
-      - name: Upgrade to head
-        run: uv run alembic upgrade head
-
-      - name: Check models match migrations
-        run: uv run alembic check
-
-      - name: Downgrade to base
-        run: uv run alembic downgrade base
-
-      - name: Upgrade to head again
-        run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: ${{ env.WATCH_STATE_TEST_DATABASE_URL }}
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+          uv run alembic downgrade base
+          uv run alembic upgrade head
 
   frontend:
     name: Frontend CSS
@@ -171,3 +130,8 @@ jobs:
           ignore-unfixed: true
           # Report only for now; switch to "1" to block PRs on fixable findings.
           exit-code: "0"
+
+      - name: Verify Python 3.15 in the runtime image
+        run: >-
+          docker run --rm --network none --entrypoint python librarysync:ci
+          -c 'import sys; print(sys.version); sys.exit(sys.version_info[:2] != (3, 15))'

@@ -84,7 +84,8 @@ Failed logins are throttled per username and per client address (HTTP 429 with `
 
 ### OAuth
 - `TRAKT_CLIENT_ID` (default `your_trakt_client_id`): Trakt OAuth app client ID.
-- `TRAKT_CLIENT_SECRET` (default `your_trakt_client_secret`): Trakt OAuth app secret.
+- `TRAKT_CLIENT_SECRET` (default `your_trakt_client_secret`): Trakt OAuth app secret. Optional: sign-in always
+  uses PKCE, so apps created without a secret only need `TRAKT_CLIENT_ID`. Leave it empty in that case.
 - `SIMKL_CLIENT_ID` (default `your_simkl_client_id`): SIMKL app client ID. Also enables the public
   SIMKL calendar v2 refresh for local shows, including finale badges in Up Next. The
   `metadata_backfill` worker refreshes TV/anime calendars every six hours using the rolling,
@@ -220,7 +221,9 @@ Example values (replace `example.com` with your domain):
 
 ## Development (uv + Ruff)
 
-1. Install Python 3.13 or 3.14, [`uv`](https://docs.astral.sh/uv/) and, for CSS changes, Node.js.
+1. Install Python 3.15, [`uv`](https://docs.astral.sh/uv/) and, for CSS changes, Node.js.
+   Python 3.15 is the only version tested in CI and is used in both the Docker builder and runtime.
+   Local installs may need a C compiler and libc headers to build locked dependencies without wheels.
 2. Sync deps from the repository root: `uv sync --group dev`
 3. Start Postgres (for example `docker compose up db`) and point `DATABASE_URL` at it.
 4. Run API: `cd backend && uv run uvicorn librarysync.main:app --reload`
