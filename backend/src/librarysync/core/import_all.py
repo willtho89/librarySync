@@ -201,7 +201,7 @@ async def load_import_ready_providers(db: AsyncSession, user_id: str) -> list[st
             if not has_required_letterboxd_fields(secret_data):
                 continue
         elif provider == "trakt":
-            if not settings.trakt_client_id or not settings.trakt_client_secret:
+            if not settings.trakt_client_id:
                 continue
             if not has_required_trakt_fields(secret_data):
                 continue

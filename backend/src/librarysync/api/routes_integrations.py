@@ -62,6 +62,7 @@ from librarysync.connectors.services.trakt import (
     TRAKT_OAUTH_AUTHORIZE_URL,
     TraktClient,
     TraktError,
+    generate_pkce_pair,
     parse_expires_at,
     token_to_secret_payload,
 )
@@ -249,6 +250,7 @@ def _set_oauth_state(config: dict[str, object]) -> str:
 def _clear_oauth_state(config: dict[str, object]) -> None:
     config.pop("oauth_state", None)
     config.pop("oauth_state_expires_at", None)
+    config.pop("oauth_code_verifier", None)
 
 
 def _validate_oauth_state(
@@ -276,6 +278,7 @@ async def _start_oauth_flow(
     user_id: str,
     provider: str,
     build_url: Callable[[str], str],
+    extra_config: dict[str, object] | None = None,
 ) -> RedirectResponse:
     integration = await _get_integration(db, user_id, provider)
     if not integration:
@@ -286,6 +289,8 @@ async def _start_oauth_flow(
         )
     config = dict(integration.config or {})
     state = _set_oauth_state(config)
+    if extra_config:
+        config.update(extra_config)
     integration.config = config
     integration.status = "pending"
     try:
@@ -322,11 +327,11 @@ async def _disconnect_integration(
     return {"status": "ok"}
 
 
-def _require_trakt_settings() -> tuple[str, str, str]:
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
+def _require_trakt_settings() -> tuple[str, str | None, str]:
+    if not settings.trakt_client_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Trakt client ID/secret are not configured",
+            detail="Trakt client ID is not configured",
         )
     if not settings.base_url:
         raise HTTPException(
@@ -742,11 +747,14 @@ async def trakt_start(
         client_secret=client_secret,
         authorize_url=TRAKT_OAUTH_AUTHORIZE_URL,
     )
+    # PKCE on every sign-in; it is the only option for Trakt apps without a client secret.
+    code_verifier, code_challenge = generate_pkce_pair()
     return await _start_oauth_flow(
         db=db,
         user_id=current_user.id,
         provider="trakt",
-        build_url=lambda state: client.build_authorize_url(redirect_uri, state),
+        build_url=lambda state: client.build_authorize_url(redirect_uri, state, code_challenge),
+        extra_config={"oauth_code_verifier": encrypt_value(code_verifier)},
     )
 
 
@@ -775,9 +783,11 @@ async def trakt_callback(
         )
     config = dict(integration.config or {})
     _validate_oauth_state(config, state, parse_expires_at)
+    stored_verifier = config.get("oauth_code_verifier")
+    code_verifier = decrypt_value(stored_verifier) if isinstance(stored_verifier, str) else None
     client = TraktClient(client_id=client_id, client_secret=client_secret)
     try:
-        token = await client.exchange_code(code, redirect_uri)
+        token = await client.exchange_code(code, redirect_uri, code_verifier)
     except TraktError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
