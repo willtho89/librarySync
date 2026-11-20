@@ -77,7 +77,8 @@ Failed logins are throttled per username and per client address (HTTP 429 with `
 
 ### OAuth
 - `TRAKT_CLIENT_ID` (default `your_trakt_client_id`): Trakt OAuth app client ID.
-- `TRAKT_CLIENT_SECRET` (default `your_trakt_client_secret`): Trakt OAuth app secret.
+- `TRAKT_CLIENT_SECRET` (default `your_trakt_client_secret`): Trakt OAuth app secret. Optional: sign-in always
+  uses PKCE, so apps created without a secret only need `TRAKT_CLIENT_ID`. Leave it empty in that case.
 - `SIMKL_CLIENT_ID` (default `your_simkl_client_id`): SIMKL app client ID. Also enables the public
   SIMKL calendar v2 refresh for local shows, including finale badges in Up Next. The
   `metadata_backfill` worker refreshes TV/anime calendars every six hours using the rolling,

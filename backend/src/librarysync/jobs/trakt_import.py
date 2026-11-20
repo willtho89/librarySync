@@ -130,7 +130,7 @@ async def _import_for_integration(
     max_pages: int,
     now: datetime,
 ) -> ImportResult:
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
+    if not settings.trakt_client_id:
         return ImportResult(imported=0, attempted=False)
     integration, secret_data = await load_integration_with_secrets(db, integration.user_id, "trakt")
     if not integration or not secret_data:
@@ -426,7 +426,7 @@ async def import_watchlist_source(
 ) -> int:
     if source.provider != "trakt":
         raise ValueError("Watchlist source is not a Trakt list")
-    if not settings.trakt_client_id or not settings.trakt_client_secret:
+    if not settings.trakt_client_id:
         raise ValueError("Trakt credentials are not configured")
     integration, secret_data = await load_integration_with_secrets(db, source.user_id, "trakt")
     if not integration or integration.status == "disconnected":
