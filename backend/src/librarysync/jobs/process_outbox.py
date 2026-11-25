@@ -70,6 +70,7 @@ from librarysync.core.shutdown import shutdown_requested
 from librarysync.core.watch_pipeline import (
     WATCH_DELETED_ERROR,
     WATCH_PUSH_JOB_TYPES,
+    process_metadata_update_job,
     process_new_item_job,
     process_watchlist_update_job,
 )
@@ -339,6 +340,9 @@ class InternalOutboxHandler(OutboxHandler):
             return DeliveryResult(None, None, None)
         if job.job_type == "watchlist_update":
             await process_watchlist_update_job(db, job)
+            return DeliveryResult(None, None, None)
+        if job.job_type == "metadata_update":
+            await process_metadata_update_job(db, job)
             return DeliveryResult(None, None, None)
         raise ValueError(f"Unsupported outbox job {job.target_provider}:{job.job_type}")
 

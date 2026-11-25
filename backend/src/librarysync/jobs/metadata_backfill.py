@@ -22,6 +22,7 @@ from librarysync.db.models import (
     MediaItem,
     ScheduledJob,
     WatchedItem,
+    WatchlistItem,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.simkl_calendar import process_simkl_calendar_once
@@ -133,7 +134,8 @@ async def _backfill_media_items(
     episode_ids = select(EpisodeItem.show_media_item_id.label("media_item_id")).join(
         WatchedItem, WatchedItem.episode_item_id == EpisodeItem.id
     )
-    union_ids = union_all(direct_ids, episode_ids).subquery()
+    watchlist_ids = select(WatchlistItem.media_item_id.label("media_item_id"))
+    union_ids = union_all(direct_ids, episode_ids, watchlist_ids).subquery()
 
     missing_predicate = _missing_metadata_predicate(tmdb_required)
     episode_predicate = _episode_refresh_predicate(tmdb_required, episode_refresh_cutoff)

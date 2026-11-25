@@ -2254,6 +2254,7 @@ function formatSyncJobType(jobType) {
     remove_watched: "Remove watched",
     new_item_added: "New item",
     watchlist_update: "Watchlist update",
+    metadata_update: "Metadata update",
   };
   return labels[jobType] || formatLabel(jobType);
 }

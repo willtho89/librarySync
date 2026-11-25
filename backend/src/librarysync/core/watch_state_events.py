@@ -10,8 +10,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from librarysync.core.metadata_enrichment import is_watch_state_placeholder
 from librarysync.core.watch_pipeline import (
     SYNC_COORDINATOR,
+    enqueue_metadata_update_job,
     enqueue_new_item_job,
     enqueue_watchlist_update_job,
     lock_watches_for_deletion,
@@ -251,6 +253,9 @@ async def apply_event(db: AsyncSession, user_id: str, media_type: str, body: dic
     entry = await _write_entry(db, user_id, category, media, episode, body)
     if entry is None:
         return "superseded"
+    if media and category != "watched" and is_watch_state_placeholder(media):
+        # Only a completed watch enriches through new_item_added. Anything else would keep the meta id as title.
+        await enqueue_metadata_update_job(db, user_id, media.id)
     if category == "watched":
         await _write_entry(db, user_id, "playback", media, episode, body)
         await _apply_history(db, user_id, media, episode, body, at)

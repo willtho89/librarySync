@@ -475,6 +475,12 @@ async def _apply_candidate_ids(
     await _set_media_id(db, media_item, "anilist_id", ids.get("anilist_id"))
 
 
+def is_watch_state_placeholder(media_item: MediaItem) -> bool:
+    """A title created by a Watch State event and still named after its meta id."""
+    raw = media_item.raw if isinstance(media_item.raw, dict) else {}
+    return raw.get("source") == "aiostreams_watch_state" and media_item.title == raw.get("stremio_id")
+
+
 async def _apply_candidate_to_media_item(
     db: AsyncSession,
     media_item: MediaItem,
@@ -483,8 +489,7 @@ async def _apply_candidate_to_media_item(
 ) -> None:
     ids = _extract_candidate_ids(candidate)
     await _apply_candidate_ids(db, media_item, ids)
-    raw = media_item.raw if isinstance(media_item.raw, dict) else {}
-    if candidate.title and raw.get("source") == "aiostreams_watch_state" and media_item.title == raw.get("stremio_id"):
+    if candidate.title and is_watch_state_placeholder(media_item):
         media_item.title = candidate.title
     if update_poster and candidate.poster_url and _should_update_poster(media_item.poster_url, candidate.provider):
         media_item.poster_url = candidate.poster_url

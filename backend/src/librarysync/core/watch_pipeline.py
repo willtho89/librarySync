@@ -95,7 +95,7 @@ def _build_outbox_dedupe_key(
     watchlist_item_id = payload.get("watchlist_item_id")
     if watchlist_item_id:
         return f"{user_id}:{provider}:{job_type}:{watchlist_item_id}"
-    if job_type == "watchlist_update":
+    if job_type in {"watchlist_update", "metadata_update"}:
         media_item_id = payload.get("media_item_id")
         if media_item_id:
             return f"{user_id}:{provider}:{job_type}:{media_item_id}"
@@ -386,6 +386,21 @@ async def enqueue_watchlist_update_job(
     )
 
 
+async def enqueue_metadata_update_job(
+    db: AsyncSession,
+    user_id: str,
+    media_item_id: str,
+) -> OutboxJob:
+    return await enqueue_outbox_job(
+        db,
+        user_id=user_id,
+        target_provider="internal",
+        job_type="metadata_update",
+        payload={"media_item_id": media_item_id},
+        status="pending",
+    )
+
+
 async def process_new_item_job(db: AsyncSession, job: OutboxJob) -> None:
     payload = job.payload or {}
     watched_id = payload.get("watched_item_id")
@@ -437,6 +452,17 @@ async def process_watchlist_update_job(db: AsyncSession, job: OutboxJob) -> None
     if not media_item_id:
         raise ValueError("watchlist_update requires media_item_id")
     await refresh_watchlist_from_history(db, job.user_id, str(media_item_id))
+
+
+async def process_metadata_update_job(db: AsyncSession, job: OutboxJob) -> None:
+    payload = job.payload or {}
+    media_item_id = payload.get("media_item_id")
+    if not media_item_id:
+        raise ValueError("metadata_update requires media_item_id")
+    media_item = await db.get(MediaItem, str(media_item_id))
+    if media_item is None:
+        return  # Merged into another title after the job was queued.
+    await enrich_watched_metadata(db, job.user_id, media_item, None)
 
 
 async def _sync_to_integrations(
