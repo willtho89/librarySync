@@ -140,7 +140,7 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - Public addon routes serialize changes per user and enforce addon opt-in and viewer consent.
 - `WatchStateEntry` separates watched, playback, watchlist, drop and rating projections.
 - Database revision triggers invalidate complete snapshots for imports and direct SQL changes.
-- Events other than a completed watch that land on a placeholder title (named after its meta id) enqueue an internal `metadata_update` once.
+- Watchlist, drop and rating events on a placeholder title (still named after its meta id) enqueue one internal `metadata_update`. Watched marks enrich through `new_item_added`.
 
 #### Metadata Jobs
 - **`metadata_lookup`**: Resolves lookup requests into candidates (stale in-progress lookups are reclaimed after five minutes)
