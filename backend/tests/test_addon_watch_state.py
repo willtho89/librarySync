@@ -24,7 +24,7 @@ from librarysync.db.models import (
     WatchEvent,
     WatchlistItem,
 )
-from librarysync.jobs import metadata_backfill, process_outbox
+from librarysync.jobs import metadata_backfill
 from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -44,6 +44,25 @@ def movie_event(event="stop", **overrides):
         "ids": {"imdb": "tt0111161", "tmdb": "278"},
         **overrides,
     }
+
+
+async def run_backfill(db, monkeypatch, provider):
+    monkeypatch.setattr(metadata_backfill, "extend_scheduled_job", AsyncMock())
+    now = datetime.now(timezone.utc)
+    await metadata_backfill._backfill_media_items(
+        db,
+        "user-one",
+        metadata_backfill.METADATA_BACKFILL_BATCH_SIZE,
+        None,
+        now=now,
+        tmdb_required=False,
+        episode_refresh_cutoff=now,
+        metadata_refresh_delta=metadata_backfill.METADATA_BACKFILL_METADATA_REFRESH_DELTA,
+        force_metadata_refresh=True,
+        force_episode_refresh=False,
+        provider_overrides={"tmdb": provider},
+        use_overrides_only=True,
+    )
 
 
 @pytest_asyncio.fixture
@@ -438,25 +457,6 @@ async def test_metadata_update_job_enriches_its_title(context, monkeypatch):
     enrich.assert_awaited_once()
 
 
-async def run_backfill(db, monkeypatch, provider):
-    monkeypatch.setattr(metadata_backfill, "extend_scheduled_job", AsyncMock())
-    now = datetime.now(timezone.utc)
-    await metadata_backfill._backfill_media_items(
-        db,
-        "user-one",
-        metadata_backfill.METADATA_BACKFILL_BATCH_SIZE,
-        None,
-        now=now,
-        tmdb_required=False,
-        episode_refresh_cutoff=now,
-        metadata_refresh_delta=metadata_backfill.METADATA_BACKFILL_METADATA_REFRESH_DELTA,
-        force_metadata_refresh=True,
-        force_episode_refresh=False,
-        provider_overrides={"tmdb": provider},
-        use_overrides_only=True,
-    )
-
-
 @pytest.mark.asyncio
 async def test_backfill_enriches_watchlist_only_titles(context, monkeypatch):
     client, db, _ = context
@@ -536,10 +536,39 @@ async def test_backfill_leaves_other_watchlist_titles_alone(context, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_internal_handler_dispatches_metadata_update(monkeypatch):
-    process = AsyncMock()
-    monkeypatch.setattr(process_outbox, "process_metadata_update_job", process)
-    job = OutboxJob(user_id="user-one", target_provider="internal", job_type="metadata_update", payload={})
-    db = AsyncMock()
-    await process_outbox.InternalOutboxHandler().deliver(db, job)
-    process.assert_awaited_once_with(db, job)
+async def test_playback_does_not_queue_but_rating_does(context):
+    client, db, _ = context
+    url = f"{BASE}/watch_state/push/movie/tt0111161.json"
+    await client.post(url, json=movie_event("pause", played=False, positionMs=120000, durationMs=600000))
+    assert await db.scalar(select(MediaItem.title)) == "tt0111161"
+    query = select(OutboxJob).where(OutboxJob.job_type == "metadata_update")
+    assert (await db.scalars(query)).all() == []
+    await client.post(url, json=movie_event("rated", rating=8.5, at=AT + 1))
+    assert len((await db.scalars(query)).all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_metadata_update_job_skips_titles_already_enriched(context, monkeypatch):
+    client, db, _ = context
+    await client.post(f"{BASE}/watch_state/push/movie/tt0111161.json", json=movie_event("watchlisted"))
+    media = await db.scalar(select(MediaItem))
+    media.title = "The Shawshank Redemption"  # new_item_added got there first.
+    job = await db.scalar(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))
+    enrich = AsyncMock()
+    monkeypatch.setattr(watch_pipeline, "enrich_watched_metadata", enrich)
+    await watch_pipeline.process_metadata_update_job(db, job)
+    enrich.assert_not_awaited()
+    assert media.metadata_refreshed_at is None
+
+
+@pytest.mark.asyncio
+async def test_backfill_skips_removed_watchlist_placeholders(context, monkeypatch):
+    client, db, _ = context
+    url = f"{BASE}/watch_state/push/movie/tt0111161.json"
+    await client.post(url, json=movie_event("watchlisted"))
+    await client.post(url, json=movie_event("unwatchlisted", at=AT + 1))
+    assert await db.scalar(select(WatchlistItem.status)) == "removed"
+    provider = AsyncMock()
+    await run_backfill(db, monkeypatch, provider)
+    provider.get_details.assert_not_awaited()
+    provider.find_by_external_id.assert_not_awaited()

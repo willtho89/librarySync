@@ -30,6 +30,16 @@ def test_watchlist_update_dedupe_key_requires_media_id() -> None:
     assert key is None
 
 
+def test_metadata_update_dedupe_key_uses_media_id() -> None:
+    key = watch_pipeline._build_outbox_dedupe_key(
+        "user-1",
+        "internal",
+        "metadata_update",
+        {"media_item_id": "media-1"},
+    )
+    assert key == "user-1:internal:metadata_update:media-1"
+
+
 def test_publicmetadb_watchlist_payload_movie() -> None:
     payload = watchlist_sync._build_publicmetadb_payload(
         SimpleNamespace(id="wl-1", type="movie"),
