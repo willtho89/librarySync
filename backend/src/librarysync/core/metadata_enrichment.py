@@ -4,7 +4,7 @@ import logging
 import re
 from datetime import date
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import (
@@ -479,6 +479,14 @@ def is_watch_state_placeholder(media_item: MediaItem) -> bool:
     """A title created by a Watch State event and still named after its meta id."""
     raw = media_item.raw if isinstance(media_item.raw, dict) else {}
     return raw.get("source") == "aiostreams_watch_state" and media_item.title == raw.get("stremio_id")
+
+
+def watch_state_placeholder_clause():
+    """The is_watch_state_placeholder check as a SQL condition."""
+    return and_(
+        MediaItem.raw["source"].as_string() == "aiostreams_watch_state",
+        MediaItem.title == MediaItem.raw["stremio_id"].as_string(),
+    )
 
 
 async def _apply_candidate_to_media_item(

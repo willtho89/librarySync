@@ -463,6 +463,7 @@ async def process_metadata_update_job(db: AsyncSession, job: OutboxJob) -> None:
     if media_item is None:
         return  # Merged into another title after the job was queued.
     await enrich_watched_metadata(db, job.user_id, media_item, None)
+    media_item.metadata_refreshed_at = datetime.now(timezone.utc)
 
 
 async def _sync_to_integrations(

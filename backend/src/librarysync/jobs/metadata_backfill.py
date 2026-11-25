@@ -6,7 +6,7 @@ from sqlalchemy import and_, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import MetadataProvider
-from librarysync.core.metadata_enrichment import enrich_watched_metadata
+from librarysync.core.metadata_enrichment import enrich_watched_metadata, watch_state_placeholder_clause
 from librarysync.core.metadata_providers import load_random_provider
 from librarysync.core.scheduler import (
     claim_scheduled_job,
@@ -134,7 +134,11 @@ async def _backfill_media_items(
     episode_ids = select(EpisodeItem.show_media_item_id.label("media_item_id")).join(
         WatchedItem, WatchedItem.episode_item_id == EpisodeItem.id
     )
-    watchlist_ids = select(WatchlistItem.media_item_id.label("media_item_id"))
+    watchlist_ids = (
+        select(WatchlistItem.media_item_id.label("media_item_id"))
+        .join(MediaItem, MediaItem.id == WatchlistItem.media_item_id)
+        .where(watch_state_placeholder_clause())
+    )
     union_ids = union_all(direct_ids, episode_ids, watchlist_ids).subquery()
 
     missing_predicate = _missing_metadata_predicate(tmdb_required)
