@@ -137,7 +137,7 @@ async def _backfill_media_items(
     watchlist_ids = (
         select(WatchlistItem.media_item_id.label("media_item_id"))
         .join(MediaItem, MediaItem.id == WatchlistItem.media_item_id)
-        .where(watch_state_placeholder_clause())
+        .where(watch_state_placeholder_clause(), WatchlistItem.status != "removed")
     )
     union_ids = union_all(direct_ids, episode_ids, watchlist_ids).subquery()
 

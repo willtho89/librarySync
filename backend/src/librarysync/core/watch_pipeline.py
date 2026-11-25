@@ -19,7 +19,11 @@ from librarysync.connectors.services.stremio import has_required_stremio_fields
 from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.anime import is_anime
 from librarysync.core.integrations import load_integration_with_secrets
-from librarysync.core.metadata_enrichment import enrich_watched_metadata, refresh_episode_metadata
+from librarysync.core.metadata_enrichment import (
+    enrich_watched_metadata,
+    is_watch_state_placeholder,
+    refresh_episode_metadata,
+)
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.watchlist import (
     backfill_show_episodes,
@@ -460,8 +464,9 @@ async def process_metadata_update_job(db: AsyncSession, job: OutboxJob) -> None:
     if not media_item_id:
         raise ValueError("metadata_update requires media_item_id")
     media_item = await db.get(MediaItem, str(media_item_id))
-    if media_item is None:
-        return  # Merged into another title after the job was queued.
+    # Merged away, or already enriched by new_item_added or another viewer's job.
+    if not media_item or media_item.metadata_refreshed_at or not is_watch_state_placeholder(media_item):
+        return
     await enrich_watched_metadata(db, job.user_id, media_item, None)
     media_item.metadata_refreshed_at = datetime.now(timezone.utc)
 

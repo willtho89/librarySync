@@ -482,7 +482,6 @@ def is_watch_state_placeholder(media_item: MediaItem) -> bool:
 
 
 def watch_state_placeholder_clause():
-    """The is_watch_state_placeholder check as a SQL condition."""
     return and_(
         MediaItem.raw["source"].as_string() == "aiostreams_watch_state",
         MediaItem.title == MediaItem.raw["stremio_id"].as_string(),

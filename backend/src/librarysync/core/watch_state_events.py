@@ -253,8 +253,13 @@ async def apply_event(db: AsyncSession, user_id: str, media_type: str, body: dic
     entry = await _write_entry(db, user_id, category, media, episode, body)
     if entry is None:
         return "superseded"
-    if media and category != "watched" and media.metadata_refreshed_at is None and is_watch_state_placeholder(media):
-        # Completed watches enrich via new_item_added. Other events get one lookup, then the backfill retries.
+    if (
+        media
+        and category in {"watchlist", "drop", "rating"}
+        and media.metadata_refreshed_at is None
+        and is_watch_state_placeholder(media)
+    ):
+        # Watched marks enrich via new_item_added. Titles only watchlisted, dropped or rated get one lookup here.
         await enqueue_metadata_update_job(db, user_id, media.id)
     if category == "watched":
         await _write_entry(db, user_id, "playback", media, episode, body)
