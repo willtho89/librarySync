@@ -128,7 +128,7 @@ Configured via `LIBRARYSYNC_WORKER_MODES` (`all` or a comma-separated subset): `
 On SIGTERM/SIGINT loops finish their current iteration and release unprocessed claimed outbox jobs and metadata lookups. A failing loop backs off exponentially (max five minutes).
 
 ### Outbox Processing (`process_outbox`)
-- Job types: `push_watched`, `push_rating`, `remove_rating`, `update_history`, `remove_history`, `update_log_entry`, `delete_log_entry`, `remove_watched`, `push_watchlist`, `remove_watchlist`, and internal `new_item_added` / `watchlist_update`
+- Job types: `push_watched`, `push_rating`, `remove_rating`, `update_history`, `remove_history`, `update_log_entry`, `delete_log_entry`, `remove_watched`, `push_watchlist`, `remove_watchlist`, and internal `new_item_added` / `watchlist_update` / `metadata_update`
 - Claims interleave users round-robin; Trakt/SIMKL `push_watched`/`push_rating` are batched (one rate-limit token per batch)
 - `dedupe_key` is unique only among waiting jobs (`pending`, `failed_retryable`). A changed payload for a target already in flight becomes a successor that runs after it; a failed predecessor becomes `superseded`. Finished jobs never keep a key.
 - Retryable failures back off up to an hour and give up after `LIBRARYSYNC_OUTBOX_MAX_ATTEMPTS`; HTTP 429 honours `Retry-After` without using an attempt; a 401 from an OAuth provider expires the stored token and retries
@@ -140,11 +140,12 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - Public addon routes serialize changes per user and enforce addon opt-in and viewer consent.
 - `WatchStateEntry` separates watched, playback, watchlist, drop and rating projections.
 - Database revision triggers invalidate complete snapshots for imports and direct SQL changes.
+- Events other than a completed watch that land on a placeholder title (named after its meta id) enqueue an internal `metadata_update`.
 
 #### Metadata Jobs
 - **`metadata_lookup`**: Resolves lookup requests into candidates (stale in-progress lookups are reclaimed after five minutes)
 - **`metadata_cache`**: Scans recent candidates and seeds `media_items` to accelerate search
-- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history and episode lists that are missing posters or identifiers
+- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, watchlist items and episode lists that are missing posters or identifiers
 - **SIMKL calendar v2**: The `metadata_backfill` loop refreshes public TV/anime rolling and recent monthly calendars every six hours when `SIMKL_CLIENT_ID` is configured. It only updates local shows matched by identifiers, stores dates/finale markers in `EpisodeItem.raw.simkl_calendar`, and never imports watches. Absolute anime numbering only updates existing episodes in an unambiguous single-season catalog.
 
 #### Import Jobs
