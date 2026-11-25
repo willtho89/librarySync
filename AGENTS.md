@@ -140,12 +140,12 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - Public addon routes serialize changes per user and enforce addon opt-in and viewer consent.
 - `WatchStateEntry` separates watched, playback, watchlist, drop and rating projections.
 - Database revision triggers invalidate complete snapshots for imports and direct SQL changes.
-- Events other than a completed watch that land on a placeholder title (named after its meta id) enqueue an internal `metadata_update`.
+- Events other than a completed watch that land on a placeholder title (named after its meta id) enqueue an internal `metadata_update` once.
 
 #### Metadata Jobs
 - **`metadata_lookup`**: Resolves lookup requests into candidates (stale in-progress lookups are reclaimed after five minutes)
 - **`metadata_cache`**: Scans recent candidates and seeds `media_items` to accelerate search
-- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, watchlist items and episode lists that are missing posters or identifiers
+- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, placeholder watchlist titles and episode lists that are missing posters or identifiers
 - **SIMKL calendar v2**: The `metadata_backfill` loop refreshes public TV/anime rolling and recent monthly calendars every six hours when `SIMKL_CLIENT_ID` is configured. It only updates local shows matched by identifiers, stores dates/finale markers in `EpisodeItem.raw.simkl_calendar`, and never imports watches. Absolute anime numbering only updates existing episodes in an unambiguous single-season catalog.
 
 #### Import Jobs
