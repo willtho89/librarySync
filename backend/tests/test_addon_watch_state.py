@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from librarysync.api import routes_addon_watch_state, routes_stremio_addon, routes_stremio_addon_public
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.connectors.metadata.base import MediaCandidate
-from librarysync.core import addon_watch_state
+from librarysync.core import addon_watch_state, watch_pipeline
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
 from librarysync.db.models import (
     Base,
@@ -23,6 +23,7 @@ from librarysync.db.models import (
     WatchedItem,
     WatchEvent,
 )
+from librarysync.jobs import metadata_backfill
 from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -400,3 +401,72 @@ async def test_new_title_is_enriched_without_replacing_real_title(context):
         db, "user-one", media, None, provider_overrides={"tmdb": provider}, use_overrides_only=True
     )
     assert media.title == "My custom title"
+
+
+@pytest.mark.asyncio
+async def test_watchlisted_new_title_queues_one_metadata_update(context):
+    client, db, _ = context
+    url = f"{BASE}/watch_state/push/movie/tt0111161.json"
+    await client.post(url, json=movie_event("watchlisted"))
+    await client.post(url, json=movie_event("unwatchlisted", at=AT + 1))
+    media = await db.scalar(select(MediaItem))
+    jobs = (await db.scalars(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))).all()
+    assert media.title == "tt0111161"
+    assert [job.payload for job in jobs] == [{"media_item_id": media.id}]
+
+
+@pytest.mark.asyncio
+async def test_completed_watch_leaves_enrichment_to_new_item_job(context):
+    client, db, _ = context
+    await client.post(f"{BASE}/watch_state/push/movie/tt0111161.json", json=movie_event())
+    assert (await db.scalars(select(OutboxJob.job_type))).all() == ["new_item_added"]
+
+
+@pytest.mark.asyncio
+async def test_metadata_update_job_enriches_its_title(context, monkeypatch):
+    client, db, _ = context
+    await client.post(f"{BASE}/watch_state/push/movie/tt0111161.json", json=movie_event("watchlisted"))
+    media = await db.scalar(select(MediaItem))
+    job = await db.scalar(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))
+    enrich = AsyncMock()
+    monkeypatch.setattr(watch_pipeline, "enrich_watched_metadata", enrich)
+    await watch_pipeline.process_metadata_update_job(db, job)
+    enrich.assert_awaited_once_with(db, "user-one", media, None)
+    job.payload = {"media_item_id": "merged-away"}
+    await watch_pipeline.process_metadata_update_job(db, job)
+    enrich.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_backfill_enriches_watchlist_only_titles(context, monkeypatch):
+    client, db, _ = context
+    await client.post(f"{BASE}/watch_state/push/movie/tt0111161.json", json=movie_event("watchlisted"))
+    media = await db.scalar(select(MediaItem))
+    provider = AsyncMock()
+    provider.get_details.return_value = MediaCandidate(
+        provider="tmdb",
+        provider_id="278",
+        media_type="movie",
+        title="The Shawshank Redemption",
+        year=1994,
+        poster_url=None,
+        imdb_id="tt0111161",
+    )
+    monkeypatch.setattr(metadata_backfill, "extend_scheduled_job", AsyncMock())
+    now = datetime.now(timezone.utc)
+    await metadata_backfill._backfill_media_items(
+        db,
+        "user-one",
+        metadata_backfill.METADATA_BACKFILL_BATCH_SIZE,
+        None,
+        now=now,
+        tmdb_required=False,
+        episode_refresh_cutoff=now,
+        metadata_refresh_delta=metadata_backfill.METADATA_BACKFILL_METADATA_REFRESH_DELTA,
+        force_metadata_refresh=True,
+        force_episode_refresh=False,
+        provider_overrides={"tmdb": provider},
+        use_overrides_only=True,
+    )
+    await db.refresh(media)
+    assert media.title == "The Shawshank Redemption"
