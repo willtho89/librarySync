@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from librarysync.core.metadata_enrichment import needs_metadata_lookup
+from librarysync.core.watch_pipeline import enqueue_metadata_update_job
 from librarysync.core.watchlist import (
     mark_watchlist_item_dropped,
     upsert_watchlist_item,
@@ -16,7 +18,7 @@ from librarysync.core.watchlist_sources import (
     reconcile_watchlist_source,
     upsert_watchlist_source_item,
 )
-from librarysync.db.models import WatchEvent, WatchlistSource
+from librarysync.db.models import MediaItem, WatchEvent, WatchlistSource
 from librarysync.jobs.import_utils import load_existing_entry_keys
 
 MediaType = Literal["movie", "tv"]
@@ -93,6 +95,10 @@ async def process_watchlist_candidates(
             now=now,
         )
         seen_item_ids.append(item.id)
+        media = await db.get(MediaItem, item.media_item_id)
+        if media and needs_metadata_lookup(media):
+            # Trakt and SIMKL send no artwork, so a title without a poster gets a lookup for one.
+            await enqueue_metadata_update_job(db, user_id, media.id)
         if status in {"created", "restored"} and entry_key not in existing_entry_keys:
             imported += 1
             event = WatchEvent(

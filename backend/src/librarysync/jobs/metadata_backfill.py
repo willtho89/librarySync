@@ -11,7 +11,7 @@ from librarysync.core.metadata_enrichment import (
     enrich_watched_metadata,
     is_watch_state_placeholder,
     no_recent_lookup_miss_clause,
-    settle_placeholder_lookup,
+    settle_metadata_lookup,
     watch_state_placeholder_clause,
 )
 from librarysync.core.metadata_providers import load_random_provider
@@ -147,7 +147,7 @@ async def _backfill_media_items(
         select(WatchlistItem.media_item_id.label("media_item_id"))
         .join(MediaItem, MediaItem.id == WatchlistItem.media_item_id)
         .where(
-            watch_state_placeholder_clause(),
+            or_(watch_state_placeholder_clause(), MediaItem.poster_url.is_(None)),
             no_recent_lookup_miss_clause(now),
             WatchlistItem.status != "removed",
         )
@@ -215,7 +215,7 @@ async def _backfill_media_items(
                         outcome=outcome,
                     )
                     if placeholder:
-                        settle_placeholder_lookup(media_item, outcome, now)
+                        settle_metadata_lookup(media_item, outcome, now)
                     elif outcome.retry_at is None:
                         media_item.metadata_refreshed_at = now
                     if outcome.retry_at is not None:

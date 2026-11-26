@@ -598,16 +598,28 @@ def watch_state_placeholder_clause():
 
 def needs_placeholder_lookup(media_item: MediaItem, now: datetime | None = None) -> bool:
     """A placeholder with no confirmed miss in the last LOOKUP_MISS_COOLDOWN."""
-    if not is_watch_state_placeholder(media_item):
-        return False
-    missed_at = media_item.raw.get(LOOKUP_MISS_KEY)
+    return is_watch_state_placeholder(media_item) and not _missed_recently(media_item, now)
+
+
+def needs_metadata_lookup(media_item: MediaItem, now: datetime | None = None) -> bool:
+    """A placeholder or a title without a poster, with no confirmed miss in the last LOOKUP_MISS_COOLDOWN."""
+    return _lookup_unresolved(media_item) and not _missed_recently(media_item, now)
+
+
+def _lookup_unresolved(media_item: MediaItem) -> bool:
+    return is_watch_state_placeholder(media_item) or not media_item.poster_url
+
+
+def _missed_recently(media_item: MediaItem, now: datetime | None) -> bool:
+    raw = media_item.raw if isinstance(media_item.raw, dict) else {}
+    missed_at = raw.get(LOOKUP_MISS_KEY)
     if not missed_at:
-        return True
+        return False
     try:
         missed = datetime.fromisoformat(missed_at)
     except (TypeError, ValueError):
-        return True
-    return (now or datetime.now(timezone.utc)) - missed >= LOOKUP_MISS_COOLDOWN
+        return False
+    return (now or datetime.now(timezone.utc)) - missed < LOOKUP_MISS_COOLDOWN
 
 
 def no_recent_lookup_miss_clause(now: datetime):
@@ -615,9 +627,9 @@ def no_recent_lookup_miss_clause(now: datetime):
     return or_(missed_at.is_(None), missed_at < (now - LOOKUP_MISS_COOLDOWN).isoformat())
 
 
-def settle_placeholder_lookup(media_item: MediaItem, outcome: LookupOutcome, now: datetime) -> str:
-    """Record what a placeholder lookup achieved. Only a resolved title counts as refreshed."""
-    if not is_watch_state_placeholder(media_item):
+def settle_metadata_lookup(media_item: MediaItem, outcome: LookupOutcome, now: datetime) -> str:
+    """Record what a lookup achieved. Only a resolved title with a poster counts as refreshed."""
+    if not _lookup_unresolved(media_item):
         media_item.metadata_refreshed_at = now
         return "refreshed"
     if outcome.retry_at is not None:
@@ -626,8 +638,9 @@ def settle_placeholder_lookup(media_item: MediaItem, outcome: LookupOutcome, now
         return "failed"
     if not outcome.providers:
         return "unconfigured"
-    # Providers answered without a match: wait LOOKUP_MISS_COOLDOWN before asking again.
-    media_item.raw = {**media_item.raw, LOOKUP_MISS_KEY: now.isoformat()}
+    # Providers answered without a title or poster: wait LOOKUP_MISS_COOLDOWN before asking again.
+    raw = media_item.raw if isinstance(media_item.raw, dict) else {}
+    media_item.raw = {**raw, LOOKUP_MISS_KEY: now.isoformat()}
     return "missed"
 
 

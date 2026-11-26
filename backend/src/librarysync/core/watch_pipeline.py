@@ -24,9 +24,9 @@ from librarysync.core.metadata_enrichment import (
     MetadataLookupFailed,
     MetadataLookupThrottled,
     enrich_watched_metadata,
-    needs_placeholder_lookup,
+    needs_metadata_lookup,
     refresh_episode_metadata,
-    settle_placeholder_lookup,
+    settle_metadata_lookup,
 )
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.watchlist import (
@@ -474,11 +474,11 @@ async def process_metadata_update_job(db: AsyncSession, job: OutboxJob) -> None:
         raise ValueError("metadata_update requires media_item_id")
     # The row lock keeps two lookups off one title. Locked, merged away or already resolved: nothing to do.
     media_item = await db.get(MediaItem, str(media_item_id), with_for_update={"skip_locked": True})
-    if not media_item or not needs_placeholder_lookup(media_item):
+    if not media_item or not needs_metadata_lookup(media_item):
         return
     outcome = LookupOutcome(budget_user_id=job.user_id)
     await enrich_watched_metadata(db, job.user_id, media_item, None, outcome=outcome)
-    result = settle_placeholder_lookup(media_item, outcome, datetime.now(timezone.utc))
+    result = settle_metadata_lookup(media_item, outcome, datetime.now(timezone.utc))
     if result == "throttled" and outcome.retry_at is not None:
         raise MetadataLookupThrottled(outcome.retry_at)
     if result == "failed":
