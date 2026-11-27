@@ -113,7 +113,7 @@ librarySync/
 
 ### Metadata Providers (Lookup Only)
 - **TMDB**: API key (v3) or read access token (v4, sent as a Bearer header)
-- **TVDB**: API key required, optional PIN
+- **TVDB**: API key required, optional PIN. External-id lookups are a free-text search, so only results that carry the requested IMDb or TMDB id are kept
 - **IMDb**, **TVMaze**, **Kitsu**, **MyAnimeList**: No authentication required
 
 **Storage**: Provider configurations in `integrations` table; sensitive credentials in `integration_secrets` (encrypted).
@@ -141,17 +141,18 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - `WatchStateEntry` separates watched, playback, watchlist, drop and rating projections.
 - Database revision triggers invalidate complete snapshots for imports and direct SQL changes.
 - Watchlist, drop and rating events on a placeholder title (still named after its meta id) enqueue an internal `metadata_update`, one per title. Watched marks enrich through `new_item_added`.
-- A placeholder lookup counts as refreshed only when the title resolves. Provider errors retry through the outbox, rate limits requeue without an attempt, a missing provider records nothing, and a lookup that finds nothing waits seven days (`raw.metadata_lookup_missed_at`).
+- A `metadata_update` counts as refreshed only when the title resolves and has a poster. Provider errors retry through the outbox, rate limits requeue without an attempt, a missing provider records nothing, and a lookup that finds nothing waits seven days (`raw.metadata_lookup_missed_at`).
 
 #### Metadata Jobs
 - **`metadata_lookup`**: Resolves lookup requests into candidates (stale in-progress lookups are reclaimed after five minutes)
 - **`metadata_cache`**: Scans recent candidates and seeds `media_items` to accelerate search
-- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, placeholder watchlist titles and episode lists that are missing posters or identifiers. It pages by id, takes a per-user rate-limit token for each TMDB/TVDB request and stops for the run when refused, and skips titles with a queued `metadata_update`
+- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, placeholder and poster-less watchlist titles and episode lists that are missing posters or identifiers. It pages by id, takes a per-user rate-limit token for each TMDB/TVDB request and stops for the run when refused, and skips titles with a queued `metadata_update`
 - **SIMKL calendar v2**: The `metadata_backfill` loop refreshes public TV/anime rolling and recent monthly calendars every six hours when `SIMKL_CLIENT_ID` is configured. It only updates local shows matched by identifiers, stores dates/finale markers in `EpisodeItem.raw.simkl_calendar`, and never imports watches. Absolute anime numbering only updates existing episodes in an unambiguous single-season catalog.
 
 #### Import Jobs
 - **`quick_import`**: Runs 7-day import window on the user's configured schedule (30 min to 7 days). Due runs are selected from an unlocked scan, then locked. Per-user runs are single-flight via a lease stored in the integration config (10-minute expiry). The lease owner is unique per claim (so loops of one process exclude each other too) and is released after every provider step; an expired lease lets any worker resume a stuck run from its saved queue index
 - **`import_all`**: Sequences providers per user for full import, single-flight via a per-claim two-hour lease released after each provider step
+- **Watchlist posters**: Trakt and SIMKL send no artwork, so an imported watchlist title without a poster enqueues a `metadata_update`, with the same outcomes and miss cooldown as placeholders
 - **Watchlist reconciliation**: removals are only reconciled against complete listings. A failed fetch, a failed SIMKL category or a page-capped listing (`PagedEntries.truncated`) never deletes items
 - **Dropped ingestion**: Trakt (`GET /users/hidden/dropped?type=show`) and SIMKL (`status: "dropped"` in `/sync/all-items`) dropped shows are imported into the terminal `dropped` watchlist status, tracked via a per-provider `WatchlistSource` (`external_id="dropped"`); reconcile un-drops shows that leave the provider's dropped list. Import upserts never resurrect dropped items (`restore_dropped=False`)
 - **`merge_history`**: Post-import deduplication (same-day movie entries) and repoints sync/outbox rows
