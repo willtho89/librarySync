@@ -11,7 +11,7 @@ from alembic.operations import Operations
 from fastapi import FastAPI
 from librarysync.api import routes_addon_watch_state, routes_admin, routes_stremio_addon, routes_stremio_addon_public
 from librarysync.api.deps import get_current_user, get_db
-from librarysync.connectors.metadata import anilist
+from librarysync.connectors.metadata import anilist, tmdb, tvdb
 from librarysync.connectors.metadata.base import MediaCandidate, ProviderContext
 from librarysync.core import (
     addon_watch_state,
@@ -654,7 +654,7 @@ async def test_lookups_charge_each_provider_owner_for_every_request(context, mon
         db, "user-one", media, None, provider_overrides=overrides, use_overrides_only=True, outcome=outcome
     )
     charges = [(call.args[1], call.args[2], call.kwargs["cost"]) for call in acquire.await_args_list]
-    assert charges == [("user-one", "tmdb", 2), ("user-two", "tvdb", 3)]
+    assert charges == [("user-one", "tmdb", 2), ("user-two", "tvdb", 7)]
     assert outcome.requests == 2
 
 
@@ -671,6 +671,138 @@ async def test_rate_limiter_takes_one_token_per_request(context):
     assert refused.retry_at == now + timedelta(seconds=100)
     assert (await limiter.try_acquire(db, "user-one", "tmdb", now=now, cost=2)).allowed
     assert bucket.tokens == 0.0
+    bucket.tokens = 10.0
+    assert not (await limiter.try_acquire(db, "user-one", "tmdb", now=now, cost=11)).allowed
+
+
+@pytest.mark.asyncio
+async def test_provider_whose_limit_cannot_cover_one_call_sits_the_lookup_out(context, monkeypatch):
+    _, db, _ = context
+    media = placeholder("tt0111161", None)
+    db.add(media)
+    await db.flush()
+    tvdb = tmdb_provider()
+    tvdb.provider = "tvdb"
+    limiter = rate_limiter.RateLimiter({"tvdb": rate_limiter.RateLimitConfig(capacity=5.0, refill_per_second=1.0)})
+    monkeypatch.setattr(metadata_enrichment, "RATE_LIMITER", limiter)
+    outcome = metadata_enrichment.LookupOutcome(budgeted=True)
+    await enrich_watched_metadata(
+        db, "user-one", media, None, provider_overrides={"tvdb": tvdb}, use_overrides_only=True, outcome=outcome
+    )
+    tvdb.find_by_external_id.assert_not_awaited()
+    assert (outcome.requests, outcome.retry_at) == (0, None)
+
+
+def scripted_http(monkeypatch, module, responses):
+    """Serves the responses in order through the connector's HTTP client and records each outbound request."""
+    sent = []
+
+    def handle(request):
+        sent.append(request)
+        status, body = responses[len(sent) - 1]
+        return httpx.Response(status, json=body)
+
+    def client(**kwargs):
+        return httpx.AsyncClient(transport=httpx.MockTransport(handle), **kwargs)
+
+    monkeypatch.setattr(module, "get_http_client", client)
+    return sent
+
+
+def real_tmdb():
+    return tmdb.TmdbMetadataProvider(
+        tmdb.TmdbConfig(language="de-DE"), tmdb.TmdbSecrets(api_key="key"), ProviderContext(user_id="user-one")
+    )
+
+
+def real_tvdb(language="eng"):
+    return tvdb.TvdbMetadataProvider(
+        tvdb.TvdbConfig(language=language), tvdb.TvdbSecrets(api_key="key"), ProviderContext(user_id="user-one")
+    )
+
+
+LOGIN = (200, {"data": {"token": "token"}})
+EXPIRED = (401, {})
+TMDB_EMPTY_FIND = (200, {"movie_results": [], "tv_results": []})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("module", "make", "call", "run", "responses"),
+    [
+        (tmdb, real_tmdb, "find", lambda p: p.find_by_external_id("tt0111161", "movie"), [TMDB_EMPTY_FIND] * 2),
+        (tmdb, real_tmdb, "search", lambda p: p.search("Shawshank", "movie"), [(200, {"results": []})] * 2),
+        (tmdb, real_tmdb, "details", lambda p: p.get_details("278", "movie"), [(200, {"id": 278, "title": "S"})]),
+        (
+            tvdb,
+            real_tvdb,
+            "details",
+            lambda p: p.get_details("1", "movie"),
+            [LOGIN, EXPIRED, LOGIN, (404, {}), EXPIRED, LOGIN, (200, {"data": {"id": 1, "name": "S"}})],
+        ),
+        (
+            tvdb,
+            real_tvdb,
+            "search",
+            lambda p: p.search("Shawshank", "movie"),
+            [LOGIN, EXPIRED, LOGIN, (200, {"data": []}), EXPIRED, LOGIN, (200, {"data": []})],
+        ),
+        (
+            tvdb,
+            real_tvdb,
+            "find",
+            lambda p: p.find_by_external_id("tt0111161", "movie"),
+            [LOGIN, EXPIRED, LOGIN, (200, {"data": []}), EXPIRED, LOGIN, (200, {"data": []})],
+        ),
+    ],
+)
+async def test_reserved_cost_covers_every_request_a_call_can_send(monkeypatch, module, make, call, run, responses):
+    # The worst path: TMDB's language fallback, TVDB's login, re-login after a 401, and 404 or empty-search fallback.
+    sent = scripted_http(monkeypatch, module, responses)
+    provider = make()
+    await run(provider)
+    assert len(sent) == len(responses)
+    assert len(sent) <= metadata_enrichment.REQUEST_COSTS.get((provider.provider, call), 1)
+
+
+def tvdb_movie(tvdb_id, name, tmdb_id=None):
+    remote_ids = [{"sourceName": "TheMovieDB.com", "id": tmdb_id}] if tmdb_id else []
+    return {"id": f"movie-{tvdb_id}", "type": "movie", "name": name, "remote_ids": remote_ids}
+
+
+@pytest.mark.asyncio
+async def test_tvdb_external_id_lookup_keeps_only_results_carrying_the_id(monkeypatch):
+    results = [tvdb_movie(1, "1833238 Ways to Die"), tvdb_movie(2, "Nathan Fielder", tmdb_id="1833238")]
+    scripted_http(monkeypatch, tvdb, [LOGIN, (200, {"data": results})])
+    candidates = await real_tvdb(language=None).find_by_external_id("1833238", "movie")
+    assert [candidate.title for candidate in candidates] == ["Nathan Fielder"]
+
+
+@pytest.mark.asyncio
+async def test_tmdb_only_placeholder_never_takes_an_unrelated_tvdb_result(context, monkeypatch):
+    _, db, _ = context
+    meta_id = "tmdb:1833238"
+    media = MediaItem(
+        media_type="movie",
+        title=meta_id,
+        tmdb_id="1833238",
+        raw={"source": "aiostreams_watch_state", "stremio_id": meta_id},
+    )
+    db.add(media)
+    await db.flush()
+    scripted_http(monkeypatch, tvdb, [LOGIN, (200, {"data": [tvdb_movie(1, "1833238 Ways to Die")]})])
+    outcome = metadata_enrichment.LookupOutcome()
+    overrides = {"tvdb": real_tvdb(language=None)}
+    await enrich_watched_metadata(
+        db, "user-one", media, None, provider_overrides=overrides, use_overrides_only=True, outcome=outcome
+    )
+    assert (media.title, media.tvdb_id, outcome.requests) == (meta_id, None, 1)
+
+
+def test_long_retry_after_is_honoured_up_to_a_day():
+    assert process_outbox._throttle_delay(7200) == timedelta(hours=2)
+    assert process_outbox._throttle_delay(None) == timedelta(seconds=60)
+    assert process_outbox._throttle_delay(1e12) == timedelta(days=1)
 
 
 def status_error(status, headers=None):
@@ -777,12 +909,12 @@ async def test_throttled_lookup_is_requeued_without_an_attempt(context, monkeypa
     client, db, _ = context
     await client.post(f"{BASE}/watch_state/push/movie/tt0111161.json", json=movie_event("watchlisted"))
     job = await db.scalar(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))
-    retry_at = datetime.now(timezone.utc) + timedelta(minutes=2)
+    retry_at = datetime.now(timezone.utc) + timedelta(hours=2)
     monkeypatch.setattr(watch_pipeline, "enrich_watched_metadata", fake_enrich(requests=1, retry_at=retry_at))
     await process_outbox._process_job(db, job)
     assert (job.status, job.attempts) == ("failed_retryable", 0)
     run_after = job.run_after if job.run_after.tzinfo else job.run_after.replace(tzinfo=timezone.utc)
-    assert run_after > datetime.now(timezone.utc) + timedelta(minutes=1)
+    assert run_after > datetime.now(timezone.utc) + timedelta(minutes=115)
     assert (await db.scalar(select(MediaItem))).metadata_refreshed_at is None
 
 
