@@ -10,7 +10,17 @@ import pytest_asyncio
 from fastapi import FastAPI
 from librarysync.api.deps import get_db
 from librarysync.api.routes_addon_watch_state import router
-from librarysync.db.models import Base, StremioAddonConfig, User, WatchedItem, WatchStateReceipt
+from librarysync.core.metadata_enrichment import MetadataLookupThrottled
+from librarysync.core.watch_pipeline import process_metadata_update_job
+from librarysync.db.models import (
+    Base,
+    MediaItem,
+    OutboxJob,
+    StremioAddonConfig,
+    User,
+    WatchedItem,
+    WatchStateReceipt,
+)
 from librarysync.jobs.watch_state import drain_watch_state
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -95,3 +105,23 @@ async def test_bulk_workers_claim_each_receipt_once(pg_context):
     async with factory() as db:
         assert await db.scalar(select(func.count()).select_from(WatchedItem)) == 2
         assert list((await db.scalars(select(WatchStateReceipt.status))).all()) == ["applied", "applied"]
+
+
+async def test_metadata_lookup_waits_for_a_title_another_worker_holds(pg_context):
+    _, factory = pg_context
+    media = MediaItem(
+        media_type="movie",
+        title="tt0111161",
+        imdb_id="tt0111161",
+        raw={"source": "aiostreams_watch_state", "stremio_id": "tt0111161"},
+    )
+    async with factory() as holder, factory() as worker:
+        holder.add(media)
+        await holder.commit()
+        await holder.get(MediaItem, media.id, with_for_update=True)
+        job = OutboxJob(
+            user_id="u", target_provider="internal", job_type="metadata_update", payload={"media_item_id": media.id}
+        )
+        with pytest.raises(MetadataLookupThrottled):
+            await process_metadata_update_job(worker, job)
+        await holder.rollback()
