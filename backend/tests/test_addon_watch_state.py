@@ -1,5 +1,6 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from importlib import import_module
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
@@ -11,7 +12,7 @@ from fastapi import FastAPI
 from librarysync.api import routes_addon_watch_state, routes_stremio_addon, routes_stremio_addon_public
 from librarysync.api.deps import get_current_user, get_db
 from librarysync.connectors.metadata.base import MediaCandidate
-from librarysync.core import addon_watch_state, watch_pipeline
+from librarysync.core import addon_watch_state, metadata_enrichment, watch_pipeline
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
 from librarysync.db.models import (
     Base,
@@ -24,7 +25,7 @@ from librarysync.db.models import (
     WatchEvent,
     WatchlistItem,
 )
-from librarysync.jobs import metadata_backfill
+from librarysync.jobs import metadata_backfill, process_outbox
 from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -46,13 +47,13 @@ def movie_event(event="stop", **overrides):
     }
 
 
-async def run_backfill(db, monkeypatch, provider):
+async def run_backfill(db, monkeypatch, provider, batch_size=metadata_backfill.METADATA_BACKFILL_BATCH_SIZE):
     monkeypatch.setattr(metadata_backfill, "extend_scheduled_job", AsyncMock())
     now = datetime.now(timezone.utc)
     await metadata_backfill._backfill_media_items(
         db,
         "user-one",
-        metadata_backfill.METADATA_BACKFILL_BATCH_SIZE,
+        batch_size,
         None,
         now=now,
         tmdb_required=False,
@@ -62,6 +63,33 @@ async def run_backfill(db, monkeypatch, provider):
         force_episode_refresh=False,
         provider_overrides={"tmdb": provider},
         use_overrides_only=True,
+    )
+
+
+async def finish_lookup_jobs(db):
+    """Settle queued metadata_update jobs as a worker would, so the backfill no longer leaves their titles alone."""
+    for job in (await db.scalars(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))).all():
+        job.status, job.dedupe_key = "succeeded", None
+    await db.commit()
+
+
+def fake_enrich(**outcome_fields):
+    """Stands in for enrich_watched_metadata and reports the given lookup outcome."""
+
+    async def enrich(db, user_id, media_item, episode_item, outcome=None, **_kwargs):
+        for name, value in outcome_fields.items():
+            setattr(outcome, name, value)
+
+    return enrich
+
+
+def placeholder(imdb_id, tmdb_id):
+    return MediaItem(
+        media_type="movie",
+        title=imdb_id,
+        imdb_id=imdb_id,
+        tmdb_id=tmdb_id,
+        raw={"source": "aiostreams_watch_state", "stremio_id": imdb_id},
     )
 
 
@@ -451,7 +479,9 @@ async def test_metadata_update_job_enriches_its_title(context, monkeypatch):
     enrich = AsyncMock()
     monkeypatch.setattr(watch_pipeline, "enrich_watched_metadata", enrich)
     await watch_pipeline.process_metadata_update_job(db, job)
-    enrich.assert_awaited_once_with(db, "user-one", media, None)
+    enrich.assert_awaited_once()
+    assert enrich.await_args.args == (db, "user-one", media, None)
+    assert enrich.await_args.kwargs["outcome"].budget_user_id == "user-one"
     job.payload = {"media_item_id": "merged-away"}
     await watch_pipeline.process_metadata_update_job(db, job)
     enrich.assert_awaited_once()
@@ -472,9 +502,11 @@ async def test_backfill_enriches_watchlist_only_titles(context, monkeypatch):
         poster_url=None,
         imdb_id="tt0111161",
     )
+    await finish_lookup_jobs(db)
     await run_backfill(db, monkeypatch, provider)
     await db.refresh(media)
     assert media.title == "The Shawshank Redemption"
+    assert media.metadata_refreshed_at is not None
 
 
 @pytest.mark.asyncio
@@ -499,6 +531,7 @@ async def test_watchlisted_placeholder_series_is_enriched(context, monkeypatch):
             imdb_id="tt0903747",
         )
     ]
+    await finish_lookup_jobs(db)
     await run_backfill(db, monkeypatch, provider)
     await db.refresh(media)
     assert media.title == "Breaking Bad"
@@ -506,19 +539,175 @@ async def test_watchlisted_placeholder_series_is_enriched(context, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_processed_placeholder_is_not_queued_again(context, monkeypatch):
+async def test_confirmed_miss_is_not_looked_up_again_during_cooldown(context, monkeypatch):
     client, db, _ = context
     url = f"{BASE}/watch_state/push/movie/tt0111161.json"
     await client.post(url, json=movie_event("watchlisted"))
     job = await db.scalar(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))
-    monkeypatch.setattr(watch_pipeline, "enrich_watched_metadata", AsyncMock())
+    monkeypatch.setattr(watch_pipeline, "enrich_watched_metadata", fake_enrich(providers=1))
     await watch_pipeline.process_metadata_update_job(db, job)
-    job.status, job.dedupe_key = "succeeded", None
-    await db.commit()
-    assert (await db.scalar(select(MediaItem))).metadata_refreshed_at is not None
+    await finish_lookup_jobs(db)
+    media = await db.scalar(select(MediaItem))
+    assert media.metadata_refreshed_at is None
+    assert metadata_enrichment.LOOKUP_MISS_KEY in media.raw
     await client.post(url, json=movie_event("unwatchlisted", at=AT + 1))
     statuses = (await db.scalars(select(OutboxJob.status).where(OutboxJob.job_type == "metadata_update"))).all()
     assert statuses == ["succeeded"]
+    provider = AsyncMock()
+    await client.post(url, json=movie_event("watchlisted", id="watchlisted-again", at=AT + 2))
+    await finish_lookup_jobs(db)
+    await run_backfill(db, monkeypatch, provider)
+    provider.get_details.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lookup_without_providers_records_nothing(context, monkeypatch):
+    client, db, _ = context
+    url = f"{BASE}/watch_state/push/movie/tt0111161.json"
+    await client.post(url, json=movie_event("watchlisted"))
+    job = await db.scalar(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))
+    monkeypatch.setattr(watch_pipeline, "enrich_watched_metadata", fake_enrich())
+    await watch_pipeline.process_metadata_update_job(db, job)
+    await finish_lookup_jobs(db)
+    media = await db.scalar(select(MediaItem))
+    assert media.metadata_refreshed_at is None
+    assert metadata_enrichment.LOOKUP_MISS_KEY not in media.raw
+    # A later event, for example from a viewer with a working provider, still queues a lookup.
+    await client.post(url, json=movie_event("unwatchlisted", at=AT + 1))
+    statuses = (await db.scalars(select(OutboxJob.status).where(OutboxJob.job_type == "metadata_update"))).all()
+    assert sorted(statuses) == ["pending", "succeeded"]
+
+
+@pytest.mark.asyncio
+async def test_failed_lookup_is_retried_and_not_recorded(context, monkeypatch):
+    client, db, _ = context
+    await client.post(f"{BASE}/watch_state/push/movie/tt0111161.json", json=movie_event("watchlisted"))
+    job = await db.scalar(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))
+    monkeypatch.setattr(watch_pipeline, "enrich_watched_metadata", fake_enrich(providers=1, failed=["tmdb: timed out"]))
+    await process_outbox._process_job(db, job)
+    assert (job.status, job.attempts) == ("failed_retryable", 1)
+    media = await db.scalar(select(MediaItem))
+    assert media.metadata_refreshed_at is None
+    assert metadata_enrichment.LOOKUP_MISS_KEY not in media.raw
+
+
+@pytest.mark.asyncio
+async def test_throttled_lookup_is_requeued_without_an_attempt(context, monkeypatch):
+    client, db, _ = context
+    await client.post(f"{BASE}/watch_state/push/movie/tt0111161.json", json=movie_event("watchlisted"))
+    job = await db.scalar(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))
+    retry_at = datetime.now(timezone.utc) + timedelta(minutes=2)
+    monkeypatch.setattr(watch_pipeline, "enrich_watched_metadata", fake_enrich(providers=1, retry_at=retry_at))
+    await process_outbox._process_job(db, job)
+    assert (job.status, job.attempts) == ("failed_retryable", 0)
+    run_after = job.run_after if job.run_after.tzinfo else job.run_after.replace(tzinfo=timezone.utc)
+    assert run_after > datetime.now(timezone.utc) + timedelta(minutes=1)
+    assert (await db.scalar(select(MediaItem))).metadata_refreshed_at is None
+
+
+@pytest.mark.asyncio
+async def test_provider_errors_and_budget_are_recorded_in_the_outcome(context, monkeypatch):
+    client, db, _ = context
+    await client.post(f"{BASE}/watch_state/push/movie/tt0111161.json", json=movie_event("watchlisted"))
+    media = await db.scalar(select(MediaItem))
+    provider = AsyncMock()
+    provider.provider = "tmdb"
+    provider.get_details.side_effect = httpx.ReadTimeout("timed out")
+    outcome = metadata_enrichment.LookupOutcome()
+    await enrich_watched_metadata(
+        db, "user-one", media, None, provider_overrides={"tmdb": provider}, use_overrides_only=True, outcome=outcome
+    )
+    assert (outcome.providers, outcome.failed, media.title) == (1, ["tmdb: timed out"], "tt0111161")
+
+    provider.get_details.reset_mock()
+    retry_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+    refuse = AsyncMock(return_value=SimpleNamespace(allowed=False, retry_at=retry_at))
+    monkeypatch.setattr(metadata_enrichment.RATE_LIMITER, "try_acquire", refuse)
+    budgeted = metadata_enrichment.LookupOutcome(budget_user_id="user-one")
+    await enrich_watched_metadata(
+        db, "user-one", media, None, provider_overrides={"tmdb": provider}, use_overrides_only=True, outcome=budgeted
+    )
+    provider.get_details.assert_not_awaited()
+    assert budgeted.retry_at == retry_at
+    assert refuse.await_args.args[1:] == ("user-one", "tmdb")
+
+
+@pytest.mark.asyncio
+async def test_users_asking_for_the_same_title_share_one_lookup(context):
+    _, db, _ = context
+    media = placeholder("tt0111161", "278")
+    db.add(media)
+    await db.flush()
+    await watch_pipeline.enqueue_metadata_update_job(db, "user-one", media.id)
+    await watch_pipeline.enqueue_metadata_update_job(db, "user-two", media.id)
+    await db.flush()
+    assert len((await db.scalars(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))).all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_backfill_pages_by_id_while_fixing_placeholders(context, monkeypatch):
+    _, db, _ = context
+    for number in (1, 2, 3):
+        media = placeholder(f"tt000000{number}", str(number))
+        db.add(media)
+        await db.flush()
+        db.add(WatchlistItem(user_id="user-one", media_item_id=media.id, type="movie", source="aiostreams"))
+    await db.commit()
+
+    def details(provider_id, scope):
+        return MediaCandidate(
+            provider="tmdb",
+            provider_id=provider_id,
+            media_type="movie",
+            title=f"Movie {provider_id}",
+            year=2000,
+            poster_url=None,
+            imdb_id=None,
+        )
+
+    provider = AsyncMock()
+    provider.get_details.side_effect = details
+    await run_backfill(db, monkeypatch, provider, batch_size=1)
+    titles = (await db.scalars(select(MediaItem.title).order_by(MediaItem.title))).all()
+    assert titles == ["Movie 1", "Movie 2", "Movie 3"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_leaves_titles_with_a_queued_lookup_to_the_job(context, monkeypatch):
+    client, db, _ = context
+    await client.post(f"{BASE}/watch_state/push/movie/tt0111161.json", json=movie_event("watchlisted"))
+    provider = AsyncMock()
+    await run_backfill(db, monkeypatch, provider)
+    provider.get_details.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_known_kitsu_id_names_the_placeholder_but_never_a_real_title(context):
+    client, db, _ = context
+    body = {"id": "watchlist-kitsu", "event": "watchlisted", "scope": "series", "at": AT, "metaId": "kitsu:42323"}
+    await client.post(f"{BASE}/watch_state/push/series/kitsu:42323.json", json=body)
+    media = await db.scalar(select(MediaItem))
+    assert (media.title, media.kitsu_id) == ("kitsu:42323", "42323")
+    provider = AsyncMock()
+    provider.provider = "kitsu"
+    provider.get_details.return_value = MediaCandidate(
+        provider="kitsu",
+        provider_id="42323",
+        media_type="anime",
+        title="Frieren: Beyond Journey's End",
+        year=2023,
+        poster_url="https://media.kitsu.app/anime/42323/poster.jpg",
+        imdb_id=None,
+    )
+    overrides = {"kitsu": provider}
+    await enrich_watched_metadata(db, "user-one", media, None, provider_overrides=overrides, use_overrides_only=True)
+    provider.get_details.assert_awaited_once_with("42323", "anime")
+    assert media.title == "Frieren: Beyond Journey's End"
+
+    media.title = "Sousou no Frieren"
+    await enrich_watched_metadata(db, "user-one", media, None, provider_overrides=overrides, use_overrides_only=True)
+    provider.get_details.assert_awaited_once()
+    assert media.title == "Sousou no Frieren"
 
 
 @pytest.mark.asyncio
@@ -568,6 +757,7 @@ async def test_backfill_skips_removed_watchlist_placeholders(context, monkeypatc
     await client.post(url, json=movie_event("watchlisted"))
     await client.post(url, json=movie_event("unwatchlisted", at=AT + 1))
     assert await db.scalar(select(WatchlistItem.status)) == "removed"
+    await finish_lookup_jobs(db)
     provider = AsyncMock()
     await run_backfill(db, monkeypatch, provider)
     provider.get_details.assert_not_awaited()
