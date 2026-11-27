@@ -113,7 +113,7 @@ librarySync/
 
 ### Metadata Providers (Lookup Only)
 - **TMDB**: API key (v3) or read access token (v4, sent as a Bearer header)
-- **TVDB**: API key required, optional PIN
+- **TVDB**: API key required, optional PIN. External-id finds are a text search, so only results carrying the requested IMDb or TMDB id are kept
 - **IMDb**, **TVMaze**, **Kitsu**, **MyAnimeList**: No authentication required
 
 **Storage**: Provider configurations in `integrations` table; sensitive credentials in `integration_secrets` (encrypted).
@@ -131,7 +131,7 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - Job types: `push_watched`, `push_rating`, `remove_rating`, `update_history`, `remove_history`, `update_log_entry`, `delete_log_entry`, `remove_watched`, `push_watchlist`, `remove_watchlist`, and internal `new_item_added` / `watchlist_update` / `metadata_update`
 - Claims interleave users round-robin; Trakt/SIMKL `push_watched`/`push_rating` are batched (one rate-limit token per batch)
 - `dedupe_key` is unique only among waiting jobs (`pending`, `failed_retryable`). A changed payload for a target already in flight becomes a successor that runs after it; a failed predecessor becomes `superseded`. Finished jobs never keep a key.
-- Retryable failures back off up to an hour and give up after `LIBRARYSYNC_OUTBOX_MAX_ATTEMPTS`; HTTP 429 honours `Retry-After` without using an attempt; a 401 from an OAuth provider expires the stored token and retries
+- Retryable failures back off up to an hour and give up after `LIBRARYSYNC_OUTBOX_MAX_ATTEMPTS`; HTTP 429 honours `Retry-After` (up to a day) without using an attempt; a 401 from an OAuth provider expires the stored token and retries
 - Jobs stuck `in_progress` longer than `LIBRARYSYNC_OUTBOX_STALE_MINUTES` are requeued
 - Deleting watches cancels their queued pushes (`cancel_queued_pushes`); pushes already claimed when their watch was deleted are skipped at delivery
 
@@ -141,7 +141,7 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - `WatchStateEntry` separates watched, playback, watchlist, drop and rating projections.
 - Database revision triggers invalidate complete snapshots for imports and direct SQL changes.
 - `watchlisted`, `dropped` and `rated` events on a placeholder title (still named after its meta id) enqueue an internal `metadata_update`, one per user and title, when the user has a metadata provider enabled. Watched marks enrich through `new_item_added`.
-- The job locks the title row (a title another worker holds is retried a minute later) and charges each request to the provider owner's TMDB, TVDB or AniList bucket at its worst-case cost. A placeholder lookup counts as refreshed only when the title resolves. A refused budget, an upstream 429 (with its `Retry-After`) and a held title requeue without an attempt, other provider errors retry with backoff, a 401/403 fails the job, a lookup that made no request records nothing, and one that finds nothing waits seven days (`raw.metadata_lookup_missed_at`).
+- The job locks the title row (a title another worker holds is retried a minute later) and charges each request to the provider owner's TMDB, TVDB or AniList bucket at its worst-case cost (TVDB counts logins, re-logins and fallbacks). A provider whose limit can't cover one call is skipped. A placeholder lookup counts as refreshed only when the title resolves. A refused budget, an upstream 429 (with its `Retry-After`) and a held title requeue without an attempt, other provider errors retry with backoff, a 401/403 fails the job, a lookup that made no request records nothing, and one that finds nothing waits seven days (`raw.metadata_lookup_missed_at`).
 
 #### Metadata Jobs
 - **`metadata_lookup`**: Resolves lookup requests into candidates (stale in-progress lookups are reclaimed after five minutes)
