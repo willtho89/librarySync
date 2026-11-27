@@ -20,6 +20,7 @@ from librarysync.core import (
     rate_limiter,
     watch_pipeline,
     watch_state_events,
+    watchlist,
 )
 from librarysync.core.http_client import retry_after_seconds
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
@@ -798,6 +799,46 @@ async def test_tmdb_only_placeholder_never_takes_an_unrelated_tvdb_result(contex
         db, "user-one", media, None, provider_overrides=overrides, use_overrides_only=True, outcome=outcome
     )
     assert (media.title, media.tvdb_id, outcome.requests) == (meta_id, None, 1)
+
+
+def tmdb_limited_to(monkeypatch, capacity):
+    limiter = rate_limiter.RateLimiter(
+        {"tmdb": rate_limiter.RateLimitConfig(capacity=capacity, refill_per_second=0.001)}
+    )
+    monkeypatch.setattr(metadata_enrichment, "RATE_LIMITER", limiter)
+    monkeypatch.setattr(watchlist, "RATE_LIMITER", limiter)
+
+
+SEASONS = (200, {"seasons": [{"season_number": 1}, {"season_number": 2}]})
+EPISODES = (200, {"episodes": [{"episode_number": 1, "id": 62085, "name": "Pilot"}]})
+
+
+@pytest.mark.asyncio
+async def test_episode_refresh_sends_nothing_under_a_one_token_limit(context, monkeypatch):
+    _, db, _ = context
+    show = MediaItem(media_type="tv", title="Breaking Bad", tmdb_id="1396")
+    db.add(show)
+    await db.commit()
+    tmdb_limited_to(monkeypatch, 1.0)
+    sent = scripted_http(monkeypatch, tmdb, [SEASONS] * 2)
+    assert not await watchlist.backfill_show_episodes(db, "user-one", show, provider_override=real_tmdb())
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_episode_refresh_charges_the_provider_owner_for_every_request(context, monkeypatch):
+    _, db, _ = context
+    show = MediaItem(media_type="tv", title="Breaking Bad", tmdb_id="1396")
+    # The provider belongs to user-one. Held, so SQLite does not hand the limiter a naive timestamp.
+    bucket = tmdb_bucket(4.0)
+    db.add_all([show, bucket])
+    await db.commit()
+    tmdb_limited_to(monkeypatch, 4.0)
+    sent = scripted_http(monkeypatch, tmdb, [SEASONS] * 2 + [EPISODES] * 2)
+    await watchlist.backfill_show_episodes(db, "user-two", show, provider_override=real_tmdb())
+    # Seasons and season 1 take the four tokens. Season 2 is refused before it sends anything.
+    assert len(sent) == 4
+    assert bucket.tokens < 1
 
 
 def test_long_retry_after_is_honoured_up_to_a_day():
