@@ -30,6 +30,10 @@ class RateLimiter:
     def from_settings(cls) -> RateLimiter:
         return cls(_build_rate_limit_configs())
 
+    def capacity(self, provider: str) -> float | None:
+        config = self._configs.get(provider)
+        return config.capacity if config else None
+
     async def try_acquire(
         self,
         db: AsyncSession,
@@ -38,13 +42,15 @@ class RateLimiter:
         now: datetime | None = None,
         cost: float = 1.0,
     ) -> RateLimitDecision | None:
-        """Take `cost` tokens, the number of requests the caller is about to make, or report when they refill."""
+        """Take `cost` tokens, the number of requests the caller is about to make, or report when they refill.
+
+        A cost above the capacity is never admitted. Check it against capacity() first.
+        """
         config = self._configs.get(provider)
         if not config:
             return None
         if now is None:
             now = datetime.now(timezone.utc)
-        cost = min(cost, config.capacity)
         begin_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         async with begin_ctx:
             result = await db.execute(

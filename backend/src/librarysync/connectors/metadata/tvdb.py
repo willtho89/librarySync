@@ -131,6 +131,14 @@ def _extract_tmdb_id(raw: dict[str, Any]) -> str | None:
     return None
 
 
+def _carries_id(candidate: MediaCandidate, external_id: str) -> bool:
+    wanted = external_id.strip().lower()
+    if wanted.startswith("tt"):
+        return (candidate.imdb_id or "").lower() == wanted
+    raw = candidate.raw if isinstance(candidate.raw, dict) else {}
+    return str(raw.get("tmdb_id") or "") == wanted
+
+
 class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
     provider = "tvdb"
     config_schema = TvdbConfig
@@ -171,7 +179,10 @@ class TvdbMetadataProvider(MetadataProvider[TvdbConfig, TvdbSecrets]):
         if scope == "anime":
             return []
         normalized_scope = scope if scope in {MEDIA_TYPE_MOVIE, MEDIA_TYPE_TV} else "all"
-        candidates = await self._search(external_id, None)
+        # The search is free text, so a result counts only if it carries the requested id.
+        candidates = [
+            candidate for candidate in await self._search(external_id, None) if _carries_id(candidate, external_id)
+        ]
         if normalized_scope == "all":
             return candidates
         return [candidate for candidate in candidates if candidate.media_type == normalized_scope]
