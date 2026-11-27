@@ -21,6 +21,7 @@ from librarysync.core import (
     watch_pipeline,
     watch_state_events,
 )
+from librarysync.core.http_client import retry_after_seconds
 from librarysync.core.metadata_enrichment import enrich_watched_metadata
 from librarysync.db.models import (
     Base,
@@ -803,6 +804,33 @@ def test_long_retry_after_is_honoured_up_to_a_day():
     assert process_outbox._throttle_delay(7200) == timedelta(hours=2)
     assert process_outbox._throttle_delay(None) == timedelta(seconds=60)
     assert process_outbox._throttle_delay(1e12) == timedelta(days=1)
+    for header in ("1e12", "Fri, 31 Dec 9999 23:59:59 GMT"):
+        response = status_error(429, {"Retry-After": header}).response
+        assert retry_after_seconds(response) == timedelta(days=1).total_seconds()
+
+
+@pytest.mark.asyncio
+async def test_provider_429_requeues_the_lookup_without_an_attempt(context, monkeypatch):
+    client, db, _ = context
+    await client.post(f"{BASE}/watch_state/push/movie/tt0111161.json", json=movie_event("watchlisted"))
+    job = await db.scalar(select(OutboxJob).where(OutboxJob.job_type == "metadata_update"))
+    # Held, so SQLite does not hand the limiter a timestamp without a time zone.
+    bucket = tmdb_bucket(150.0)
+    db.add(bucket)
+    await db.commit()
+    provider = tmdb_provider()
+    limited = status_error(429, {"Retry-After": "1e12"})
+    provider.get_details.side_effect = provider.find_by_external_id.side_effect = limited
+
+    async def load_provider(self, name):
+        return provider if name == "tmdb" else None
+
+    monkeypatch.setattr(metadata_enrichment.MetadataProviderService, "load_provider", load_provider)
+    await process_outbox._process_job(db, job)
+    assert provider.get_details.await_count + provider.find_by_external_id.await_count == 1
+    assert (job.status, job.attempts) == ("failed_retryable", 0)
+    run_after = job.run_after if job.run_after.tzinfo else job.run_after.replace(tzinfo=timezone.utc)
+    assert run_after > datetime.now(timezone.utc) + timedelta(hours=23)
 
 
 def status_error(status, headers=None):
