@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import EpisodeMetadataProvider
 from librarysync.core.catalog_ordering import build_show_progress_subquery
+from librarysync.core.metadata_enrichment import affordable, request_cost
 from librarysync.core.metadata_providers import MetadataProviderService
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.db.models import (
@@ -376,12 +377,11 @@ async def backfill_show_episodes(
         provider = await service.load_provider("tmdb")
         if not provider or not isinstance(provider, EpisodeMetadataProvider):
             return False
-    provider_name = provider.provider
 
     media_dirty = False
     if not media_item.tmdb_id:
         if media_item.imdb_id and provider.capabilities.supports_external_id:
-            if not await _acquire_rate_limit(db, user_id, provider_name):
+            if not await _acquire_rate_limit(db, provider, "find"):
                 return False
             try:
                 candidates = await provider.find_by_external_id(media_item.imdb_id.lower(), "tv")
@@ -411,7 +411,7 @@ async def backfill_show_episodes(
         if not media_item.tmdb_id:
             return False
 
-    if not await _acquire_rate_limit(db, user_id, provider_name):
+    if not await _acquire_rate_limit(db, provider, "seasons"):
         return False
     try:
         seasons = await provider.list_seasons(media_item.tmdb_id)
@@ -423,7 +423,7 @@ async def backfill_show_episodes(
 
     episodes_dirty = False
     for season in seasons:
-        if not await _acquire_rate_limit(db, user_id, provider_name):
+        if not await _acquire_rate_limit(db, provider, "episodes"):
             rate_limited = True
             break
         try:
@@ -454,18 +454,21 @@ async def backfill_show_episodes(
 
 async def _acquire_rate_limit(
     db: AsyncSession,
-    user_id: str | None,
-    provider: str,
+    provider: EpisodeMetadataProvider,
+    call: str,
 ) -> bool:
-    if not user_id:
-        return True
+    """Take every request the call can send from the bucket of the user whose credentials it uses."""
+    if not affordable(provider.provider, call):
+        return False
+    user_id = provider.context.user_id
     now = datetime.now(timezone.utc)
-    rate_decision = await RATE_LIMITER.try_acquire(db, user_id, provider, now=now)
+    cost = request_cost(provider.provider, call)
+    rate_decision = await RATE_LIMITER.try_acquire(db, user_id, provider.provider, now=now, cost=cost)
     if rate_decision and not rate_decision.allowed:
         retry_at = rate_decision.retry_at.isoformat() if rate_decision.retry_at else "unknown"
         logger.info(
             "%s metadata backfill rate-limited for user %s until %s",
-            provider,
+            provider.provider,
             user_id,
             retry_at,
         )

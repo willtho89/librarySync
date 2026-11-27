@@ -35,11 +35,14 @@ TITLE_LOOKUP_PREFIXES = ("AIOStreams ", "Stremio ", "Trakt ", "SIMKL ", "Letterb
 ENRICHMENT_PROVIDERS = ("tmdb", "tvdb", "imdb", *ANIME_PROVIDERS)
 LOOKUP_MISS_KEY = "metadata_lookup_missed_at"
 LOOKUP_MISS_COOLDOWN = timedelta(days=7)
-# The most requests one call can make. TMDB retries without a language. TVDB logs in, logs in again and repeats
-# a request after a 401, and falls back after a 404 or an empty search: two requests of up to 4 and 3.
+# The most requests one call can make. TMDB retries without a language, and fetches seasons and episodes both
+# localized and unlocalized. TVDB logs in, logs in again and repeats a request after a 401, and falls back after
+# a 404 or an empty search: two requests of up to 4 and 3.
 REQUEST_COSTS = {
     ("tmdb", "find"): 2,
     ("tmdb", "search"): 2,
+    ("tmdb", "seasons"): 2,
+    ("tmdb", "episodes"): 2,
     ("tvdb", "details"): 7,
     ("tvdb", "find"): 7,
     ("tvdb", "search"): 7,
@@ -48,6 +51,28 @@ REQUEST_COSTS = {
 NO_IMDB_LOOKUP = {"anilist", "myanimelist"}
 DEFAULT_RETRY_AFTER = 60.0
 _UNAFFORDABLE_LOGGED: set[tuple[str, str]] = set()
+
+
+def request_cost(provider: str, call: str) -> int:
+    return REQUEST_COSTS.get((provider, call), 1)
+
+
+def affordable(provider: str, call: str) -> bool:
+    """Whether the provider's rate limit can ever cover one call. Otherwise the provider sits it out."""
+    cost = request_cost(provider, call)
+    capacity = RATE_LIMITER.capacity(provider)
+    if capacity is None or cost <= capacity:
+        return True
+    if (provider, call) not in _UNAFFORDABLE_LOGGED:
+        _UNAFFORDABLE_LOGGED.add((provider, call))
+        logger.warning(
+            "Skipping %s %s calls: one can take %s requests, above the rate limit of %s",
+            provider,
+            call,
+            cost,
+            capacity,
+        )
+    return False
 
 
 @dataclass
@@ -64,20 +89,9 @@ class LookupOutcome:
         if self.retry_at is not None:
             return False
         if self.budgeted:
-            cost = REQUEST_COSTS.get((provider.provider, call), 1)
-            capacity = RATE_LIMITER.capacity(provider.provider)
-            if capacity is not None and cost > capacity:
-                # The configured limit can never cover this call, so the provider sits it out instead of overrunning.
-                if (provider.provider, call) not in _UNAFFORDABLE_LOGGED:
-                    _UNAFFORDABLE_LOGGED.add((provider.provider, call))
-                    logger.warning(
-                        "Skipping %s %s lookups: one can take %s requests, above the rate limit of %s",
-                        provider.provider,
-                        call,
-                        cost,
-                        capacity,
-                    )
+            if not affordable(provider.provider, call):
                 return False
+            cost = request_cost(provider.provider, call)
             decision = await RATE_LIMITER.try_acquire(db, provider.context.user_id, provider.provider, cost=cost)
             if decision and not decision.allowed:
                 self.retry_at = decision.retry_at or datetime.now(timezone.utc)
