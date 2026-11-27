@@ -6,7 +6,6 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -55,6 +54,7 @@ from librarysync.connectors.services.trakt import (
     TraktError,
     has_required_trakt_fields,
 )
+from librarysync.core.http_client import retry_after_seconds
 from librarysync.core.import_control import load_blocked_outbox_users
 from librarysync.core.integration_tokens import (
     ensure_letterboxd_access_token,
@@ -3366,20 +3366,7 @@ def _retry_after_seconds(exc: BaseException) -> float | None:
     cause = exc.__cause__
     if not isinstance(cause, httpx.HTTPStatusError):
         return None
-    value = cause.response.headers.get("Retry-After")
-    if not value:
-        return None
-    try:
-        return max(float(value), 0.0)
-    except ValueError:
-        pass
-    try:
-        retry_at = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        return None
-    if retry_at.tzinfo is None:
-        retry_at = retry_at.replace(tzinfo=timezone.utc)
-    return max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0.0)
+    return retry_after_seconds(cause.response)
 
 
 def _throttle_delay(retry_after: float | None) -> timedelta:

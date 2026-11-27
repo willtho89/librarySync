@@ -36,12 +36,15 @@ class RateLimiter:
         user_id: str,
         provider: str,
         now: datetime | None = None,
+        cost: float = 1.0,
     ) -> RateLimitDecision | None:
+        """Take `cost` tokens, the number of requests the caller is about to make, or report when they refill."""
         config = self._configs.get(provider)
         if not config:
             return None
         if now is None:
             now = datetime.now(timezone.utc)
+        cost = min(cost, config.capacity)
         begin_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         async with begin_ctx:
             result = await db.execute(
@@ -57,7 +60,7 @@ class RateLimiter:
                 bucket = RateLimitBucket(
                     user_id=user_id,
                     provider=provider,
-                    tokens=config.capacity - 1.0,
+                    tokens=config.capacity - cost,
                     last_refill_at=now,
                 )
                 db.add(bucket)
@@ -65,13 +68,13 @@ class RateLimiter:
             last_refill = bucket.last_refill_at or bucket.updated_at or now
             elapsed = max((now - last_refill).total_seconds(), 0.0)
             tokens = min(config.capacity, bucket.tokens + elapsed * config.refill_per_second)
-            if tokens < 1.0:
-                retry_seconds = max((1.0 - tokens) / config.refill_per_second, 1.0)
+            if tokens < cost:
+                retry_seconds = max((cost - tokens) / config.refill_per_second, 1.0)
                 bucket.tokens = tokens
                 bucket.last_refill_at = now
                 bucket.updated_at = now
                 return RateLimitDecision(False, now + timedelta(seconds=retry_seconds))
-            bucket.tokens = tokens - 1.0
+            bucket.tokens = tokens - cost
             bucket.last_refill_at = now
             bucket.updated_at = now
             return RateLimitDecision(True, None)

@@ -10,6 +10,7 @@ from librarysync.core.metadata_enrichment import (
     LookupOutcome,
     enrich_watched_metadata,
     is_watch_state_placeholder,
+    missed_recently,
     no_recent_lookup_miss_clause,
     settle_placeholder_lookup,
     watch_state_placeholder_clause,
@@ -31,7 +32,6 @@ from librarysync.db.models import (
     OutboxJob,
     ScheduledJob,
     WatchedItem,
-    WatchlistItem,
 )
 from librarysync.db.session import SessionLocal, init_session_factory
 from librarysync.jobs.simkl_calendar import process_simkl_calendar_once
@@ -143,16 +143,12 @@ async def _backfill_media_items(
     episode_ids = select(EpisodeItem.show_media_item_id.label("media_item_id")).join(
         WatchedItem, WatchedItem.episode_item_id == EpisodeItem.id
     )
-    watchlist_ids = (
-        select(WatchlistItem.media_item_id.label("media_item_id"))
-        .join(MediaItem, MediaItem.id == WatchlistItem.media_item_id)
-        .where(
-            watch_state_placeholder_clause(),
-            no_recent_lookup_miss_clause(now),
-            WatchlistItem.status != "removed",
-        )
+    # Placeholders that are only watchlisted, dropped, rated or in playback have no watch to find them by.
+    placeholder_ids = select(MediaItem.id.label("media_item_id")).where(
+        watch_state_placeholder_clause(),
+        no_recent_lookup_miss_clause(now),
     )
-    union_ids = union_all(direct_ids, episode_ids, watchlist_ids).subquery()
+    union_ids = union_all(direct_ids, episode_ids, placeholder_ids).subquery()
 
     missing_predicate = _missing_metadata_predicate(tmdb_required)
     episode_predicate = _episode_refresh_predicate(tmdb_required, episode_refresh_cutoff)
@@ -181,21 +177,24 @@ async def _backfill_media_items(
             break
         last_id = media_ids[-1]
 
-        items_result = await db.execute(
-            select(MediaItem).where(
-                MediaItem.id.in_(media_ids),
-                MediaItem.media_type.in_(["movie", "tv", "anime"]),
-            )
-        )
-        media_items = items_result.scalars().all()
-        queued = await _queued_lookups(db, media_ids)
-
         throttled = False
-        for media_item in media_items:
+        for media_id in media_ids:
+            # One title per transaction, so its row lock and the rate limit buckets are held only for its lookup.
+            media_item = await db.get(
+                MediaItem,
+                media_id,
+                with_for_update={"skip_locked": True},
+                populate_existing=True,
+            )
+            if media_item is None:
+                # Gone, or another worker holds it. A later run takes it up.
+                continue
+            placeholder = is_watch_state_placeholder(media_item)
             if (
                 provider_overrides
-                and media_item.id not in queued
+                and not (placeholder and missed_recently(media_item, now))
                 and _should_refresh_media_metadata(media_item, tmdb_required)
+                and not await _lookup_queued(db, media_item.id)
             ):
                 if force_metadata_refresh or _should_sample_media_item(
                     media_item,
@@ -203,8 +202,7 @@ async def _backfill_media_items(
                     metadata_refresh_delta,
                     METADATA_BACKFILL_SAMPLE_RATE,
                 ):
-                    placeholder = is_watch_state_placeholder(media_item)
-                    outcome = LookupOutcome(budget_user_id=user_id)
+                    outcome = LookupOutcome(budgeted=True)
                     await enrich_watched_metadata(
                         db,
                         user_id,
@@ -220,40 +218,44 @@ async def _backfill_media_items(
                         media_item.metadata_refreshed_at = now
                     if outcome.retry_at is not None:
                         throttled = True
-                        break
-            if _should_refresh_episode_list(
-                media_item,
-                episode_refresh_cutoff,
-                tmdb_required=tmdb_required,
-                force_episode_refresh=force_episode_refresh,
+            if (
+                not throttled
+                and tmdb_override is not None
+                and _should_refresh_episode_list(
+                    media_item,
+                    episode_refresh_cutoff,
+                    tmdb_required=tmdb_required,
+                    force_episode_refresh=force_episode_refresh,
+                )
             ):
-                if tmdb_override is None:
-                    continue
                 await backfill_show_episodes(
                     db,
                     user_id,
                     media_item,
                     provider_override=tmdb_override,
                 )
+            await db.commit()
+            if throttled:
+                break
 
-        await db.commit()
         await extend_scheduled_job(db, job, METADATA_BACKFILL_LEASE)
         if throttled:
             logger.info("Metadata backfill stopped at the provider rate limit. The next run continues from the start")
             break
 
 
-async def _queued_lookups(db: AsyncSession, media_ids: list[str]) -> set[str]:
-    """Media items with a metadata_update job waiting or running, which the backfill leaves to that job."""
-    media_item_id = OutboxJob.payload["media_item_id"].as_string()
-    result = await db.scalars(
-        select(media_item_id).where(
+async def _lookup_queued(db: AsyncSession, media_item_id: str) -> bool:
+    """Whether a metadata_update job is waiting for or running on the title, which the backfill leaves to it."""
+    job_id = await db.scalar(
+        select(OutboxJob.id)
+        .where(
             OutboxJob.job_type == "metadata_update",
             OutboxJob.status.in_(ACTIVE_OUTBOX_STATUSES),
-            media_item_id.in_(media_ids),
+            OutboxJob.payload["media_item_id"].as_string() == media_item_id,
         )
+        .limit(1)
     )
-    return set(result.all())
+    return job_id is not None
 
 
 async def _is_tmdb_required(db: AsyncSession) -> bool:

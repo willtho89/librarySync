@@ -4,7 +4,7 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar
 
 from sqlalchemy import func, select
@@ -21,6 +21,7 @@ from librarysync.core.anime import is_anime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_enrichment import (
     LookupOutcome,
+    MetadataLookupDenied,
     MetadataLookupFailed,
     MetadataLookupThrottled,
     enrich_watched_metadata,
@@ -54,6 +55,7 @@ SUCCESS_STATUSES = {
     "synced_from_publicmetadb",
 }
 ACTIVE_OUTBOX_STATUSES = {"pending", "failed_retryable", "in_progress"}
+LOCKED_TITLE_RETRY = timedelta(seconds=60)
 
 
 def is_synced_status(status: str | None) -> bool:
@@ -110,8 +112,7 @@ def _build_outbox_dedupe_key(
     if job_type == "metadata_update":
         media_item_id = payload.get("media_item_id")
         if media_item_id:
-            # Titles are shared, so one waiting lookup serves every user who asked.
-            return f"{provider}:{job_type}:{media_item_id}"
+            return f"{user_id}:{provider}:{job_type}:{media_item_id}"
     return None
 
 
@@ -404,12 +405,30 @@ async def enqueue_metadata_update_job(
     user_id: str,
     media_item_id: str,
 ) -> OutboxJob:
+    payload: dict[str, object] = {"media_item_id": media_item_id}
+    dedupe_key = _build_outbox_dedupe_key(user_id, "internal", "metadata_update", payload)
+    # The session does not autoflush, so a job added earlier in this transaction is only in db.new.
+    unflushed = next(
+        (job for job in db.new if isinstance(job, OutboxJob) and job.dedupe_key == dedupe_key),
+        None,
+    )
+    if unflushed:
+        return unflushed
+    existing = await db.scalar(
+        select(OutboxJob).where(
+            OutboxJob.dedupe_key == dedupe_key,
+            OutboxJob.status.in_(ACTIVE_OUTBOX_STATUSES),
+        )
+    )
+    if existing:
+        # Requeueing would reset the backoff of a throttled or failing lookup.
+        return existing
     return await enqueue_outbox_job(
         db,
         user_id=user_id,
         target_provider="internal",
         job_type="metadata_update",
-        payload={"media_item_id": media_item_id},
+        payload=payload,
         status="pending",
     )
 
@@ -472,17 +491,29 @@ async def process_metadata_update_job(db: AsyncSession, job: OutboxJob) -> None:
     media_item_id = payload.get("media_item_id")
     if not media_item_id:
         raise ValueError("metadata_update requires media_item_id")
-    # The row lock keeps two lookups off one title. Locked, merged away or already resolved: nothing to do.
-    media_item = await db.get(MediaItem, str(media_item_id), with_for_update={"skip_locked": True})
-    if not media_item or not needs_placeholder_lookup(media_item):
+    # The row lock keeps two lookups off one title, and populate_existing rereads a row the session already holds.
+    media_item = await db.get(
+        MediaItem,
+        str(media_item_id),
+        with_for_update={"skip_locked": True},
+        populate_existing=True,
+    )
+    if media_item is None:
+        if await db.scalar(select(MediaItem.id).where(MediaItem.id == str(media_item_id))):
+            # Another worker holds the title. Try again once it is done.
+            raise MetadataLookupThrottled(datetime.now(timezone.utc) + LOCKED_TITLE_RETRY)
         return
-    outcome = LookupOutcome(budget_user_id=job.user_id)
+    if not needs_placeholder_lookup(media_item):
+        return
+    outcome = LookupOutcome(budgeted=True)
     await enrich_watched_metadata(db, job.user_id, media_item, None, outcome=outcome)
     result = settle_placeholder_lookup(media_item, outcome, datetime.now(timezone.utc))
     if result == "throttled" and outcome.retry_at is not None:
         raise MetadataLookupThrottled(outcome.retry_at)
     if result == "failed":
         raise MetadataLookupFailed("; ".join(outcome.failed))
+    if result == "denied":
+        raise MetadataLookupDenied("; ".join(outcome.denied))
 
 
 async def _sync_to_integrations(

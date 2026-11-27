@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
+import httpx
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from librarysync.connectors.metadata.base import (
     MetadataProvider,
 )
 from librarysync.core.anime import is_anime
+from librarysync.core.http_client import retry_after_seconds
 from librarysync.core.metadata_providers import MetadataProviderService
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.db.models import EpisodeItem, MediaItem
@@ -30,39 +32,66 @@ PREFERRED_POSTER_HOSTS = (
 ANIME_PROVIDERS = ("myanimelist", "kitsu", "anilist")
 POSTER_PROVIDER_ORDER = ("tvdb", "tmdb", "imdb")
 TITLE_LOOKUP_PREFIXES = ("AIOStreams ", "Stremio ", "Trakt ", "SIMKL ", "Letterboxd ")
+ENRICHMENT_PROVIDERS = ("tmdb", "tvdb", "imdb", *ANIME_PROVIDERS)
 LOOKUP_MISS_KEY = "metadata_lookup_missed_at"
 LOOKUP_MISS_COOLDOWN = timedelta(days=7)
+# The most requests one call can make: TMDB retries without a language, TVDB also logs in and falls back on a 404.
+REQUEST_COSTS = {
+    ("tmdb", "find"): 2,
+    ("tmdb", "search"): 2,
+    ("tvdb", "details"): 3,
+    ("tvdb", "find"): 3,
+    ("tvdb", "search"): 3,
+}
+# These resolve only their own ids, so an IMDb id lookup would return nothing without asking.
+NO_IMDB_LOOKUP = {"anilist", "myanimelist"}
+DEFAULT_RETRY_AFTER = 60.0
 
 
 @dataclass
 class LookupOutcome:
-    """What one enrichment run asked and heard. With a budget user, each request takes a rate-limit token."""
+    """What one enrichment run asked and heard. When budgeted, each call takes its provider owner's tokens."""
 
-    budget_user_id: str | None = None
-    providers: int = 0
+    budgeted: bool = False
+    requests: int = 0
     failed: list[str] = field(default_factory=list)
+    denied: list[str] = field(default_factory=list)
     retry_at: datetime | None = None
 
-    async def allow(self, db: AsyncSession, provider: MetadataProvider) -> bool:
+    async def allow(self, db: AsyncSession, provider: MetadataProvider, call: str) -> bool:
         if self.retry_at is not None:
             return False
-        if self.budget_user_id is None:
-            return True
-        decision = await RATE_LIMITER.try_acquire(db, self.budget_user_id, provider.provider)
-        if decision and not decision.allowed:
-            self.retry_at = decision.retry_at or datetime.now(timezone.utc)
-            return False
+        if self.budgeted:
+            decision = await RATE_LIMITER.try_acquire(
+                db,
+                provider.context.user_id,
+                provider.provider,
+                cost=REQUEST_COSTS.get((provider.provider, call), 1),
+            )
+            if decision and not decision.allowed:
+                self.retry_at = decision.retry_at or datetime.now(timezone.utc)
+                return False
+        self.requests += 1
         return True
 
     def fail(self, provider: MetadataProvider, exc: Exception) -> None:
-        self.failed.append(f"{provider.provider}: {exc}")
+        response = exc.response if isinstance(exc, httpx.HTTPStatusError) else None
+        status = response.status_code if response is not None else None
+        if status == 429:
+            wait = retry_after_seconds(response) or DEFAULT_RETRY_AFTER
+            self.retry_at = datetime.now(timezone.utc) + timedelta(seconds=wait)
+        elif status in {401, 403}:
+            self.denied.append(f"{provider.provider}: {exc}")
+        elif status not in {400, 404, 422}:
+            # These are the provider's answer that the id names no title, so asking again cannot help.
+            self.failed.append(f"{provider.provider}: {exc}")
 
 
 class MetadataLookupThrottled(Exception):
-    """A provider budget refused a request. The outbox retries it like a 429, without using an attempt."""
+    """A rate limit or a busy title held the lookup back. The outbox retries it like a 429, without an attempt."""
 
     def __init__(self, retry_at: datetime) -> None:
-        super().__init__(f"Metadata lookup rate-limited until {retry_at.isoformat()}")
+        super().__init__(f"Metadata lookup deferred until {retry_at.isoformat()}")
         self.retry_after = max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0.0)
 
 
@@ -70,8 +99,12 @@ class MetadataLookupFailed(Exception):
     """A provider request failed, so the lookup is retried with the outbox backoff."""
 
 
-async def _allowed(db: AsyncSession, provider: MetadataProvider, outcome: LookupOutcome | None) -> bool:
-    return outcome is None or await outcome.allow(db, provider)
+class MetadataLookupDenied(ValueError):
+    """A provider rejected its credentials. Retrying cannot help, so the outbox fails the job."""
+
+
+async def _allowed(db: AsyncSession, provider: MetadataProvider, outcome: LookupOutcome | None, call: str) -> bool:
+    return outcome is None or await outcome.allow(db, provider, call)
 
 
 async def enrich_watched_metadata(
@@ -118,8 +151,6 @@ async def enrich_watched_metadata(
             imdb = await service.load_provider("imdb")
     if not tmdb and not tvdb and not imdb:
         return
-    if outcome is not None:
-        outcome.providers += sum(1 for provider in (tmdb, tvdb, imdb) if provider)
 
     candidate_map: dict[str, MediaCandidate] = {}
     if _should_lookup_by_title(media_item):
@@ -231,7 +262,7 @@ async def _lookup_by_title(
         if not provider.supports_scope(scope):
             continue
         for query in queries:
-            if not await _allowed(db, provider, outcome):
+            if not await _allowed(db, provider, outcome, "search"):
                 return None
             try:
                 candidates = await provider.search(query, scope)
@@ -324,8 +355,6 @@ async def _enrich_anime_metadata(
                 providers.append(provider)
     if not providers:
         return
-    if outcome is not None:
-        outcome.providers += len(providers)
     for provider in providers:
         known_id = _anime_id(media_item, provider.provider)
         if known_id and not placeholder:
@@ -357,7 +386,7 @@ async def _fetch_anime_details(
     provider_id: str,
     outcome: LookupOutcome | None,
 ) -> MediaCandidate | None:
-    if not await _allowed(db, provider, outcome):
+    if not await _allowed(db, provider, outcome, "details"):
         return None
     try:
         return await provider.get_details(provider_id, "anime")
@@ -375,7 +404,7 @@ async def _find_anime_candidate(
     outcome: LookupOutcome | None = None,
 ) -> MediaCandidate | None:
     scope = "anime"
-    if provider.provider == "anilist" and media_item.myanimelist_id and await _allowed(db, provider, outcome):
+    if provider.provider == "anilist" and media_item.myanimelist_id and await _allowed(db, provider, outcome, "find"):
         try:
             candidates = await provider.find_by_external_id(f"mal:{media_item.myanimelist_id}", scope)
         except Exception as exc:
@@ -390,7 +419,12 @@ async def _find_anime_candidate(
         else:
             if candidates:
                 return candidates[0]
-    if provider.capabilities.supports_external_id and media_item.imdb_id and await _allowed(db, provider, outcome):
+    if (
+        provider.capabilities.supports_external_id
+        and provider.provider not in NO_IMDB_LOOKUP
+        and media_item.imdb_id
+        and await _allowed(db, provider, outcome, "find")
+    ):
         imdb_id = media_item.imdb_id.lower()
         try:
             candidates = await provider.find_by_external_id(imdb_id, scope)
@@ -403,7 +437,7 @@ async def _find_anime_candidate(
             if selected:
                 return selected
     # A placeholder is named after its meta id, which no title search can match.
-    if is_watch_state_placeholder(media_item) or not await _allowed(db, provider, outcome):
+    if is_watch_state_placeholder(media_item) or not await _allowed(db, provider, outcome, "search"):
         return None
     try:
         candidates = await provider.search(media_item.title, scope)
@@ -535,7 +569,7 @@ async def _fetch_provider_candidate(
         return None
     provider_id = getattr(media_item, provider_id_field)
     if provider_id:
-        if not await _allowed(db, provider, outcome):
+        if not await _allowed(db, provider, outcome, "details"):
             return None
         try:
             return await provider.get_details(provider_id, scope)
@@ -546,7 +580,7 @@ async def _fetch_provider_candidate(
             return None
     external_ids = _external_ids_for_provider(provider, media_item)
     for external_id in external_ids:
-        if not await _allowed(db, provider, outcome):
+        if not await _allowed(db, provider, outcome, "find"):
             return None
         try:
             candidates = await provider.find_by_external_id(external_id, scope)
@@ -598,16 +632,18 @@ def watch_state_placeholder_clause():
 
 def needs_placeholder_lookup(media_item: MediaItem, now: datetime | None = None) -> bool:
     """A placeholder with no confirmed miss in the last LOOKUP_MISS_COOLDOWN."""
-    if not is_watch_state_placeholder(media_item):
-        return False
-    missed_at = media_item.raw.get(LOOKUP_MISS_KEY)
-    if not missed_at:
-        return True
+    return is_watch_state_placeholder(media_item) and not missed_recently(media_item, now or datetime.now(timezone.utc))
+
+
+def missed_recently(media_item: MediaItem, now: datetime) -> bool:
+    raw = media_item.raw if isinstance(media_item.raw, dict) else {}
     try:
-        missed = datetime.fromisoformat(missed_at)
-    except (TypeError, ValueError):
-        return True
-    return (now or datetime.now(timezone.utc)) - missed >= LOOKUP_MISS_COOLDOWN
+        missed = datetime.fromisoformat(raw[LOOKUP_MISS_KEY])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if missed.tzinfo is None:
+        missed = missed.replace(tzinfo=timezone.utc)
+    return now - missed < LOOKUP_MISS_COOLDOWN
 
 
 def no_recent_lookup_miss_clause(now: datetime):
@@ -624,10 +660,14 @@ def settle_placeholder_lookup(media_item: MediaItem, outcome: LookupOutcome, now
         return "throttled"
     if outcome.failed:
         return "failed"
-    if not outcome.providers:
-        return "unconfigured"
+    if outcome.denied:
+        return "denied"
+    if not outcome.requests:
+        # Nothing was asked, so nothing is known about the title.
+        return "not_attempted"
     # Providers answered without a match: wait LOOKUP_MISS_COOLDOWN before asking again.
-    media_item.raw = {**media_item.raw, LOOKUP_MISS_KEY: now.isoformat()}
+    if not missed_recently(media_item, now):
+        media_item.raw = {**media_item.raw, LOOKUP_MISS_KEY: now.isoformat()}
     return "missed"
 
 

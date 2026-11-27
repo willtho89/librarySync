@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 from librarysync.connectors.metadata.base import (
     MEDIA_SCOPE_ALL,
     MediaCandidate,
@@ -271,7 +273,12 @@ class AniListMetadataProvider(MetadataProvider[AniListConfig, None]):
                 body = response.text.strip()
                 if len(body) > 300:
                     body = f"{body[:300]}..."
-                raise ValueError(f"AniList API error: {response.status_code}" + (f" (body={body})" if body else ""))
+                # An HTTP error, so callers can read the status and Retry-After of a 429.
+                raise httpx.HTTPStatusError(
+                    f"AniList API error: {response.status_code}" + (f" (body={body})" if body else ""),
+                    request=response.request,
+                    response=response,
+                )
             result = response.json()
 
             if "errors" in result:

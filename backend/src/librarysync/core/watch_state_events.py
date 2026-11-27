@@ -10,7 +10,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from librarysync.core.metadata_enrichment import needs_placeholder_lookup
+from librarysync.core.metadata_enrichment import ENRICHMENT_PROVIDERS, needs_placeholder_lookup
+from librarysync.core.metadata_providers import has_metadata_provider
 from librarysync.core.watch_pipeline import (
     SYNC_COORDINATOR,
     enqueue_metadata_update_job,
@@ -253,7 +254,12 @@ async def apply_event(db: AsyncSession, user_id: str, media_type: str, body: dic
     entry = await _write_entry(db, user_id, category, media, episode, body)
     if entry is None:
         return "superseded"
-    if media and category in {"watchlist", "drop", "rating"} and needs_placeholder_lookup(media):
+    if (
+        media
+        and name in {"watchlisted", "dropped", "rated"}
+        and needs_placeholder_lookup(media)
+        and await has_metadata_provider(db, user_id, ENRICHMENT_PROVIDERS)
+    ):
         # Watched marks enrich via new_item_added. Titles only watchlisted, dropped or rated get a lookup here.
         await enqueue_metadata_update_job(db, user_id, media.id)
     if category == "watched":

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from librarysync.api.deps import get_admin_api_key, get_db
 from librarysync.connectors.metadata.base import MediaCandidate, MetadataProvider
 from librarysync.core.anime import is_anime
-from librarysync.core.metadata_enrichment import apply_refresh_candidate
+from librarysync.core.metadata_enrichment import LOOKUP_MISS_KEY, apply_refresh_candidate
 from librarysync.core.metadata_providers import load_random_provider
 from librarysync.core.watch_pipeline import (
     ACTIVE_OUTBOX_STATUSES,
@@ -188,9 +188,11 @@ def _merge_media_item_fields(target: MediaItem, source: MediaItem) -> None:
         target.title = source.title
     if isinstance(target.raw, dict) and isinstance(source.raw, dict):
         for key, value in source.raw.items():
-            target.raw.setdefault(key, value)
+            # A lookup miss was recorded for the source's ids, which the merged item may not share.
+            if key != LOOKUP_MISS_KEY:
+                target.raw.setdefault(key, value)
     elif target.raw is None and isinstance(source.raw, dict):
-        target.raw = dict(source.raw)
+        target.raw = {key: value for key, value in source.raw.items() if key != LOOKUP_MISS_KEY}
 
 
 def _merge_episode_item_fields(target: EpisodeItem, source: EpisodeItem) -> None:

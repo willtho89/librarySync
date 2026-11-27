@@ -480,3 +480,19 @@ async def load_random_provider(
         )
     except ValueError:
         return None
+
+
+async def has_metadata_provider(db: AsyncSession, user_id: str, providers: Iterable[str]) -> bool:
+    """Whether the user has one of these providers enabled, with credentials where it needs them."""
+    result = await db.execute(
+        select(Integration, IntegrationSecret.integration_id)
+        .outerjoin(IntegrationSecret, IntegrationSecret.integration_id == Integration.id)
+        .where(Integration.user_id == user_id, Integration.provider.in_(tuple(providers)))
+    )
+    for integration, secret_id in result.all():
+        definition = METADATA_PROVIDER_REGISTRY.get(integration.provider)
+        if not definition or not _metadata_enabled_for_provider(integration.provider, integration.config or {}):
+            continue
+        if secret_id or not definition.uses_secrets():
+            return True
+    return False
