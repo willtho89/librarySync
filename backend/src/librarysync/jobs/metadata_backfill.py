@@ -6,7 +6,14 @@ from sqlalchemy import and_, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from librarysync.connectors.metadata.base import MetadataProvider
-from librarysync.core.metadata_enrichment import enrich_watched_metadata, watch_state_placeholder_clause
+from librarysync.core.metadata_enrichment import (
+    LookupOutcome,
+    enrich_watched_metadata,
+    is_watch_state_placeholder,
+    no_recent_lookup_miss_clause,
+    settle_placeholder_lookup,
+    watch_state_placeholder_clause,
+)
 from librarysync.core.metadata_providers import load_random_provider
 from librarysync.core.scheduler import (
     claim_scheduled_job,
@@ -14,12 +21,14 @@ from librarysync.core.scheduler import (
     extend_scheduled_job,
     fail_scheduled_job,
 )
+from librarysync.core.watch_pipeline import ACTIVE_OUTBOX_STATUSES
 from librarysync.core.watchlist import backfill_show_episodes
 from librarysync.db.models import (
     EpisodeItem,
     Integration,
     IntegrationSecret,
     MediaItem,
+    OutboxJob,
     ScheduledJob,
     WatchedItem,
     WatchlistItem,
@@ -137,7 +146,11 @@ async def _backfill_media_items(
     watchlist_ids = (
         select(WatchlistItem.media_item_id.label("media_item_id"))
         .join(MediaItem, MediaItem.id == WatchlistItem.media_item_id)
-        .where(watch_state_placeholder_clause(), WatchlistItem.status != "removed")
+        .where(
+            watch_state_placeholder_clause(),
+            no_recent_lookup_miss_clause(now),
+            WatchlistItem.status != "removed",
+        )
     )
     union_ids = union_all(direct_ids, episode_ids, watchlist_ids).subquery()
 
@@ -148,23 +161,25 @@ async def _backfill_media_items(
     )
 
     tmdb_override = provider_overrides.get("tmdb")
-    offset = 0
+    # Keyset pagination: rows fixed in one batch leave the candidate set, which would shift an OFFSET.
+    last_id = ""
     while True:
         result = await db.execute(
             select(MediaItem.id)
             .join(union_ids, union_ids.c.media_item_id == MediaItem.id)
             .where(
+                MediaItem.id > last_id,
                 MediaItem.media_type.in_(["movie", "tv", "anime"]),
                 candidate_predicate,
             )
             .distinct()
             .order_by(MediaItem.id)
-            .offset(offset)
             .limit(batch_size)
         )
         media_ids = [row[0] for row in result.all() if row[0]]
         if not media_ids:
             break
+        last_id = media_ids[-1]
 
         items_result = await db.execute(
             select(MediaItem).where(
@@ -173,15 +188,23 @@ async def _backfill_media_items(
             )
         )
         media_items = items_result.scalars().all()
+        queued = await _queued_lookups(db, media_ids)
 
+        throttled = False
         for media_item in media_items:
-            if provider_overrides and _should_refresh_media_metadata(media_item, tmdb_required):
+            if (
+                provider_overrides
+                and media_item.id not in queued
+                and _should_refresh_media_metadata(media_item, tmdb_required)
+            ):
                 if force_metadata_refresh or _should_sample_media_item(
                     media_item,
                     now,
                     metadata_refresh_delta,
                     METADATA_BACKFILL_SAMPLE_RATE,
                 ):
+                    placeholder = is_watch_state_placeholder(media_item)
+                    outcome = LookupOutcome(budget_user_id=user_id)
                     await enrich_watched_metadata(
                         db,
                         user_id,
@@ -189,8 +212,15 @@ async def _backfill_media_items(
                         None,
                         provider_overrides=provider_overrides,
                         use_overrides_only=use_overrides_only,
+                        outcome=outcome,
                     )
-                    media_item.metadata_refreshed_at = now
+                    if placeholder:
+                        settle_placeholder_lookup(media_item, outcome, now)
+                    elif outcome.retry_at is None:
+                        media_item.metadata_refreshed_at = now
+                    if outcome.retry_at is not None:
+                        throttled = True
+                        break
             if _should_refresh_episode_list(
                 media_item,
                 episode_refresh_cutoff,
@@ -208,7 +238,22 @@ async def _backfill_media_items(
 
         await db.commit()
         await extend_scheduled_job(db, job, METADATA_BACKFILL_LEASE)
-        offset += batch_size
+        if throttled:
+            logger.info("Metadata backfill stopped at the provider rate limit. The next run continues from the start")
+            break
+
+
+async def _queued_lookups(db: AsyncSession, media_ids: list[str]) -> set[str]:
+    """Media items with a metadata_update job waiting or running, which the backfill leaves to that job."""
+    media_item_id = OutboxJob.payload["media_item_id"].as_string()
+    result = await db.scalars(
+        select(media_item_id).where(
+            OutboxJob.job_type == "metadata_update",
+            OutboxJob.status.in_(ACTIVE_OUTBOX_STATUSES),
+            media_item_id.in_(media_ids),
+        )
+    )
+    return set(result.all())
 
 
 async def _is_tmdb_required(db: AsyncSession) -> bool:

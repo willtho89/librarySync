@@ -63,6 +63,7 @@ from librarysync.core.integration_tokens import (
     expire_access_token,
 )
 from librarysync.core.integrations import load_integration_with_secrets
+from librarysync.core.metadata_enrichment import MetadataLookupThrottled
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.core.ratings import coerce_star_rating
@@ -3343,6 +3344,8 @@ def _provider_error_formatters() -> tuple[tuple[type[Exception], Any], ...]:
 
 
 def _describe_failure(exc: Exception) -> DeliveryFailure:
+    if isinstance(exc, MetadataLookupThrottled):
+        return DeliveryFailure("failed_retryable", str(exc), 429, exc.retry_after)
     for error_type, formatter in _provider_error_formatters():
         if isinstance(exc, error_type):
             status_code = getattr(exc, "status_code", None)

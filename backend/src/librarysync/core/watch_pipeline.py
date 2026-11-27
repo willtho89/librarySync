@@ -20,9 +20,13 @@ from librarysync.connectors.services.trakt import has_required_trakt_fields
 from librarysync.core.anime import is_anime
 from librarysync.core.integrations import load_integration_with_secrets
 from librarysync.core.metadata_enrichment import (
+    LookupOutcome,
+    MetadataLookupFailed,
+    MetadataLookupThrottled,
     enrich_watched_metadata,
-    is_watch_state_placeholder,
+    needs_placeholder_lookup,
     refresh_episode_metadata,
+    settle_placeholder_lookup,
 )
 from librarysync.core.publicmetadb import is_publicmetadb_sync_enabled
 from librarysync.core.watchlist import (
@@ -99,10 +103,15 @@ def _build_outbox_dedupe_key(
     watchlist_item_id = payload.get("watchlist_item_id")
     if watchlist_item_id:
         return f"{user_id}:{provider}:{job_type}:{watchlist_item_id}"
-    if job_type in {"watchlist_update", "metadata_update"}:
+    if job_type == "watchlist_update":
         media_item_id = payload.get("media_item_id")
         if media_item_id:
             return f"{user_id}:{provider}:{job_type}:{media_item_id}"
+    if job_type == "metadata_update":
+        media_item_id = payload.get("media_item_id")
+        if media_item_id:
+            # Titles are shared, so one waiting lookup serves every user who asked.
+            return f"{provider}:{job_type}:{media_item_id}"
     return None
 
 
@@ -463,12 +472,17 @@ async def process_metadata_update_job(db: AsyncSession, job: OutboxJob) -> None:
     media_item_id = payload.get("media_item_id")
     if not media_item_id:
         raise ValueError("metadata_update requires media_item_id")
-    media_item = await db.get(MediaItem, str(media_item_id))
-    # Merged away, or already enriched by new_item_added or another viewer's job.
-    if not media_item or media_item.metadata_refreshed_at or not is_watch_state_placeholder(media_item):
+    # The row lock keeps two lookups off one title. Locked, merged away or already resolved: nothing to do.
+    media_item = await db.get(MediaItem, str(media_item_id), with_for_update={"skip_locked": True})
+    if not media_item or not needs_placeholder_lookup(media_item):
         return
-    await enrich_watched_metadata(db, job.user_id, media_item, None)
-    media_item.metadata_refreshed_at = datetime.now(timezone.utc)
+    outcome = LookupOutcome(budget_user_id=job.user_id)
+    await enrich_watched_metadata(db, job.user_id, media_item, None, outcome=outcome)
+    result = settle_placeholder_lookup(media_item, outcome, datetime.now(timezone.utc))
+    if result == "throttled" and outcome.retry_at is not None:
+        raise MetadataLookupThrottled(outcome.retry_at)
+    if result == "failed":
+        raise MetadataLookupFailed("; ".join(outcome.failed))
 
 
 async def _sync_to_integrations(

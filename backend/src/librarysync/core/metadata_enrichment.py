@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,7 @@ from librarysync.connectors.metadata.base import (
 )
 from librarysync.core.anime import is_anime
 from librarysync.core.metadata_providers import MetadataProviderService
+from librarysync.core.rate_limiter import RATE_LIMITER
 from librarysync.db.models import EpisodeItem, MediaItem
 
 logger = logging.getLogger(__name__)
@@ -28,6 +30,48 @@ PREFERRED_POSTER_HOSTS = (
 ANIME_PROVIDERS = ("myanimelist", "kitsu", "anilist")
 POSTER_PROVIDER_ORDER = ("tvdb", "tmdb", "imdb")
 TITLE_LOOKUP_PREFIXES = ("AIOStreams ", "Stremio ", "Trakt ", "SIMKL ", "Letterboxd ")
+LOOKUP_MISS_KEY = "metadata_lookup_missed_at"
+LOOKUP_MISS_COOLDOWN = timedelta(days=7)
+
+
+@dataclass
+class LookupOutcome:
+    """What one enrichment run asked and heard. With a budget user, each request takes a rate-limit token."""
+
+    budget_user_id: str | None = None
+    providers: int = 0
+    failed: list[str] = field(default_factory=list)
+    retry_at: datetime | None = None
+
+    async def allow(self, db: AsyncSession, provider: MetadataProvider) -> bool:
+        if self.retry_at is not None:
+            return False
+        if self.budget_user_id is None:
+            return True
+        decision = await RATE_LIMITER.try_acquire(db, self.budget_user_id, provider.provider)
+        if decision and not decision.allowed:
+            self.retry_at = decision.retry_at or datetime.now(timezone.utc)
+            return False
+        return True
+
+    def fail(self, provider: MetadataProvider, exc: Exception) -> None:
+        self.failed.append(f"{provider.provider}: {exc}")
+
+
+class MetadataLookupThrottled(Exception):
+    """A provider budget refused a request. The outbox retries it like a 429, without using an attempt."""
+
+    def __init__(self, retry_at: datetime) -> None:
+        super().__init__(f"Metadata lookup rate-limited until {retry_at.isoformat()}")
+        self.retry_after = max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0.0)
+
+
+class MetadataLookupFailed(Exception):
+    """A provider request failed, so the lookup is retried with the outbox backoff."""
+
+
+async def _allowed(db: AsyncSession, provider: MetadataProvider, outcome: LookupOutcome | None) -> bool:
+    return outcome is None or await outcome.allow(db, provider)
 
 
 async def enrich_watched_metadata(
@@ -37,6 +81,7 @@ async def enrich_watched_metadata(
     episode_item: EpisodeItem | None,
     provider_overrides: dict[str, MetadataProvider] | None = None,
     use_overrides_only: bool = False,
+    outcome: LookupOutcome | None = None,
 ) -> None:
     if not media_item:
         return
@@ -47,6 +92,7 @@ async def enrich_watched_metadata(
             media_item,
             provider_overrides=provider_overrides,
             use_overrides_only=use_overrides_only,
+            outcome=outcome,
         )
     if media_item.media_type not in {"movie", "tv"}:
         return
@@ -72,10 +118,12 @@ async def enrich_watched_metadata(
             imdb = await service.load_provider("imdb")
     if not tmdb and not tvdb and not imdb:
         return
+    if outcome is not None:
+        outcome.providers += sum(1 for provider in (tmdb, tvdb, imdb) if provider)
 
     candidate_map: dict[str, MediaCandidate] = {}
     if _should_lookup_by_title(media_item):
-        candidate = await _lookup_by_title(media_item, tmdb, tvdb, imdb)
+        candidate = await _lookup_by_title(db, media_item, tmdb, tvdb, imdb, outcome)
         if candidate:
             candidate_map[candidate.provider] = candidate
             await _apply_candidate_to_media_item(db, media_item, candidate, update_poster=True)
@@ -83,7 +131,7 @@ async def enrich_watched_metadata(
                 await _apply_episode_metadata(tmdb, media_item, episode_item)
 
     if tmdb:
-        candidate = await _fetch_provider_candidate(tmdb, media_item, "tmdb_id")
+        candidate = await _fetch_provider_candidate(db, tmdb, media_item, "tmdb_id", outcome)
         if candidate:
             candidate_map["tmdb"] = candidate
             await _apply_candidate_to_media_item(
@@ -96,7 +144,7 @@ async def enrich_watched_metadata(
             await _apply_episode_metadata(tmdb, media_item, episode_item)
 
     if tvdb:
-        candidate = await _fetch_provider_candidate(tvdb, media_item, "tvdb_id")
+        candidate = await _fetch_provider_candidate(db, tvdb, media_item, "tvdb_id", outcome)
         if candidate:
             candidate_map["tvdb"] = candidate
             await _apply_candidate_to_media_item(
@@ -107,7 +155,7 @@ async def enrich_watched_metadata(
             )
 
     if imdb:
-        candidate = await _fetch_provider_candidate(imdb, media_item, "imdb_id")
+        candidate = await _fetch_provider_candidate(db, imdb, media_item, "imdb_id", outcome)
         if candidate:
             candidate_map["imdb"] = candidate
             await _apply_candidate_to_media_item(db, media_item, candidate, update_poster=False)
@@ -160,16 +208,18 @@ def _needs_media_enrichment(media_item: MediaItem, episode_item: EpisodeItem | N
 def _should_lookup_by_title(media_item: MediaItem) -> bool:
     if media_item.imdb_id or media_item.tmdb_id or media_item.tvdb_id:
         return False
-    if not media_item.title:
+    if not media_item.title or is_watch_state_placeholder(media_item):
         return False
     return not media_item.title.startswith(TITLE_LOOKUP_PREFIXES)
 
 
 async def _lookup_by_title(
+    db: AsyncSession,
     media_item: MediaItem,
     tmdb: MetadataProvider | None,
     tvdb: MetadataProvider | None,
     imdb: MetadataProvider | None,
+    outcome: LookupOutcome | None = None,
 ) -> MediaCandidate | None:
     scope = _scope_for_media_item(media_item)
     if scope is None:
@@ -181,6 +231,8 @@ async def _lookup_by_title(
         if not provider.supports_scope(scope):
             continue
         for query in queries:
+            if not await _allowed(db, provider, outcome):
+                return None
             try:
                 candidates = await provider.search(query, scope)
             except Exception as exc:
@@ -190,6 +242,8 @@ async def _lookup_by_title(
                     media_item.id,
                     exc,
                 )
+                if outcome is not None:
+                    outcome.fail(provider, exc)
                 continue
             candidate = _select_title_candidate(candidates, media_item.title, media_item.year)
             if candidate:
@@ -246,8 +300,10 @@ async def _enrich_anime_metadata(
     *,
     provider_overrides: dict[str, MetadataProvider] | None = None,
     use_overrides_only: bool = False,
+    outcome: LookupOutcome | None = None,
 ) -> None:
-    if not _needs_anime_enrichment(media_item):
+    placeholder = is_watch_state_placeholder(media_item)
+    if not placeholder and not _needs_anime_enrichment(media_item):
         return
     if not media_item.title:
         return
@@ -268,28 +324,58 @@ async def _enrich_anime_metadata(
                 providers.append(provider)
     if not providers:
         return
+    if outcome is not None:
+        outcome.providers += len(providers)
     for provider in providers:
-        if _anime_id_present(media_item, provider.provider):
+        known_id = _anime_id(media_item, provider.provider)
+        if known_id and not placeholder:
             continue
-        candidate = await _find_anime_candidate(provider, media_item)
+        if known_id:
+            # A placeholder's known id names the title exactly, so its details replace the meta id.
+            candidate = await _fetch_anime_details(db, provider, media_item, known_id, outcome)
+        else:
+            candidate = await _find_anime_candidate(db, provider, media_item, outcome)
         if not candidate:
             continue
         await _apply_anime_candidate(db, media_item, candidate)
 
 
-def _anime_id_present(media_item: MediaItem, provider: str) -> bool:
+def _anime_id(media_item: MediaItem, provider: str) -> str | None:
     if provider == "anilist":
-        return bool(media_item.anilist_id)
+        return media_item.anilist_id
     if provider == "kitsu":
-        return bool(media_item.kitsu_id)
+        return media_item.kitsu_id
     if provider == "myanimelist":
-        return bool(media_item.myanimelist_id)
-    return False
+        return media_item.myanimelist_id
+    return None
 
 
-async def _find_anime_candidate(provider: MetadataProvider, media_item: MediaItem) -> MediaCandidate | None:
+async def _fetch_anime_details(
+    db: AsyncSession,
+    provider: MetadataProvider,
+    media_item: MediaItem,
+    provider_id: str,
+    outcome: LookupOutcome | None,
+) -> MediaCandidate | None:
+    if not await _allowed(db, provider, outcome):
+        return None
+    try:
+        return await provider.get_details(provider_id, "anime")
+    except Exception as exc:
+        logger.warning("%s anime details failed for %s: %s", provider.provider, media_item.id, exc)
+        if outcome is not None:
+            outcome.fail(provider, exc)
+        return None
+
+
+async def _find_anime_candidate(
+    db: AsyncSession,
+    provider: MetadataProvider,
+    media_item: MediaItem,
+    outcome: LookupOutcome | None = None,
+) -> MediaCandidate | None:
     scope = "anime"
-    if provider.provider == "anilist" and media_item.myanimelist_id:
+    if provider.provider == "anilist" and media_item.myanimelist_id and await _allowed(db, provider, outcome):
         try:
             candidates = await provider.find_by_external_id(f"mal:{media_item.myanimelist_id}", scope)
         except Exception as exc:
@@ -299,23 +385,32 @@ async def _find_anime_candidate(provider: MetadataProvider, media_item: MediaIte
                 media_item.id,
                 exc,
             )
+            if outcome is not None:
+                outcome.fail(provider, exc)
         else:
             if candidates:
                 return candidates[0]
-    if provider.capabilities.supports_external_id and media_item.imdb_id:
+    if provider.capabilities.supports_external_id and media_item.imdb_id and await _allowed(db, provider, outcome):
         imdb_id = media_item.imdb_id.lower()
         try:
             candidates = await provider.find_by_external_id(imdb_id, scope)
         except Exception as exc:
             logger.warning("%s anime lookup failed for %s: %s", provider.provider, media_item.id, exc)
+            if outcome is not None:
+                outcome.fail(provider, exc)
         else:
             selected = _select_anime_candidate(candidates, media_item)
             if selected:
                 return selected
+    # A placeholder is named after its meta id, which no title search can match.
+    if is_watch_state_placeholder(media_item) or not await _allowed(db, provider, outcome):
+        return None
     try:
         candidates = await provider.search(media_item.title, scope)
     except Exception as exc:
         logger.warning("%s anime search failed for %s: %s", provider.provider, media_item.id, exc)
+        if outcome is not None:
+            outcome.fail(provider, exc)
         return None
     return _select_anime_candidate(candidates, media_item)
 
@@ -367,7 +462,8 @@ async def _apply_local_metadata(db: AsyncSession, media_item: MediaItem) -> bool
     if not media_item.poster_url and candidate.poster_url:
         media_item.poster_url = candidate.poster_url
         updated = True
-    if (not media_item.title or media_item.title.startswith("Stremio ")) and candidate.title:
+    replaceable = not media_item.title or media_item.title.startswith("Stremio ")
+    if (replaceable or is_watch_state_placeholder(media_item)) and candidate.title:
         media_item.title = candidate.title
         updated = True
     if media_item.year is None and candidate.year is not None:
@@ -428,24 +524,36 @@ async def _find_local_metadata_candidate(db: AsyncSession, media_item: MediaItem
 
 
 async def _fetch_provider_candidate(
-    provider: MetadataProvider, media_item: MediaItem, provider_id_field: str
+    db: AsyncSession,
+    provider: MetadataProvider,
+    media_item: MediaItem,
+    provider_id_field: str,
+    outcome: LookupOutcome | None = None,
 ) -> MediaCandidate | None:
     scope = _scope_for_media_item(media_item)
     if scope is None:
         return None
     provider_id = getattr(media_item, provider_id_field)
     if provider_id:
+        if not await _allowed(db, provider, outcome):
+            return None
         try:
             return await provider.get_details(provider_id, scope)
         except Exception as exc:
             logger.warning("%s details failed for %s: %s", provider.provider, media_item.id, exc)
+            if outcome is not None:
+                outcome.fail(provider, exc)
             return None
     external_ids = _external_ids_for_provider(provider, media_item)
     for external_id in external_ids:
+        if not await _allowed(db, provider, outcome):
+            return None
         try:
             candidates = await provider.find_by_external_id(external_id, scope)
         except Exception as exc:
             logger.warning("%s lookup failed for %s: %s", provider.provider, media_item.id, exc)
+            if outcome is not None:
+                outcome.fail(provider, exc)
             return None
         candidate = _select_candidate(candidates, scope)
         if candidate:
@@ -486,6 +594,41 @@ def watch_state_placeholder_clause():
         MediaItem.raw["source"].as_string() == "aiostreams_watch_state",
         MediaItem.title == MediaItem.raw["stremio_id"].as_string(),
     )
+
+
+def needs_placeholder_lookup(media_item: MediaItem, now: datetime | None = None) -> bool:
+    """A placeholder with no confirmed miss in the last LOOKUP_MISS_COOLDOWN."""
+    if not is_watch_state_placeholder(media_item):
+        return False
+    missed_at = media_item.raw.get(LOOKUP_MISS_KEY)
+    if not missed_at:
+        return True
+    try:
+        missed = datetime.fromisoformat(missed_at)
+    except (TypeError, ValueError):
+        return True
+    return (now or datetime.now(timezone.utc)) - missed >= LOOKUP_MISS_COOLDOWN
+
+
+def no_recent_lookup_miss_clause(now: datetime):
+    missed_at = MediaItem.raw[LOOKUP_MISS_KEY].as_string()
+    return or_(missed_at.is_(None), missed_at < (now - LOOKUP_MISS_COOLDOWN).isoformat())
+
+
+def settle_placeholder_lookup(media_item: MediaItem, outcome: LookupOutcome, now: datetime) -> str:
+    """Record what a placeholder lookup achieved. Only a resolved title counts as refreshed."""
+    if not is_watch_state_placeholder(media_item):
+        media_item.metadata_refreshed_at = now
+        return "refreshed"
+    if outcome.retry_at is not None:
+        return "throttled"
+    if outcome.failed:
+        return "failed"
+    if not outcome.providers:
+        return "unconfigured"
+    # Providers answered without a match: wait LOOKUP_MISS_COOLDOWN before asking again.
+    media_item.raw = {**media_item.raw, LOOKUP_MISS_KEY: now.isoformat()}
+    return "missed"
 
 
 async def _apply_candidate_to_media_item(
@@ -606,6 +749,8 @@ async def refresh_episode_metadata(
 async def _apply_anime_candidate(db: AsyncSession, media_item: MediaItem, candidate: MediaCandidate) -> None:
     ids = _extract_anime_candidate_ids(candidate)
     await _apply_candidate_ids(db, media_item, ids)
+    if candidate.title and is_watch_state_placeholder(media_item):
+        media_item.title = candidate.title
     if candidate.poster_url and not media_item.poster_url:
         media_item.poster_url = candidate.poster_url
     if media_item.year is None and candidate.year is not None:
