@@ -140,13 +140,13 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - Public addon routes serialize changes per user and enforce addon opt-in and viewer consent.
 - `WatchStateEntry` separates watched, playback, watchlist, drop and rating projections.
 - Database revision triggers invalidate complete snapshots for imports and direct SQL changes.
-- Watchlist, drop and rating events on a placeholder title (still named after its meta id) enqueue an internal `metadata_update`, one per title. Watched marks enrich through `new_item_added`.
-- A placeholder lookup counts as refreshed only when the title resolves. Provider errors retry through the outbox, rate limits requeue without an attempt, a missing provider records nothing, and a lookup that finds nothing waits seven days (`raw.metadata_lookup_missed_at`).
+- `watchlisted`, `dropped` and `rated` events on a placeholder title (still named after its meta id) enqueue an internal `metadata_update`, one per user and title, when the user has a metadata provider enabled. Watched marks enrich through `new_item_added`.
+- The job locks the title row (a title another worker holds is retried a minute later) and charges each request to the provider owner's TMDB, TVDB or AniList bucket at its worst-case cost. A placeholder lookup counts as refreshed only when the title resolves. A refused budget, an upstream 429 (with its `Retry-After`) and a held title requeue without an attempt, other provider errors retry with backoff, a 401/403 fails the job, a lookup that made no request records nothing, and one that finds nothing waits seven days (`raw.metadata_lookup_missed_at`).
 
 #### Metadata Jobs
 - **`metadata_lookup`**: Resolves lookup requests into candidates (stale in-progress lookups are reclaimed after five minutes)
 - **`metadata_cache`**: Scans recent candidates and seeds `media_items` to accelerate search
-- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, placeholder watchlist titles and episode lists that are missing posters or identifiers. It pages by id, takes a per-user rate-limit token for each TMDB/TVDB request and stops for the run when refused, and skips titles with a queued `metadata_update`
+- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, placeholder titles and episode lists that are missing posters or identifiers. It pages by id and works one title per transaction: it skips titles another worker holds, has a queued `metadata_update` for, or missed in the last seven days, budgets requests like the job, and stops for the run when refused
 - **SIMKL calendar v2**: The `metadata_backfill` loop refreshes public TV/anime rolling and recent monthly calendars every six hours when `SIMKL_CLIENT_ID` is configured. It only updates local shows matched by identifiers, stores dates/finale markers in `EpisodeItem.raw.simkl_calendar`, and never imports watches. Absolute anime numbering only updates existing episodes in an unambiguous single-season catalog.
 
 #### Import Jobs
@@ -245,7 +245,7 @@ Primary audit sources: `watch_events`, `outbox`, `sync_attempts`, `watch_syncs`
 
 ## 13) Tests
 
-- `backend/tests/` covers routes, outbox lifecycle and providers, imports and claims, watchlists, Watch State, metadata, security and templates (57 files)
+- `backend/tests/` covers routes, outbox lifecycle and providers, imports and claims, watchlists, Watch State, metadata, security and templates (64 files)
 - Postgres-only tests (Watch State triggers, migrations) run when `WATCH_STATE_TEST_DATABASE_URL` points at a disposable database; CI provides one
 - Add tests for outbox transitions, import scheduling, and metadata lookups when modifying those areas; prefer SQLite-backed tests over mocks for claim/lease logic
 
