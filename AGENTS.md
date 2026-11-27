@@ -146,7 +146,7 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 #### Metadata Jobs
 - **`metadata_lookup`**: Resolves lookup requests into candidates (stale in-progress lookups are reclaimed after five minutes)
 - **`metadata_cache`**: Scans recent candidates and seeds `media_items` to accelerate search
-- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, placeholder titles and episode lists that are missing posters or identifiers. It pages by id and works one title per transaction: it skips titles another worker holds, has a queued `metadata_update` for, or missed in the last seven days, budgets requests like the job, and stops for the run when refused
+- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, placeholder titles and episode lists that are missing posters or identifiers. It pages by id and works one title per transaction: it skips titles another worker holds, has a queued `metadata_update` for, or missed in the last seven days, budgets requests like the job, and stops for the run when refused. Episode list refreshes (`backfill_show_episodes`, also run by `new_item_added` and the watchlist refresh) charge the TMDB provider owner two requests per call, the localized and the fallback fetch
 - **SIMKL calendar v2**: The `metadata_backfill` loop refreshes public TV/anime rolling and recent monthly calendars every six hours when `SIMKL_CLIENT_ID` is configured. It only updates local shows matched by identifiers, stores dates/finale markers in `EpisodeItem.raw.simkl_calendar`, and never imports watches. Absolute anime numbering only updates existing episodes in an unambiguous single-season catalog.
 
 #### Import Jobs
