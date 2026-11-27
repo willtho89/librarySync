@@ -140,12 +140,13 @@ On SIGTERM/SIGINT loops finish their current iteration and release unprocessed c
 - Public addon routes serialize changes per user and enforce addon opt-in and viewer consent.
 - `WatchStateEntry` separates watched, playback, watchlist, drop and rating projections.
 - Database revision triggers invalidate complete snapshots for imports and direct SQL changes.
-- Watchlist, drop and rating events on a placeholder title (still named after its meta id) enqueue one internal `metadata_update`. Watched marks enrich through `new_item_added`.
+- Watchlist, drop and rating events on a placeholder title (still named after its meta id) enqueue an internal `metadata_update`, one per title. Watched marks enrich through `new_item_added`.
+- A placeholder lookup counts as refreshed only when the title resolves. Provider errors retry through the outbox, rate limits requeue without an attempt, a missing provider records nothing, and a lookup that finds nothing waits seven days (`raw.metadata_lookup_missed_at`).
 
 #### Metadata Jobs
 - **`metadata_lookup`**: Resolves lookup requests into candidates (stale in-progress lookups are reclaimed after five minutes)
 - **`metadata_cache`**: Scans recent candidates and seeds `media_items` to accelerate search
-- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, placeholder watchlist titles and episode lists that are missing posters or identifiers
+- **`metadata_backfill`**: Periodically refreshes metadata/enriches watched history, placeholder watchlist titles and episode lists that are missing posters or identifiers. It pages by id, takes a per-user rate-limit token for each TMDB/TVDB request and stops for the run when refused, and skips titles with a queued `metadata_update`
 - **SIMKL calendar v2**: The `metadata_backfill` loop refreshes public TV/anime rolling and recent monthly calendars every six hours when `SIMKL_CLIENT_ID` is configured. It only updates local shows matched by identifiers, stores dates/finale markers in `EpisodeItem.raw.simkl_calendar`, and never imports watches. Absolute anime numbering only updates existing episodes in an unambiguous single-season catalog.
 
 #### Import Jobs
