@@ -54,7 +54,7 @@ from librarysync.connectors.services.trakt import (
     TraktError,
     has_required_trakt_fields,
 )
-from librarysync.core.http_client import retry_after_seconds
+from librarysync.core.http_client import MAX_RETRY_AFTER, retry_after_seconds
 from librarysync.core.import_control import load_blocked_outbox_users
 from librarysync.core.integration_tokens import (
     ensure_letterboxd_access_token,
@@ -92,7 +92,6 @@ SUPERSEDED_STATUS = "superseded"
 BATCHABLE_PROVIDERS = {"trakt", "simkl"}
 BATCHABLE_JOB_TYPES = {"push_watched", "push_rating"}
 MIXED_PROVIDER_ORDER = ("trakt", "simkl", "publicmetadb", "letterboxd", "stremio")
-MAX_THROTTLE_DELAY = timedelta(days=1)
 _ensure_letterboxd_access_token = ensure_letterboxd_access_token
 _ensure_trakt_access_token = ensure_trakt_access_token
 _ensure_simkl_access_token = ensure_simkl_access_token
@@ -3372,8 +3371,7 @@ def _retry_after_seconds(exc: BaseException) -> float | None:
 
 def _throttle_delay(retry_after: float | None) -> timedelta:
     seconds = retry_after if retry_after is not None else 60.0
-    # Daily quotas reset within a day. The bound only stops a nonsense header from parking a job for good.
-    return timedelta(seconds=min(max(seconds, 1.0), MAX_THROTTLE_DELAY.total_seconds()))
+    return timedelta(seconds=min(max(seconds, 1.0), MAX_RETRY_AFTER.total_seconds()))
 
 
 def _classify_failure(status_code: int | None, message: str | None) -> str:
